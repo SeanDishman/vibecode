@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tiny Empires</title>
+  <link rel="stylesheet" href="./style.css">
+  <script>
+    // Collect anything that blows up before the modules can report it themselves.
+    // The host's smoke test reads window.__TE_ERRORS to tell "drew nothing" apart
+    // from "threw on load", and it is handy in DevTools during normal play too.
+    window.__TE_ERRORS = [];
+    window.addEventListener('error', e => {
+      window.__TE_ERRORS.push(e.message + ' @ ' + (e.filename || '?') + ':' + (e.lineno || 0));
+    });
+    window.addEventListener('unhandledrejection', e => {
+      window.__TE_ERRORS.push('unhandled rejection: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+    });
+  </script>
+</head>
+<body tabindex="0">
+  <!-- #stage / #pause.hidden / #resumeBtn are the VibeCode host's pause contract. -->
+  <div id="stage">
+    <canvas id="game" tabindex="0" aria-label="Tiny Empires world map"></canvas>
+
+    <!-- ════════ in-game HUD ════════ -->
+    <div class="hud" id="hud" style="display:none">
+      <div class="panel" id="topbar">
+        <div class="crest" id="crest"></div>
+        <div id="empireName">Empire</div>
+        <div class="vr"></div>
+
+        <div class="res" title="Gold — pays for buildings and units">
+          <span class="ico">🪙</span><b id="rGold">0</b><i id="rGoldRate">+0</i>
+        </div>
+        <div class="res" title="Food surplus across your empire">
+          <span class="ico">🌾</span><b id="rFood">0</b><i id="rFoodRate">food</i>
+        </div>
+        <div class="res" title="Science — unlocks the research tree">
+          <span class="ico">🔬</span><b id="rSci">0</b><i id="rSciRate">+0</i>
+        </div>
+        <!-- Only appears once Combustion is researched. -->
+        <div class="res" id="oilRes" style="display:none" title="Oil — fuels tanks, warships and aircraft">
+          <span class="ico">🛢</span><b id="rOil">0</b><i id="rOilRate">+0</i>
+        </div>
+        <div class="vr"></div>
+        <div class="res" title="Cities · people · army">
+          <span class="ico">🏛</span><b id="rCities">1</b>
+          <span class="ico" style="margin-left:5px">👥</span><b id="rPop">1</b>
+          <span class="ico" style="margin-left:5px">⚔</span><b id="rUnits">0</b>
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="era" id="eraLabel">Ancient</div>
+        <div class="vr"></div>
+        <button class="sbtn" id="spd1" title="Normal speed (1)">1×</button>
+        <button class="sbtn" id="spd2" title="Fast (2)">2×</button>
+        <button class="sbtn" id="spd3" title="Very fast (3)">3×</button>
+        <button class="sbtn" id="pauseBtn" title="Pause (P)">❚❚</button>
+      </div>
+
+      <!-- ════════ bottom dock — the main way in to everything ════════ -->
+      <div id="dock">
+        <button class="dockbtn" id="btnBuild" title="Buildings (B)">
+          <span class="di">🏠</span><span class="dl">Buildings</span><kbd>B</kbd>
+        </button>
+        <button class="dockbtn" id="btnCity" title="Selected city (C)">
+          <span class="di">🏛</span><span class="dl" id="btnCityLabel">City</span><kbd>C</kbd>
+        </button>
+        <button class="dockbtn research" id="btnResearch" title="Research (T)">
+          <span class="di">🔬</span>
+          <span class="rwrap">
+            <b id="dockResName">Choose research</b>
+            <span class="bar"><span id="dockResBar"></span></span>
+          </span>
+          <span class="reta" id="dockResEta"></span><kbd>T</kbd>
+        </button>
+      </div>
+
+      <!-- panels that open upward out of the dock -->
+      <div class="popover panel hidden" id="buildPanel">
+        <div class="pophead">
+          <span>Buildings</span>
+          <span class="k" id="railHint">pick one, then click a tile</span>
+          <button class="popx" data-close="buildPanel">✕</button>
+        </div>
+        <div class="popbody" id="buildList"></div>
+      </div>
+
+      <div class="popover panel hidden" id="cityPanel">
+        <div class="pophead">
+          <span id="trainHead">City</span>
+          <span class="k" id="trainHint">select a city</span>
+          <button class="popx" data-close="cityPanel">✕</button>
+        </div>
+        <div class="popbody" id="trainList"></div>
+      </div>
+
+      <div class="panel" id="selPanel">
+        <div id="selTitle"></div>
+        <div id="selBody"></div>
+      </div>
+
+      <div class="panel" id="mapWrap"><canvas id="minimap" width="200" height="124"></canvas></div>
+      <div id="log"></div>
+      <div id="buildHint"></div>
+    </div>
+
+    <!-- ════════ start menu ════════ -->
+    <div class="screen" id="menu">
+      <div class="card">
+        <div class="pill"><span class="dot"></span><span>Pixel 4X strategy</span></div>
+        <h1>Tiny <span class="accent">Empires</span></h1>
+        <p class="sub">A whole world, one pixel at a time. Drop tiny buildings to grow your civilisation,
+          research your way out of the stone age, then march your little people over the border and take
+          everything your rivals built.</p>
+        <div class="diffrow" id="diffRow">
+          <button class="diff" data-diff="0"><b>Chieftain</b><span>relaxed rivals</span></button>
+          <button class="diff on" data-diff="1"><b>Warlord</b><span>balanced</span></button>
+          <button class="diff" data-diff="2"><b>Emperor</b><span>ruthless</span></button>
+        </div>
+        <div class="rivalrow" id="rivalRow">
+          <span class="rivlabel">Nations</span>
+          <button class="riv" data-rivals="3">4</button>
+          <button class="riv on" data-rivals="6">7</button>
+          <button class="riv" data-rivals="9">10</button>
+          <button class="riv" data-rivals="12">13</button>
+          <span class="rivnote">every rival gets its own character and strength</span>
+        </div>
+        <button class="primary" id="startBtn">Found your empire</button>
+        <div class="controls">
+          <div><kbd>Drag</kbd> select units</div>
+          <div><kbd>R-click</kbd> move / attack</div>
+          <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> pan</div>
+          <div><kbd>Wheel</kbd> zoom</div>
+          <div><kbd>T</kbd> research</div>
+          <div><kbd>Space</kbd> next idle</div>
+          <div><kbd>P</kbd> pause</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════ pause ════════ -->
+    <div class="screen hidden" id="pause">
+      <div class="card">
+        <div class="pill"><span class="dot"></span><span>Paused</span></div>
+        <h1 style="font-size:clamp(28px,4.6vw,46px)">The world holds<br>its breath</h1>
+        <p class="sub" id="pauseSub">Every settler, soldier and harvest is frozen exactly where you left it.</p>
+        <div class="btnrow">
+          <button class="primary" id="resumeBtn">Resume</button>
+          <button class="ghost" id="pauseTechBtn">Research tree</button>
+        </div>
+        <div class="controls"><div>Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume</div></div>
+      </div>
+    </div>
+
+    <!-- ════════ defeat ════════ -->
+    <div class="screen hidden" id="over">
+      <div class="card">
+        <div class="pill pink">
+          <span class="dot pink"></span><span>Your last city has fallen</span>
+        </div>
+        <h1 style="font-size:clamp(28px,4.6vw,48px)">Empire <span class="accent hot">lost</span></h1>
+        <div class="stats-row">
+          <div class="stat"><b id="ovYear">—</b><span>Year reached</span></div>
+          <div class="stat"><b id="ovCities">0</b><span>Cities founded</span></div>
+          <div class="stat"><b id="ovTech">0</b><span>Techs researched</span></div>
+          <div class="stat"><b id="ovKills">0</b><span>Enemies slain</span></div>
+        </div>
+        <button class="primary" id="restartBtn">New world</button>
+      </div>
+    </div>
+
+    <!-- ════════ victory ════════ -->
+    <div class="screen hidden" id="win">
+      <div class="card">
+        <div class="pill gold"><span class="dot gold"></span><span id="winKind">Total conquest</span></div>
+        <h1>The world is <span class="accent">yours</span></h1>
+        <p class="sub" id="winSub">Every rival banner has come down.</p>
+        <div class="stats-row">
+          <div class="stat"><b id="wnYear">—</b><span>Year reached</span></div>
+          <div class="stat"><b id="wnCities">0</b><span>Cities held</span></div>
+          <div class="stat"><b id="wnTech">0</b><span>Techs researched</span></div>
+          <div class="stat"><b id="wnKills">0</b><span>Enemies slain</span></div>
+        </div>
+        <button class="primary" id="winRestartBtn">Play again</button>
+      </div>
+    </div>
+
+    <!-- ════════ research tree ════════ -->
+    <div id="tech" class="hidden">
+      <div id="techTop">
+        <h2>Research</h2>
+        <div class="era" id="techEra">Ancient era</div>
+        <div class="res" style="margin-left:6px"><span class="ico">🔬</span><b id="techSci">0</b><i id="techRate">+0/turn</i></div>
+        <div class="spacer"></div>
+        <span style="color:var(--faint);font-size:10.5px">Click any unlocked tech to start researching it</span>
+        <button class="ghost small" id="techClose">Close <kbd>T</kbd></button>
+      </div>
+      <div id="techScroll"><div id="techGrid"></div></div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js?v=unit30"></script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>VibeCode</AssemblyName>
+    <RootNamespace>VibeCode</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\assets\logo.ico</ApplicationIcon>
+    <LangVersion>latest</LangVersion>
+    <!-- Bridge/dev builds use isolated intermediate folders. Keep every accumulated obj/bin variant out of the
+         SDK's default source glob even when BaseIntermediateOutputPath points somewhere else. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**\*;obj-*\**\*;bin\**\*;bin-*\**\*</DefaultItemExcludes>
+    <!-- Whisper.net ships native whisper/ggml DLLs; without this they aren't extracted from the single-file exe
+         and load fails with "Native Library not found in default paths". -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MdXaml" Version="1.27.0" />
+    <PackageReference Include="WpfAnimatedGif" Version="2.0.2" />
+    <!-- offline speech-to-text (mic dictation): Whisper.net (whisper.cpp, CPU runtime) + NAudio capture. All MIT. -->
+    <PackageReference Include='Microsoft.Web.WebView2' Version='1.0.4022.49' />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- DPAPI for API-key accounts: keys are sealed to the current Windows user, never stored in the clear. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\background.gif" />
+    <Resource Include="..\assets\logo.png" Link="Assets\logo.png" />
+    <!-- Short free Mixkit notification chime played when a desktop toast appears (see Assets/notification.LICENSE.txt). -->
+    <EmbeddedResource Include="Assets\notification.mp3"
+                      LogicalName="VibeCode.Assets.notification.mp3" />
+    <!-- The selectable chime set. Synthesised by Assets\Sounds\_gen_sounds.py (which is deliberately
+         NOT embedded - only the .wav output is), so the whole set is ours with no third-party licence.
+         Users add their own by dropping files in %APPDATA%\VibeCode\Sounds instead. -->
+    <EmbeddedResource Include="Assets\Sounds\*.wav"
+                      LogicalName="VibeCode.Assets.Sounds.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\Grok45NormalPrompt.txt"
+                      LogicalName="VibeCode.Assets.Grok45NormalPrompt.txt" />
+    <EmbeddedResource Include="Assets\Games\SurviveTheShapes.html"
+                      LogicalName="VibeCode.Assets.Games.SurviveTheShapes.html" />
+    <!-- Tower Defense is a multi-file game: every file is embedded under a logical name that mirrors its
+         path (src\hud.js -> VibeCode.Assets.Games.TowerDefense.src.hud.js) so GameCatalog.Asset() can
+         derive the resource name from the relative path. The whole folder is seeded to disk and served
+         from there, which is what lets the ES module imports resolve. -->
+    <EmbeddedResource Include="Assets\Games\TowerDefense\**\*.*"
+                      LogicalName="VibeCode.Assets.Games.TowerDefense.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
+    <!-- Tiny Empires is multi-file too, and embeds the same way. -->
+    <EmbeddedResource Include="Assets\Games\TinyEmpires\**\*.*"
+                      LogicalName="VibeCode.Assets.Games.TinyEmpires.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\Games\FishingTycoon\**\*.*"
+                      LogicalName="VibeCode.Assets.Games.FishingTycoon.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- WebView2's NuGet package ships IntelliSense doc XMLs that ride into the publish folder and trip the
+       installer's single-file check. They are documentation only - drop them from publish output. -->
+  <Target Name="PruneWebView2DocXmlFromPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Extension)' == '.xml' And $([System.String]::Copy('%(Filename)').StartsWith('Microsoft.Web.WebView2'))" />
+    </ItemGroup>
+  </Target>
+
+</Project>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tower Defense</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div id="stage">
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div class="chip" id="lives"><span class="lbl">Lives</span><span class="val">20</span></div>
+    <div class="chip" id="gold"><span class="lbl">Gold</span><span class="val">0</span></div>
+    <div class="chip" id="wave"><span class="lbl">Wave</span><span class="val">0</span></div>
+    <div class="chip" id="count"><span class="lbl">Circles</span><span class="val">0</span></div>
+    <div class="grow"></div>
+    <button class="btn go" id="sendBtn">Send wave</button>
+    <button class="btn" id="speedBtn">1&times;</button>
+    <button class="btn on" id="muteBtn" title="Toggle soft sound effects">Sound</button>
+    <button class="btn" id="pauseBtn">Pause</button>
+  </div>
+
+  <div id="shop"></div>
+
+  <div id="inspect" class="hidden">
+    <div class="ins-profile">
+      <canvas id="insPortrait" width="72" height="72" aria-hidden="true"></canvas>
+      <div class="ins-meta">
+        <h3 id="insName">Turret</h3>
+        <div class="lvl" id="insLvl">Level 1</div>
+        <div class="dealt" id="insDealt" title="Total damage this turret has scored">
+          <span class="dealt-lbl">Damage</span>
+          <b id="insDealtVal">0</b>
+        </div>
+      </div>
+    </div>
+    <button type="button" class="stats-toggle" id="statsToggle" aria-expanded="false">
+      Stats <span class="chev" id="statsChev">▸</span>
+    </button>
+    <div id="statsBody" class="stats-body collapsed">
+      <div class="tip" id="insTip"></div>
+      <div class="rows" id="insRows"></div>
+    </div>
+    <div class="acts">
+      <div class="up-wrap">
+        <button class="btn wide primary-act" id="upBtn" aria-describedby="upTip">Upgrade</button>
+        <div id="upTip" class="up-tip empty" role="tooltip"></div>
+      </div>
+      <button class="btn" id="targBtn">First</button>
+      <button class="btn danger" id="sellBtn">Sell</button>
+    </div>
+    <div class="hint">Hover Upgrade to see what the next rank does · Stats for full readout · shop right-click = what it does</div>
+  </div>
+
+  <!-- Right-click "what does this tower do?" card -->
+  <div id="infoPop" class="hidden">
+    <div class="info-card">
+      <button type="button" class="info-x" id="infoClose" aria-label="Close">×</button>
+      <h3 id="infoName">Turret</h3>
+      <div class="info-role" id="infoRole">Role</div>
+      <p class="info-body" id="infoBody"></p>
+      <div class="info-extras" id="infoExtras"></div>
+      <div class="info-foot">Right-click a shop tile for this · right-click elsewhere or hit × to close</div>
+    </div>
+  </div>
+
+  <div class="screen" id="menu">
+    <div class="card-panel">
+      <span class="pill"><span class="dot"></span> Grid defense</span>
+      <h1>Tower <span class="accent">Defense</span></h1>
+      <p class="sub">A swarm of circles walks the long road. Build turrets on the grid, stop every last one
+        of them, and never let a circle reach your base.</p>
+      <button class="primary" id="startBtn">Start defending</button>
+      <div class="controls">
+        <div><kbd>Click</kbd> shop tile → pick a tower</div>
+        <div><kbd>Click</kbd> the map → place it</div>
+        <div><kbd>Click</kbd> a placed tower → upgrade / sell</div>
+        <div><kbd>Right-click</kbd> a tower → what it does</div>
+        <div><kbd>Buttons</kbd> send wave · speed · pause</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="screen hidden" id="pause">
+    <div class="card-panel">
+      <span class="pill"><span class="dot"></span> Paused</span>
+      <h1>Hold the <span class="accent">line</span></h1>
+      <p class="sub" id="pauseSub">Your defense is frozen exactly where it stands.</p>
+      <button class="primary" id="resumeBtn">Resume</button>
+    </div>
+  </div>
+
+  <div class="screen hidden" id="over">
+    <div class="card-panel">
+      <span class="pill"><span class="dot"></span> Overrun</span>
+      <h1>The circles <span class="accent">got through</span></h1>
+      <div class="stats">
+        <div><div class="n" id="ovWave">0</div><div class="k">Waves held</div></div>
+        <div><div class="n" id="ovKills">0</div><div class="k">Circles popped</div></div>
+        <div><div class="n" id="ovTowers">0</div><div class="k">Turrets built</div></div>
+      </div>
+      <p class="sub" id="overSub">Deeper defenses next time — layer slows in front of your damage.</p>
+      <button class="primary" id="restartBtn">Rebuild</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

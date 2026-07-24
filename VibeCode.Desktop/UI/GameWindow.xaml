@@ -1,0 +1,102 @@
+<Window x:Class="VibeCode.UI.GameWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Games" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Width="1220" Height="780" MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterOwner" WindowStyle="None" ResizeMode="CanResize"
+        Background="{DynamicResource Bg0}" Foreground="{DynamicResource Text}"
+        FontFamily="{DynamicResource Ui}" FontSize="13" ShowInTaskbar="False"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        Loaded="OnLoaded" Closed="OnClosed">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="58" GlassFrameThickness="0"
+                            ResizeBorderThickness="6" CornerRadius="0" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Border Background="{DynamicResource Bg0}" BorderBrush="{DynamicResource Border}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="58" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="#F20D111B"
+                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,0,0,1">
+                <DockPanel LastChildFill="False" Margin="16,0,10,0">
+                    <Button DockPanel.Dock="Right" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            Width="36" Height="34" Content="&#xE8BB;" FontFamily="{DynamicResource Icons}"
+                            FontSize="12" Click="OnClose" ToolTip="Quit game"
+                            AutomationProperties.Name="Quit game" />
+                    <Button DockPanel.Dock="Right" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            Width="36" Height="34" Margin="0,0,4,0" Content="&#xE921;"
+                            FontFamily="{DynamicResource Icons}" FontSize="12" Click="OnPauseAndMinimize"
+                            ToolTip="Pause, save progress, and return to VibeCode"
+                            AutomationProperties.Name="Pause and minimize game" />
+                    <Button DockPanel.Dock="Right" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            Width="36" Height="34" Margin="0,0,4,0" Content="&#xE72C;"
+                            FontFamily="{DynamicResource Icons}" FontSize="12" Click="OnReload"
+                            ToolTip="Restart game" AutomationProperties.Name="Restart game" />
+                    <Button DockPanel.Dock="Right" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                            Width="36" Height="34" Margin="0,0,4,0" Content="&#xE8B7;"
+                            FontFamily="{DynamicResource Icons}" FontSize="12" Click="OnOpenGamesFolder"
+                            ToolTip="Open games folder — edit the game, then Restart to see changes (no rebuild)"
+                            AutomationProperties.Name="Open games folder" />
+                    <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="12"
+                            Background="#2245E6D2" BorderBrush="#5545E6D2" BorderThickness="1"
+                            Margin="0,0,12,0"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="&#x1F3AE;" FontFamily="Segoe UI Emoji" FontSize="19"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel DockPanel.Dock="Left" VerticalAlignment="Center">
+                        <TextBlock x:Name="GameTitle" Text="Game"
+                                   FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource Text}" />
+                        <TextBlock x:Name="GameSubtitle" Text="JavaScript game"
+                                   FontSize="10.5" Foreground="{DynamicResource Faint}" Margin="0,2,0,0" />
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Right" x:Name="GameControls" Text="WASD  ·  MOUSE  ·  P PAUSE"
+                               FontFamily="{DynamicResource Mono}" FontSize="9.5"
+                               Foreground="{DynamicResource Faint}" Margin="0,0,12,0"
+                               VerticalAlignment="Center" />
+                </DockPanel>
+            </Border>
+
+            <Grid Grid.Row="1" Background="#080A10" Margin="10">
+                <Border Background="#080A10" BorderBrush="#2634485F" BorderThickness="1" CornerRadius="12" />
+                <wv2:WebView2 x:Name="GameView" DefaultBackgroundColor="#080A10" Margin="1" />
+
+                <Border x:Name="LoadingOverlay" Background="#F2080A10" Margin="1" CornerRadius="11">
+                    <Border HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="480"
+                            Background="#F4141926" BorderBrush="#3345E6D2" BorderThickness="1"
+                            CornerRadius="18" Padding="34,30">
+                    <StackPanel>
+                        <Border Width="50" Height="50" CornerRadius="15" Background="{DynamicResource AccentSoft}"
+                                HorizontalAlignment="Center">
+                            <TextBlock Text="&#x1F3AE;" FontFamily="Segoe UI Emoji" FontSize="24"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock x:Name="LoadingTitle" Text="Loading game…" FontSize="17"
+                                   FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,0" />
+                        <TextBlock x:Name="LoadingDetail" Text="Starting the JavaScript game surface"
+                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" TextAlignment="Center"
+                                   HorizontalAlignment="Center" Margin="0,7,0,0" />
+                        <ProgressBar x:Name="LoadingProgress" Height="3" Width="180" Margin="0,18,0,0" IsIndeterminate="True"
+                                     Foreground="{DynamicResource Accent}" Background="#1AFFFFFF"
+                                     BorderThickness="0" />
+                        <Button x:Name="RetryButton" Style="{DynamicResource PrimaryButton}" Content="Try again"
+                                Padding="16,8" HorizontalAlignment="Center" Margin="0,16,0,0"
+                                Click="OnReload" Visibility="Collapsed" />
+                    </StackPanel>
+                    </Border>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

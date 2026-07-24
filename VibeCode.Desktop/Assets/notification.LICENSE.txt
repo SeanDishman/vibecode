@@ -1,0 +1,8 @@
+notification.mp3
+Source: Mixkit free sound effects (preview asset ID 2869)
+URL:    https://mixkit.co/free-sound-effects/notification/
+License: Mixkit Sound Effects Free License
+         https://mixkit.co/license/#sfxFree
+         Free for commercial and non-commercial use. No attribution required
+         (attribution is still appreciated). Do not redistribute the sound
+         files as a standalone pack / sell them as-is.

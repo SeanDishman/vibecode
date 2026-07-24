@@ -1,0 +1,191 @@
+<Window x:Class="VibeCode.McpServerDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add MCP server" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Width="640" Height="780" MinWidth="560" MinHeight="620"
+        Background="{StaticResource Bg0}" WindowStartupLocation="CenterOwner"
+        FontFamily="{StaticResource Ui}" FontSize="13" ShowInTaskbar="False"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                BorderThickness="0,0,0,1" Padding="22,16">
+            <StackPanel>
+                <TextBlock x:Name="Heading" Text="Add MCP server" FontFamily="{StaticResource Display}"
+                           FontSize="17" FontWeight="SemiBold" />
+                <TextBlock Text="Define it once; VibeCode translates it for every selected CLI at launch."
+                           Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,4,0,0" />
+            </StackPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                BorderThickness="0,1,0,0" Padding="18,12">
+            <DockPanel>
+                <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Content="Validate config"
+                        Click="OnValidate" AutomationProperties.Name="Validate MCP configuration" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Style="{StaticResource GhostButton}" Content="Cancel" Margin="0,0,8,0"
+                            Click="OnCancel" IsCancel="True" />
+                    <Button Style="{StaticResource PrimaryButton}" Content="Save server" Padding="18,8"
+                            Click="OnSave" IsDefault="True" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22,18">
+            <StackPanel MaxWidth="570">
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,0,0,18">
+                    <StackPanel>
+                        <TextBlock Text="Set up with AI" FontFamily="{StaticResource Display}" FontSize="14"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="Describe the server. The selected AI can research its current setup and fill this form for you to review. It will not install or save anything."
+                                   Foreground="{StaticResource Muted}" FontSize="10.5" TextWrapping="Wrap" Margin="0,4,0,10" />
+                        <TextBox x:Name="AiPromptBox" AcceptsReturn="True" MinHeight="58" MaxHeight="110"
+                                 VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
+                                 AutomationProperties.Name="Describe MCP server for AI"
+                                 ToolTip="Example: Add the Blender MCP server and use the recommended Windows setup." />
+                        <TextBlock Text="Example: Add the Blender MCP server and use the recommended Windows setup."
+                                   Foreground="{StaticResource Faint}" FontSize="10.5" Margin="2,5,0,11" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="0.8*" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="1.2*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="AI provider" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="2,0,0,5" />
+                                <ComboBox x:Name="AiProviderBox" SelectedValuePath="Tag"
+                                          SelectionChanged="OnAiProviderChanged"
+                                          AutomationProperties.Name="MCP setup AI provider">
+                                    <ComboBoxItem Content="Claude Code" Tag="claude" />
+                                    <ComboBoxItem Content="OpenAI Codex" Tag="codex" />
+                                    <ComboBoxItem Content="Kimi Code" Tag="kimi" />
+                                    <ComboBoxItem Content="Grok" Tag="grok" />
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Model" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="2,0,0,5" />
+                                <ComboBox x:Name="AiModelBox" DisplayMemberPath="Display" SelectedValuePath="Value"
+                                          AutomationProperties.Name="MCP setup AI model" />
+                            </StackPanel>
+                        </Grid>
+                        <DockPanel Margin="0,12,0,0">
+                            <Button x:Name="AiGenerateButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}"
+                                    Content="Draft configuration" Padding="15,7" Click="OnGenerateWithAi"
+                                    AutomationProperties.Name="Draft MCP configuration with AI" />
+                            <TextBlock x:Name="AiWorkingText" Text="Researching and drafting configurationâ€¦"
+                                       Foreground="{StaticResource Muted}" FontSize="10.5" VerticalAlignment="Center"
+                                       Visibility="Collapsed" />
+                        </DockPanel>
+                        <ProgressBar x:Name="AiProgress" Height="3" Margin="0,10,0,0" IsIndeterminate="True"
+                                     Visibility="Collapsed" />
+                        <Border x:Name="AiStatusPanel" Background="{StaticResource GreenSoft}"
+                                CornerRadius="{StaticResource Rad9}" Padding="10,7" Margin="0,10,0,0"
+                                Visibility="Collapsed">
+                            <TextBlock x:Name="AiStatusText" Foreground="{StaticResource Green}" FontSize="10.5"
+                                       TextWrapping="Wrap" />
+                        </Border>
+                    </StackPanel>
+                </Border>
+                <TextBlock Text="Server name" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,0,0,6" />
+                <TextBox x:Name="NameBox" AutomationProperties.Name="MCP server name" MaxLength="64" />
+                <TextBlock Text="Letters, numbers, hyphens, and underscores. VibeCode gives every CLI the same stable runtime suffix so provider-native entries cannot collide."
+                           Foreground="{StaticResource Faint}" FontSize="10.5" Margin="2,5,0,15" />
+
+                <TextBlock Text="Transport" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,0,0,6" />
+                <ComboBox x:Name="TransportBox" SelectedValuePath="Tag" SelectionChanged="OnTransportChanged"
+                          AutomationProperties.Name="MCP transport">
+                    <ComboBoxItem Content="Local process (stdio)" Tag="stdio" />
+                    <ComboBoxItem Content="Remote server (Streamable HTTP)" Tag="http" />
+                    <ComboBoxItem Content="Legacy remote server (SSE)" Tag="sse" />
+                </ComboBox>
+
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,16,0,0">
+                    <StackPanel>
+                        <StackPanel x:Name="StdioPanel">
+                            <TextBlock Text="Command" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,0,0,6" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="CommandBox" AutomationProperties.Name="MCP command" />
+                                <Button Grid.Column="1" Style="{StaticResource GhostButton}" Content="Browse…" Margin="8,0,0,0"
+                                        Click="OnBrowseCommand" AutomationProperties.Name="Browse for MCP command" />
+                            </Grid>
+                            <TextBlock Text="Arguments · one exact argument per line" Foreground="{StaticResource Muted}"
+                                       FontSize="11.5" Margin="2,13,0,6" />
+                            <TextBox x:Name="ArgumentsBox" AcceptsReturn="True" MinHeight="78" MaxHeight="150"
+                                     VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource Mono}"
+                                     AutomationProperties.Name="MCP command arguments" />
+                            <TextBlock Text="Environment · NAME=value, one per line" Foreground="{StaticResource Muted}"
+                                       FontSize="11.5" Margin="2,13,0,6" />
+                            <TextBox x:Name="EnvironmentBox" AcceptsReturn="True" MinHeight="70" MaxHeight="140"
+                                     VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource Mono}"
+                                     AutomationProperties.Name="MCP environment variables" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="RemotePanel" Visibility="Collapsed">
+                            <TextBlock Text="Server URL" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,0,0,6" />
+                            <TextBox x:Name="UrlBox" AutomationProperties.Name="MCP server URL" />
+                            <TextBlock Text="Bearer token environment variable · optional" Foreground="{StaticResource Muted}"
+                                       FontSize="11.5" Margin="2,13,0,6" />
+                            <TextBox x:Name="BearerBox" AutomationProperties.Name="Bearer token environment variable" />
+                            <TextBlock Text="Headers · Header=value, one per line" Foreground="{StaticResource Muted}"
+                                       FontSize="11.5" Margin="2,13,0,6" />
+                            <TextBox x:Name="HeadersBox" AcceptsReturn="True" MinHeight="70" MaxHeight="140"
+                                     VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource Mono}"
+                                     AutomationProperties.Name="MCP HTTP headers" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Use ${TOKEN_NAME} inside values to read a variable when the CLI launches. Prefer the bearer field for remote secrets; literal values are stored in VibeCode's local data."
+                           Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="2,8,0,0" />
+
+                <TextBlock Text="Available in" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,18,0,8" />
+                <WrapPanel>
+                    <CheckBox x:Name="ClaudeCheck" Content="Claude" IsChecked="True" Margin="0,0,22,8" />
+                    <CheckBox x:Name="CodexCheck" Content="Codex" IsChecked="True" Margin="0,0,22,8" />
+                    <CheckBox x:Name="KimiCheck" Content="Kimi" IsChecked="True" Margin="0,0,22,8" />
+                    <CheckBox x:Name="GrokCheck" Content="Grok" IsChecked="True" Margin="0,0,22,8" />
+                </WrapPanel>
+                <TextBlock x:Name="TransportCompatibility" Foreground="{StaticResource Amber}" FontSize="10.5"
+                           TextWrapping="Wrap" Visibility="Collapsed" />
+
+                <Grid Margin="0,16,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Startup timeout · seconds" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,0,0,6" />
+                        <TextBox x:Name="StartupTimeoutBox" Text="30" AutomationProperties.Name="MCP startup timeout" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="Tool timeout · seconds" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,0,0,6" />
+                        <TextBox x:Name="ToolTimeoutBox" Text="60" AutomationProperties.Name="MCP tool timeout" />
+                    </StackPanel>
+                </Grid>
+                <TextBlock Text="ACP handoff does not carry per-server timeouts; Kimi and Grok keep their native defaults."
+                           Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="2,6,0,0" />
+
+                <CheckBox x:Name="EnabledCheck" Content="Enable this server for new chats" IsChecked="True" Margin="0,18,0,0" />
+
+                <Border x:Name="ValidationPanel" Background="{StaticResource RedSoft}" CornerRadius="{StaticResource Rad9}"
+                        Padding="11,8" Margin="0,16,0,0" Visibility="Collapsed">
+                    <TextBlock x:Name="ValidationText" Foreground="{StaticResource Red}" TextWrapping="Wrap" FontSize="11.5" />
+                </Border>
+                <Border x:Name="WarningPanel" Background="{StaticResource AmberSoft}" CornerRadius="{StaticResource Rad9}"
+                        Padding="11,8" Margin="0,8,0,0" Visibility="Collapsed">
+                    <TextBlock x:Name="WarningText" Foreground="{StaticResource Amber}" TextWrapping="Wrap" FontSize="11.5" />
+                </Border>
+                <Border x:Name="ValidPanel" Background="{StaticResource GreenSoft}" CornerRadius="{StaticResource Rad9}"
+                        Padding="11,8" Margin="0,16,0,0" Visibility="Collapsed">
+                    <TextBlock Text="Configuration is valid. Each selected CLI will connect when a chat next starts."
+                               Foreground="{StaticResource Green}" TextWrapping="Wrap" FontSize="11.5" />
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

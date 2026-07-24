@@ -1,0 +1,196 @@
+<Window x:Class="VibeCode.UI.RadarWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:VibeCode.UI"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Weather maps" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Height="640" Width="900" MinHeight="380" MinWidth="560"
+        WindowStartupLocation="CenterOwner" WindowStyle="None" ResizeMode="CanResize"
+        Background="{DynamicResource Bg0}" TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        FontFamily="{DynamicResource Ui}" FontSize="13" ShowInTaskbar="False"
+        Closed="OnClosed">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="42" GlassFrameThickness="0" ResizeBorderThickness="6" CornerRadius="0" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Border BorderBrush="{DynamicResource Border}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="42" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- title bar -->
+            <Border Grid.Row="0" Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}"
+                    BorderThickness="0,0,0,1">
+                <DockPanel LastChildFill="False" Margin="12,0,8,0">
+                    <TextBlock x:Name="TitleGlyph" DockPanel.Dock="Left" Text="&#xE753;" FontFamily="{DynamicResource Icons}"
+                               FontSize="14" Foreground="{DynamicResource WeatherBlue}" VerticalAlignment="Center"
+                               Margin="0,0,10,0" />
+                    <TextBlock x:Name="TitleMode" DockPanel.Dock="Left" Text="NWS radar" FontWeight="SemiBold" FontSize="13"
+                               Foreground="{DynamicResource Text}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="TitlePlace" DockPanel.Dock="Left" FontSize="11.5" Margin="10,1,0,0"
+                               Foreground="{DynamicResource Faint}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxWidth="360" />
+
+                    <!-- close -->
+                    <Button DockPanel.Dock="Right" Click="OnClose" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True" Width="34" Height="30"
+                            ToolTip="Close weather maps" Content="&#xE8BB;" FontFamily="{DynamicResource Icons}" FontSize="12"
+                            AutomationProperties.Name="Close weather maps" />
+                    <!-- refresh conditions + frame list -->
+                    <Button DockPanel.Dock="Right" Click="OnRefresh" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True" Width="34" Height="30" Margin="0,0,4,0"
+                            ToolTip="Refresh weather data" Content="&#xE72C;" FontFamily="{DynamicResource Icons}"
+                            FontSize="12" AutomationProperties.Name="Refresh weather data" />
+
+                    <!-- current conditions, right-aligned next to the buttons -->
+                    <TextBlock x:Name="TitleConditions" DockPanel.Dock="Right" FontSize="11.5" VerticalAlignment="Center"
+                               Margin="0,0,12,0" Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis"
+                               MaxWidth="300" />
+                </DockPanel>
+            </Border>
+
+            <!-- map -->
+            <Grid Grid.Row="1">
+                <ui:RadarMap x:Name="Map" AutomationProperties.Name="Radar map" />
+
+                <!-- SPC day picker; the outlook remains a native vector layer on the same pannable map. -->
+                <Border x:Name="SpcDayPicker" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,10,0,0"
+                        Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
+                        CornerRadius="{DynamicResource Rad10}" Padding="7,6" Visibility="Collapsed">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock Text="SPC" FontWeight="SemiBold" FontSize="11.5" Foreground="{DynamicResource Text}"
+                                       VerticalAlignment="Center" Margin="5,0,8,0" />
+                            <ToggleButton x:Name="SpcDay1" Style="{DynamicResource GhostToggle}" IsChecked="True"
+                                          Content="Day 1" Tag="1" Height="28" Padding="12,0" Click="OnSpcDayClick"
+                                          AutomationProperties.Name="SPC Day 1 outlook" />
+                            <ToggleButton x:Name="SpcDay2" Style="{DynamicResource GhostToggle}"
+                                          Content="Day 2" Tag="2" Height="28" Padding="12,0" Margin="3,0,0,0"
+                                          Click="OnSpcDayClick" AutomationProperties.Name="SPC Day 2 outlook" />
+                            <ToggleButton x:Name="SpcDay3" Style="{DynamicResource GhostToggle}"
+                                          Content="Day 3" Tag="3" Height="28" Padding="12,0" Margin="3,0,0,0"
+                                          Click="OnSpcDayClick" AutomationProperties.Name="SPC Day 3 outlook" />
+                        </StackPanel>
+                        <TextBlock x:Name="SpcValidText" Text="Loading official outlook…" HorizontalAlignment="Center"
+                                   FontFamily="{DynamicResource Mono}" FontSize="9.5" Foreground="{DynamicResource Faint}"
+                                   Margin="4,4,4,0" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="SpcMessage" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,82,0,0"
+                        Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
+                        CornerRadius="{DynamicResource Rad8}" Padding="12,7" Visibility="Collapsed">
+                    <TextBlock x:Name="SpcMessageText" Text="Loading SPC outlook…" FontSize="11.5"
+                               Foreground="{DynamicResource Muted}" TextWrapping="Wrap" MaxWidth="420" />
+                </Border>
+
+                <!-- Categorical legend uses the operational SPC colours returned in the GeoJSON product. -->
+                <Border x:Name="SpcLegend" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10,0,0,10"
+                        Background="#E6101010" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
+                        CornerRadius="{DynamicResource Rad8}" Padding="10,8" Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock Text="CATEGORICAL RISK" Style="{DynamicResource Caption}" FontSize="9" Margin="0,0,0,6" />
+                        <WrapPanel MaxWidth="330">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,11,4"><Border Width="10" Height="10" Background="#C1E9C1" BorderBrush="#55BB55" BorderThickness="1" Margin="0,1,5,0" /><TextBlock Text="TSTM" FontFamily="{DynamicResource Mono}" FontSize="9.5" Foreground="{DynamicResource Muted}" /></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,11,4"><Border Width="10" Height="10" Background="#66A366" BorderBrush="#005500" BorderThickness="1" Margin="0,1,5,0" /><TextBlock Text="MRGL" FontFamily="{DynamicResource Mono}" FontSize="9.5" Foreground="{DynamicResource Muted}" /></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,11,4"><Border Width="10" Height="10" Background="#FFE066" BorderBrush="#DDAA00" BorderThickness="1" Margin="0,1,5,0" /><TextBlock Text="SLGT" FontFamily="{DynamicResource Mono}" FontSize="9.5" Foreground="{DynamicResource Muted}" /></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,11,4"><Border Width="10" Height="10" Background="#FFA366" BorderBrush="#FF6600" BorderThickness="1" Margin="0,1,5,0" /><TextBlock Text="ENH" FontFamily="{DynamicResource Mono}" FontSize="9.5" Foreground="{DynamicResource Muted}" /></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,11,0"><Border Width="10" Height="10" Background="#FF6666" BorderBrush="#FF0000" BorderThickness="1" Margin="0,1,5,0" /><TextBlock Text="MDT" FontFamily="{DynamicResource Mono}" FontSize="9.5" Foreground="{DynamicResource Muted}" /></StackPanel>
+                            <StackPanel Orientation="Horizontal"><Border Width="10" Height="10" Background="#FF66FF" BorderBrush="#FF00FF" BorderThickness="1" Margin="0,1,5,0" /><TextBlock Text="HIGH" FontFamily="{DynamicResource Mono}" FontSize="9.5" Foreground="{DynamicResource Muted}" /></StackPanel>
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- zoom controls float over the map; the attribution plate owns the bottom-right corner -->
+                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,10,0">
+                    <Button Click="OnZoomIn" Style="{DynamicResource IconButton}" Width="30" Height="30"
+                            Content="&#xE710;" FontFamily="{DynamicResource Icons}" FontSize="12"
+                            Background="{DynamicResource Bg1}" ToolTip="Zoom in" AutomationProperties.Name="Zoom in" />
+                    <Button Click="OnZoomOut" Style="{DynamicResource IconButton}" Width="30" Height="30" Margin="0,4,0,0"
+                            Content="&#xE738;" FontFamily="{DynamicResource Icons}" FontSize="12"
+                            Background="{DynamicResource Bg1}" ToolTip="Zoom out" AutomationProperties.Name="Zoom out" />
+                </StackPanel>
+
+                <!-- shown instead of controls when no place has been picked yet -->
+                <Border x:Name="NoPlaceHint" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0"
+                        Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="1"
+                        CornerRadius="{DynamicResource Rad8}" Padding="14,9" Visibility="Collapsed">
+                    <TextBlock x:Name="NoPlaceText" Text="No location set — pick one in Settings › Extensions to centre the map and see conditions."
+                               FontSize="11.5" Foreground="{DynamicResource Muted}" />
+                </Border>
+            </Grid>
+
+            <!-- control bar -->
+            <Border Grid.Row="2" Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}"
+                    BorderThickness="0,1,0,0" Padding="12,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- animation -->
+                    <StackPanel x:Name="RadarAnimationPanel" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="PlayBtn" Click="OnPlayPause" Style="{DynamicResource IconButton}" Width="30" Height="30"
+                                Content="&#xE768;" FontFamily="{DynamicResource Icons}" FontSize="12"
+                                Foreground="{DynamicResource WeatherBlue}" ToolTip="Play the last hour of radar"
+                                AutomationProperties.Name="Play radar loop" />
+                        <TextBlock x:Name="FrameLabel" Text="Latest" FontFamily="{DynamicResource Mono}" FontSize="11.5"
+                                   Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="10,0,0,0"
+                                   Width="66" />
+                    </StackPanel>
+
+                    <!-- timeline -->
+                    <Slider x:Name="Timeline" Grid.Column="1" Style="{DynamicResource DimSlider}" Minimum="0" Maximum="0"
+                            IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="10,0,16,0"
+                            ValueChanged="OnTimelineChanged" AutomationProperties.Name="Radar timeline" />
+
+                    <!-- radar strength -->
+                    <StackPanel x:Name="RadarOpacityPanel" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
+                        <TextBlock Text="Radar" FontSize="11.5" Foreground="{DynamicResource Faint}"
+                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <Slider x:Name="OpacitySlider" Style="{DynamicResource DimSlider}" Width="90" Minimum="10" Maximum="100"
+                                Value="85" VerticalAlignment="Center" ValueChanged="OnOpacityChanged"
+                                AutomationProperties.Name="Radar opacity" />
+                    </StackPanel>
+
+                    <!-- local SPC status replaces the radar timeline while the outlook layer is selected -->
+                    <StackPanel x:Name="SpcStatusPanel" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                        <Ellipse x:Name="SpcRiskDot" Width="8" Height="8" Fill="{DynamicResource Faint}" Margin="1,0,8,0" />
+                        <TextBlock x:Name="SpcLocalRiskText" Text="Loading local risk…" FontSize="11.5"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" />
+                        <TextBlock Text="  ·  Categorical outlook — not a warning" FontSize="10.5"
+                                   Foreground="{DynamicResource Faint}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <!-- view toggles -->
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ToggleButton x:Name="SpcToggle" Style="{DynamicResource GhostToggle}" Height="30" Padding="12,0"
+                                      Content="SPC" FontFamily="{DynamicResource Ui}" FontSize="12"
+                                      ToolTip="Show Storm Prediction Center Day 1–3 outlooks"
+                                      Checked="OnSpcModeChanged" Unchecked="OnSpcModeChanged"
+                                      AutomationProperties.Name="Storm Prediction Center outlooks" />
+                        <!-- GhostToggle, not IconToggle: that one pins Width to 30 and would clip the word -->
+                        <ToggleButton x:Name="LabelsToggle" Style="{DynamicResource GhostToggle}" IsChecked="True"
+                                      Height="30" Padding="12,0" Margin="6,0,0,0" Content="Names" FontFamily="{DynamicResource Ui}"
+                                      FontSize="12" ToolTip="Show place names" Checked="OnLabelsChanged"
+                                      Unchecked="OnLabelsChanged" AutomationProperties.Name="Place names" />
+                        <Button x:Name="RecenterBtn" Click="OnRecenter" Style="{DynamicResource GhostButton}" Padding="10,5"
+                                Margin="6,0,0,0" ToolTip="Centre on your saved location"
+                                AutomationProperties.Name="Recentre">
+                            <TextBlock x:Name="RecenterText" Text="Recentre" FontSize="12" Foreground="{DynamicResource Muted}" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

@@ -1,0 +1,92 @@
+<UserControl x:Class="VibeCode.UI.GamesPopupCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:svc="clr-namespace:VibeCode.Services"
+             DataContext="{x:Static svc:GamesService.Instance}"
+             FontFamily="{StaticResource Ui}" FontSize="13"
+             UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Border Style="{StaticResource PopupCard}" Width="280">
+        <StackPanel Margin="6">
+            <TextBlock Text="Games" FontSize="13" FontWeight="SemiBold"
+                       Foreground="{StaticResource Text}" Margin="8,6,8,8" />
+
+            <Rectangle Height="1" Fill="{StaticResource BorderHairline}" Margin="4,0,4,4" />
+
+            <Button Style="{StaticResource GhostButton}" Padding="8,7"
+                    HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch"
+                    Click="OnOpenSurviveTheShapes" AutomationProperties.Name="Open Survive the Shapes">
+                <DockPanel LastChildFill="True">
+                    <Border DockPanel.Dock="Left" Width="36" Height="36" CornerRadius="10"
+                            Background="#1C45E6D2" Margin="0,0,10,0">
+                        <TextBlock Text="&#x1F3AF;" FontFamily="Segoe UI Emoji" FontSize="17"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding SurviveTheShapesBadge}"
+                               Visibility="{Binding SurviveTheShapesBadge, Converter={StaticResource NonEmptyVis}}"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource Accent}"
+                               VerticalAlignment="Center" Margin="10,0,2,0" />
+                    <TextBlock Text="Survive the Shapes" FontSize="12.5" FontWeight="SemiBold"
+                               Foreground="{StaticResource Text}" VerticalAlignment="Center" />
+                </DockPanel>
+            </Button>
+
+            <Button Style="{StaticResource GhostButton}" Padding="8,7"
+                    HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch"
+                    Click="OnOpenTowerDefense" AutomationProperties.Name="Open Tower Defense">
+                <DockPanel LastChildFill="True">
+                    <Border DockPanel.Dock="Left" Width="36" Height="36" CornerRadius="10"
+                            Background="#1C9D7CFF" Margin="0,0,10,0">
+                        <TextBlock Text="&#x1F3F0;" FontFamily="Segoe UI Emoji" FontSize="17"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding TowerDefenseBadge}"
+                               Visibility="{Binding TowerDefenseBadge, Converter={StaticResource NonEmptyVis}}"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource Accent}"
+                               VerticalAlignment="Center" Margin="10,0,2,0" />
+                    <TextBlock Text="Tower Defense" FontSize="12.5" FontWeight="SemiBold"
+                               Foreground="{StaticResource Text}" VerticalAlignment="Center" />
+                </DockPanel>
+            </Button>
+
+            <Button Style="{StaticResource GhostButton}" Padding="8,7"
+                    HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch"
+                    Click="OnOpenTinyEmpires" AutomationProperties.Name="Open Tiny Empires">
+                <DockPanel LastChildFill="True">
+                    <Border DockPanel.Dock="Left" Width="36" Height="36" CornerRadius="10"
+                            Background="#1CFFD166" Margin="0,0,10,0">
+                        <TextBlock Text="&#x1F5FA;" FontFamily="Segoe UI Emoji" FontSize="17"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding TinyEmpiresBadge}"
+                               Visibility="{Binding TinyEmpiresBadge, Converter={StaticResource NonEmptyVis}}"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource Accent}"
+                               VerticalAlignment="Center" Margin="10,0,2,0" />
+                    <TextBlock Text="Tiny Empires" FontSize="12.5" FontWeight="SemiBold"
+                               Foreground="{StaticResource Text}" VerticalAlignment="Center" />
+                </DockPanel>
+            </Button>
+
+            <Button Style="{StaticResource GhostButton}" Padding="8,7"
+                    HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch"
+                    Click="OnOpenFishingTycoon" AutomationProperties.Name="Open Fishing Tycoon">
+                <DockPanel LastChildFill="True">
+                    <Border DockPanel.Dock="Left" Width="36" Height="36" CornerRadius="10"
+                            Background="#1C2EA4B8" Margin="0,0,10,0">
+                        <TextBlock Text="&#x1F3A3;" FontFamily="Segoe UI Emoji" FontSize="17"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding FishingTycoonBadge}"
+                               Visibility="{Binding FishingTycoonBadge, Converter={StaticResource NonEmptyVis}}"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource Accent}"
+                               VerticalAlignment="Center" Margin="10,0,2,0" />
+                    <TextBlock Text="Fishing Tycoon" FontSize="12.5" FontWeight="SemiBold"
+                               Foreground="{StaticResource Text}" VerticalAlignment="Center" />
+                </DockPanel>
+            </Button>
+        </StackPanel>
+    </Border>
+</UserControl>

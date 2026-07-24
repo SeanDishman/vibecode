@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fishing Tycoon</title>
+  <link rel="stylesheet" href="./style.css">
+  <script>
+    // Collect anything that throws before the modules can report it themselves.
+    window.__FT_ERRORS = [];
+    window.addEventListener('error', e =>
+      window.__FT_ERRORS.push(e.message + ' @ ' + (e.filename || '?') + ':' + (e.lineno || 0)));
+    window.addEventListener('unhandledrejection', e =>
+      window.__FT_ERRORS.push('unhandled rejection: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+  </script>
+</head>
+<body tabindex="0">
+  <!-- #stage / #pause.hidden / #resumeBtn are the VibeCode host's pause contract. -->
+  <div id="stage">
+    <canvas id="game" tabindex="0" aria-label="Fishing Tycoon ocean"></canvas>
+
+    <div class="hud" id="hud" style="display:none">
+      <div class="panel" id="topbar">
+        <div class="res gold" title="Money the crew has landed for you">
+          <span class="ico">$</span><b id="rCash">0</b>
+        </div>
+        <div class="vr"></div>
+        <div class="res" title="Earnings over the last 30 seconds">
+          <span class="ico">⚡</span><b id="rRate">0/min</b>
+        </div>
+        <div class="vr"></div>
+        <div class="res" title="What the lead rod is doing right now">
+          <span class="ico">🎣</span><b id="rState">Casting</b>
+        </div>
+        <div class="holdbar"><span id="stateFill"></span></div>
+        <div class="vr"></div>
+        <div class="res" title="How deep the line reaches — buy Rod to go deeper">
+          <span class="ico">🌊</span><b id="rZone">Shallows</b><i id="rDepth">120 m</i>
+        </div>
+        <div class="spacer"></div>
+        <div class="res" id="bestWrap" title="Best payday so far" hidden>
+          <span class="ico">🏆</span><b id="rBest">—</b>
+        </div>
+        <div class="vr"></div>
+        <div class="res" title="Rods over the side"><span class="ico">🧑‍✈️</span><b id="rRods">1</b></div>
+        <div class="res" title="Total fish landed"><span class="ico">🐟</span><b id="rCaught">0</b></div>
+        <button class="sbtn" id="muteBtn" title="Mute (M)">🔊</button>
+        <button class="sbtn" id="pauseBtn" title="Pause (P)">❚❚</button>
+      </div>
+
+      <div id="dock">
+        <button class="dockbtn" id="btnShop" title="Research (E)">
+          <span class="di">⚓</span><span class="dl">Research</span><kbd>E</kbd>
+        </button>
+        <div class="hint" id="hint">Sal fishes on his own — spend the money</div>
+      </div>
+
+      <!-- The research tree gets the whole screen: a pannable, zoomable canvas
+           of nodes on the left, and the selected track's full ladder on the
+           right. Everything the player ever does is in here. -->
+      <div class="treeview panel hidden" id="shop">
+        <div class="treetop">
+          <span class="tt">Research</span>
+          <span class="tsub" id="shopProgress">0 / 70 rungs</span>
+          <span class="spacer"></span>
+          <div class="zoomctl">
+            <button class="sbtn" id="zOut" title="Zoom out (−)">−</button>
+            <span id="zPct">100%</span>
+            <button class="sbtn" id="zIn" title="Zoom in (+)">+</button>
+            <button class="sbtn" id="zFit" title="Fit the whole tree (0)">Fit</button>
+          </div>
+          <span class="k" id="shopCash">$0</span>
+          <button class="popx" id="shopClose" title="Close (E / Esc)">✕</button>
+        </div>
+
+        <div class="treewrap" id="treeWrap">
+          <div class="treepan" id="treePan">
+            <svg class="links" id="treeLinks"></svg>
+          </div>
+          <div class="treehelp">Drag to pan · scroll to zoom · click a node for its full ladder</div>
+        </div>
+
+        <aside class="rail" id="rail"></aside>
+      </div>
+
+      <div id="log"></div>
+    </div>
+
+    <!-- ════ start ════ -->
+    <div class="screen" id="menu">
+      <div class="card">
+        <div class="pill"><span class="dot"></span><span>Idle ocean tycoon</span></div>
+        <h1>Fishing <span class="accent">Tycoon</span></h1>
+        <p class="sub">Sal fishes. You don't. He casts, waits, hooks and winds in on his own, all day, through
+          squalls and thunderstorms — and every fish he lands is money in your pocket. Watch the sky: storms
+          drive strange things up out of the deep, and when the rain clears to gold the sunfish come up to
+          bask. Both pay far better than anything that swims in fair weather. Your entire job is the research
+          tree — a net over the side for a steady trickle, then longer rods for deeper water, better bait,
+          stronger line and reel power, and eventually a whole crew of rods over the side. Drag and zoom
+          around it like a map: eight tracks, seventy rungs, and every rung is a named piece of kit rather
+          than another notch on a curve — every third reel head is geared, every third line is a braid.
+          Everything you buy is bolted onto the boat where you can see it.</p>
+        <button class="primary" id="startBtn">Cast off</button>
+        <div class="controls">
+          <div><kbd>E</kbd> research tree</div>
+          <div>drag to pan · scroll to zoom</div>
+          <div><kbd>+</kbd><kbd>−</kbd><kbd>0</kbd> zoom · fit</div>
+          <div><kbd>P</kbd> pause</div>
+          <div><kbd>M</kbd> mute</div>
+          <div>everything else runs itself</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ pause ════ -->
+    <div class="screen hidden" id="pause">
+      <div class="card">
+        <div class="pill"><span class="dot"></span><span>Paused</span></div>
+        <h1 style="font-size:clamp(28px,4.6vw,46px)">Dead calm</h1>
+        <p class="sub">The sea is holding still until you get back.</p>
+        <button class="primary" id="resumeBtn">Resume</button>
+        <div class="controls"><div>Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume</div></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

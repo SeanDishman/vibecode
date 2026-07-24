@@ -1,0 +1,241 @@
+<Window x:Class="VibeCode.UI.UsageHudWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:VibeCode.UI"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="VibeCode telemetry" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Height="620" Width="880" MinHeight="420" MinWidth="620"
+        WindowStartupLocation="Manual" WindowStyle="None" ResizeMode="CanResize"
+        Background="{DynamicResource Bg0}" TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        FontFamily="{DynamicResource Ui}" FontSize="12" ShowInTaskbar="True"
+        Loaded="OnLoaded" Closed="OnClosed">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="36" GlassFrameThickness="0" ResizeBorderThickness="6" CornerRadius="0" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <!-- Same chip as the settings usage page. Deliberately a local copy rather than a shared one: the
+             original lives in SettingsWindow's own resources, and hoisting it into Dark.xaml would leave the
+             CLI theme without it. DynamicResource throughout so this one follows either theme. -->
+        <Style x:Key="HudChip" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Padding" Value="9,2" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="chip" CornerRadius="{DynamicResource Rad8}" Background="Transparent"
+                                Padding="{TemplateBinding Padding}">
+                            <TextBlock x:Name="label" Text="{TemplateBinding Content}" FontSize="10.5"
+                                       Foreground="{DynamicResource Muted}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="chip" Property="Background" Value="{DynamicResource Bg3}" />
+                                <Setter TargetName="label" Property="Foreground" Value="{DynamicResource Text}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="chip" Property="Background" Value="{DynamicResource AccentSoft}" />
+                                <Setter TargetName="label" Property="Foreground" Value="{DynamicResource Accent}" />
+                                <Setter TargetName="label" Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="{DynamicResource Border}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="36" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Title bar. The whole strip drags the window, which is the only way this lands on a second
+                 monitor without a caption bar to grab. -->
+            <Border Grid.Row="0" Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}"
+                    BorderThickness="0,0,0,1">
+                <DockPanel LastChildFill="False" Margin="12,0,4,0">
+                    <Ellipse x:Name="LiveDot" DockPanel.Dock="Left" Width="7" Height="7" VerticalAlignment="Center"
+                             Fill="{DynamicResource Green}" Margin="0,0,9,0" />
+                    <TextBlock DockPanel.Dock="Left" Text="VIBECODE · TELEMETRY" FontFamily="{DynamicResource Mono}"
+                               FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Text}"
+                               VerticalAlignment="Center" />
+                    <TextBlock x:Name="HudRange" DockPanel.Dock="Left" Text="LAST 24 H" FontFamily="{DynamicResource Mono}"
+                               FontSize="10" Foreground="{DynamicResource Faint}" VerticalAlignment="Center"
+                               Margin="12,1,0,0" />
+
+                    <Button DockPanel.Dock="Right" Click="OnClose" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True" Width="32" Height="28"
+                            ToolTip="Close telemetry" Content="&#xE8BB;" FontFamily="{DynamicResource Icons}"
+                            FontSize="11" AutomationProperties.Name="Close telemetry" />
+                    <Button DockPanel.Dock="Right" Click="OnOpenWall" Style="{DynamicResource IconButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True" Width="32" Height="28"
+                            ToolTip="Open the full-screen telemetry wall on the other monitor"
+                            Content="&#xE7F4;" FontFamily="{DynamicResource Icons}" FontSize="11"
+                            AutomationProperties.Name="Open the full-screen telemetry wall" />
+                    <ToggleButton x:Name="PinToggle" DockPanel.Dock="Right" Style="{DynamicResource IconToggle}"
+                                  shell:WindowChrome.IsHitTestVisibleInChrome="True" Width="32" Height="28"
+                                  Checked="OnPinChanged" Unchecked="OnPinChanged" IsChecked="True"
+                                  ToolTip="Keep on top of other windows" Content="&#xE840;"
+                                  FontFamily="{DynamicResource Icons}" FontSize="11"
+                                  AutomationProperties.Name="Keep telemetry on top" />
+                    <TextBlock x:Name="HudClock" DockPanel.Dock="Right" FontFamily="{DynamicResource Mono}" FontSize="10.5"
+                               Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                </DockPanel>
+            </Border>
+
+            <Grid Grid.Row="1" Margin="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Four headline tiles. Each prints its own number; the sparkline under it is shape only. -->
+                <UniformGrid Grid.Row="0" Columns="4">
+                    <Border Style="{DynamicResource Card}" Padding="12,10" Margin="0,0,5,0">
+                        <StackPanel>
+                            <TextBlock Text="SPEND" Style="{DynamicResource Caption}" />
+                            <TextBlock x:Name="TileSpend" Text="$0" FontFamily="{DynamicResource Mono}" FontSize="21"
+                                       FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,3,0,0" />
+                            <ui:HudSparkline x:Name="SparkSpend" Height="20" Margin="0,6,0,0"
+                                             Tint="{DynamicResource Accent}" />
+                            <TextBlock x:Name="TileSpendSub" FontSize="10" Foreground="{DynamicResource Faint}"
+                                       Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{DynamicResource Card}" Padding="12,10" Margin="5,0">
+                        <StackPanel>
+                            <TextBlock Text="TOKENS" Style="{DynamicResource Caption}" />
+                            <TextBlock x:Name="TileTokens" Text="0" FontFamily="{DynamicResource Mono}" FontSize="21"
+                                       FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,3,0,0" />
+                            <ui:HudSparkline x:Name="SparkTokens" Height="20" Margin="0,6,0,0"
+                                             Tint="{DynamicResource Blue}" />
+                            <TextBlock x:Name="TileTokensSub" FontSize="10" Foreground="{DynamicResource Faint}"
+                                       Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{DynamicResource Card}" Padding="12,10" Margin="5,0">
+                        <StackPanel>
+                            <TextBlock Text="ELECTRICITY" Style="{DynamicResource Caption}" />
+                            <TextBlock x:Name="TileEnergy" Text="0 Wh" FontFamily="{DynamicResource Mono}" FontSize="21"
+                                       FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,3,0,0" />
+                            <ui:HudSparkline x:Name="SparkEnergy" Height="20" Margin="0,6,0,0"
+                                             Tint="{DynamicResource Amber}" />
+                            <TextBlock x:Name="TileEnergySub" FontSize="10" Foreground="{DynamicResource Faint}"
+                                       Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{DynamicResource Card}" Padding="12,10" Margin="5,0,0,0">
+                        <StackPanel>
+                            <TextBlock Text="WATER" Style="{DynamicResource Caption}" />
+                            <TextBlock x:Name="TileWater" Text="0 mL" FontFamily="{DynamicResource Mono}" FontSize="21"
+                                       FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,3,0,0" />
+                            <ui:HudSparkline x:Name="SparkWater" Height="20" Margin="0,6,0,0"
+                                             Tint="{DynamicResource Green}" />
+                            <TextBlock x:Name="TileWaterSub" FontSize="10" Foreground="{DynamicResource Faint}"
+                                       Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+
+                <DockPanel Grid.Row="1" Margin="0,14,0,7">
+                    <Border DockPanel.Dock="Right" Background="{DynamicResource Bg1}"
+                            CornerRadius="{DynamicResource Rad8}" Padding="3">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton x:Name="HudByTokens" Style="{StaticResource HudChip}" Content="Tokens"
+                                         Padding="9,2" GroupName="HudMetric" IsChecked="True" Checked="OnMetricChanged" />
+                            <RadioButton x:Name="HudByCost" Style="{StaticResource HudChip}" Content="Cost"
+                                         Padding="9,2" GroupName="HudMetric" Checked="OnMetricChanged" />
+                            <RadioButton x:Name="HudByEnergy" Style="{StaticResource HudChip}" Content="Energy"
+                                         Padding="9,2" GroupName="HudMetric" Checked="OnMetricChanged" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="HudGraphCaption" Text="THROUGHPUT BY HOUR" Style="{DynamicResource Caption}"
+                               VerticalAlignment="Center" />
+                </DockPanel>
+
+                <Border Grid.Row="2" Style="{DynamicResource Card}" Padding="10,8" MinHeight="150">
+                    <ui:HourlyThroughput x:Name="HudGraph" />
+                </Border>
+
+                <Grid Grid.Row="3" Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0" Style="{DynamicResource Card}" Padding="12,10" Margin="0,0,5,0">
+                        <StackPanel>
+                            <TextBlock Text="BY MODEL" Style="{DynamicResource Caption}" Margin="0,0,0,6" />
+                            <ItemsControl x:Name="HudModels">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0" Width="7" Height="7" CornerRadius="{DynamicResource Rad2}"
+                                                    Background="{Binding Swatch}" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Display}" FontSize="11"
+                                                       Margin="8,0,8,0" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="2" Text="{Binding Value}" FontFamily="{DynamicResource Mono}"
+                                                       FontSize="10.5" Foreground="{DynamicResource Muted}"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock x:Name="HudModelsEmpty" Text="No calls in range." FontSize="10.5"
+                                       Foreground="{DynamicResource Faint}" Visibility="Collapsed" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="1" Style="{DynamicResource Card}" Padding="12,10" Margin="5,0,0,0">
+                        <StackPanel>
+                            <TextBlock Text="SYSTEM" Style="{DynamicResource Caption}" Margin="0,0,0,6" />
+                            <DockPanel Margin="0,2">
+                                <TextBlock DockPanel.Dock="Left" Text="CACHE HIT" FontFamily="{DynamicResource Mono}"
+                                           FontSize="10" Foreground="{DynamicResource Muted}" Width="86" />
+                                <TextBlock x:Name="SysCache" DockPanel.Dock="Right" FontFamily="{DynamicResource Mono}"
+                                           FontSize="10.5" Foreground="{DynamicResource Text}" Width="52"
+                                           TextAlignment="Right" />
+                                <ui:HudMeter x:Name="SysCacheMeter" Height="8" Margin="6,0,8,0"
+                                             Tint="{DynamicResource Green}" VerticalAlignment="Center" />
+                            </DockPanel>
+                            <DockPanel Margin="0,5">
+                                <TextBlock DockPanel.Dock="Left" Text="BURN RATE" FontFamily="{DynamicResource Mono}"
+                                           FontSize="10" Foreground="{DynamicResource Muted}" Width="86" />
+                                <TextBlock x:Name="SysBurn" FontFamily="{DynamicResource Mono}" FontSize="10.5"
+                                           Foreground="{DynamicResource Text}" />
+                            </DockPanel>
+                            <DockPanel Margin="0,5">
+                                <TextBlock DockPanel.Dock="Left" Text="TURNS" FontFamily="{DynamicResource Mono}"
+                                           FontSize="10" Foreground="{DynamicResource Muted}" Width="86" />
+                                <TextBlock x:Name="SysTurns" FontFamily="{DynamicResource Mono}" FontSize="10.5"
+                                           Foreground="{DynamicResource Text}" />
+                            </DockPanel>
+                            <DockPanel Margin="0,5">
+                                <TextBlock DockPanel.Dock="Left" Text="BUSIEST HR" FontFamily="{DynamicResource Mono}"
+                                           FontSize="10" Foreground="{DynamicResource Muted}" Width="86" />
+                                <TextBlock x:Name="SysPeak" FontFamily="{DynamicResource Mono}" FontSize="10.5"
+                                           Foreground="{DynamicResource Text}" />
+                            </DockPanel>
+                            <TextBlock x:Name="SysNote" FontSize="9.5" Foreground="{DynamicResource Faint}"
+                                       TextWrapping="Wrap" Margin="0,8,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
