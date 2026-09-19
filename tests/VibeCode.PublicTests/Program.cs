@@ -40,6 +40,7 @@ internal static class Program
         try
         {
             CatalogsFollowRuntime();
+            ProtocolBoundaryTests.Run();
             ApkPackageTests.Run(mobileTemplate);
             TokenRateTests.Run();
             TokenRateLayoutTests.Run();

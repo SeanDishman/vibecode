@@ -213,13 +213,6 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // A stdio server is a separate, headless role: never acquire the shell lease, load settings,
-        // create a window, start memory/browser services, or disturb the running desktop instance.
-        if (e.Args.Contains("--agent-status-mcp", StringComparer.Ordinal))
-        {
-            Environment.Exit(Task.Run(() => AgentStatus.Mcp.AgentStatusMcpHost.RunConsoleAsync()).GetAwaiter().GetResult());
-            return;
-        }
         PortableEnvironment.Configure();
         base.OnStartup(e);
 

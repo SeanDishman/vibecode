@@ -824,11 +824,6 @@ public sealed partial class ChatViewModel : Observable
                                 || StripVariant(m.Value) == StripVariant(_model)
                                 || StripVariant(m.ResolvedModel) == StripVariant(_model))
         ?? Models.FirstOrDefault(m => m.Value == "default");
-    // A restored hidden model may not have a catalog row yet. Its explicit id must win over the picker default.
-    internal string? MitreReportingModel => _model is null or "" or "default"
-        ? CurrentModel?.ResolvedModel
-        : Models.FirstOrDefault(m => string.Equals(m.Value, _model, StringComparison.OrdinalIgnoreCase))?.ResolvedModel ?? _model;
-    internal MitreSessionTelemetry MitreTelemetry { get; } = new();
     private static string StripVariant(string? s) => s is null ? "" : (s.IndexOf('[') is int i and >= 0 ? s[..i] : s);
     /// <summary>Whether the current model supports fast mode (drives whether the toggle can be turned ON
     /// without switching models). Opus 4.6 is not in this set: the API runs <c>speed:fast</c> at standard
@@ -1630,7 +1625,6 @@ public sealed partial class ChatViewModel : Observable
         // "[BRIDGE]" peer notes, "[BRIDGE SETTINGS]", and the "[BRIDGE MODE]" rules appendix.
         return t.StartsWith("[BRIDGE", StringComparison.OrdinalIgnoreCase)
                || t.StartsWith("[VIBECODE SWARM REQUEST]", StringComparison.Ordinal)
-               || t.StartsWith("[VIBECODE MITRE STATUS]", StringComparison.Ordinal)
                || t.StartsWith("[VIBECODE SECOND BRAIN", StringComparison.OrdinalIgnoreCase)
                || t.StartsWith(RewindNote, StringComparison.Ordinal);
     }
@@ -1764,8 +1758,7 @@ public sealed partial class ChatViewModel : Observable
               + "memory tools are available, save only durable preferences, architecture decisions, recurring fixes, "
               + "and proven workflows; never save credentials, tokens, or raw secrets."
             : null;
-        var mcpServers = AgentStatusMcpRegistration.ForLaunch(AppSettings.Current.McpServers,
-            IsCodex, AppSettings.Current.MitreMonitorEnabled, Provider, _model);
+        var mcpServers = McpCatalog.Snapshot(AppSettings.Current.McpServers);
         // Gating the C# capture path is not enough on its own: the memory proxy is registered for every provider,
         // so the model could call memory_save and write to the brain without VibeCode being involved at all. A
         // muted chat therefore launches without that server, and without the prompt that invites its use.
@@ -2239,9 +2232,6 @@ public sealed partial class ChatViewModel : Observable
         if (Prelude is { Length: > 0 } pre) wireParts.Add(pre);
         if (swarmLease is not null)
             wireParts.Add(SwarmPolicy.BuildTurnDirective(Provider, swarmLease.GrantedWorkers, IsBridgeAgent));
-        if (IsCodex)
-            wireParts.Add(MitreTacticCatalog.BuildTurnNote(AppSettings.Current.MitreMonitorEnabled,
-                MitreReportingModel));
         if (hasText) wireParts.Add(text);
         var wireText = string.Join("\n\n", wireParts.Where(part => !string.IsNullOrWhiteSpace(part)));
         Prelude = null;
@@ -3577,10 +3567,6 @@ public sealed partial class ChatViewModel : Observable
                 InsertBeforeQueued(new BannerItem { Level = "info", Text = NodeString(m["message"]) ?? "Switched to GPT Reserve." });
                 break;
             }
-            case "mitre_telemetry":
-                MitreTelemetry.Observe(m, AppSettings.Current.MitreMonitorEnabled
-                    && IsCodex && MitreTacticCatalog.IsCodexModel(MitreReportingModel));
-                break;
             case "init":
                 SessionId = m["session_id"]?.GetValue<string>();
                 Model = m["model"]?.GetValue<string>();

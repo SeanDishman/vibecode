@@ -118,7 +118,6 @@ public static class CodexEnvironment
     {
         var targetHome = string.IsNullOrWhiteSpace(homeDirectory) ? HomeDirectory : Path.GetFullPath(homeDirectory);
         Prepare(targetHome);
-        AgentStatusReporting.RegisterHome(targetHome);
         var psi = new ProcessStartInfo
         {
             FileName = CodexSession.ResolveCliPath(),
@@ -181,8 +180,7 @@ public static class CodexEnvironment
             }
         }
         McpCatalog.EnsureLaunchReady(mcpServers, "codex");
-        // Keep reporting in the isolated home so Settings changes can reload it at turn boundaries.
-        var mcp = McpCatalog.BuildCodexProjection(mcpServers?.Where(server => server.Id != AgentStatusMcpRegistration.ManagedId));
+        var mcp = McpCatalog.BuildCodexProjection(mcpServers);
         var projectedArgumentLength = mcp.ConfigOverrides.Sum(value => value.Length + 3);
         if (projectedArgumentLength > McpCatalog.MaxCodexProjectionCharacters)
             throw new InvalidOperationException(

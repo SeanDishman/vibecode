@@ -123,7 +123,6 @@ public sealed partial class CodexSession
             TrackAcceptedTurn(started);
             if (_interruptRequested && _turnId is not null)
                 await SafeRequest("turn/interrupt", new JsonObject { ["threadId"] = SessionId, ["turnId"] = _turnId });
-            ObserveMonitorAccess(p, "reserve-turn");
         }
         catch (OperationCanceledException) { /* Stop, model change, or close during the quota check. */ }
         catch (Exception ex)

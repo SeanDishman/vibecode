@@ -1381,18 +1381,6 @@
                                     </StackPanel>
                                 </ui:SettingCard.Footer>
                             </ui:SettingCard>
-                            <ui:SettingCard Glyph="&#xE83D;" Title="Agent activity monitor"
-                                            Description="See each agent's current activity, step and stage. Reporting and event logging continue while the dashboard is closed. Open it whenever you want to view progress. Existing chats pick up setting changes on their next turn.">
-                                <ToggleButton x:Name="MitreMonitorToggle" Style="{StaticResource Switch}"
-                                              Checked="OnMitreMonitorChanged" Unchecked="OnMitreMonitorChanged"
-                                              AutomationProperties.Name="Enable the agent activity dashboard" />
-                                <ui:SettingCard.Footer>
-                                    <Button Style="{StaticResource GhostButton}" Padding="13,6" HorizontalAlignment="Left"
-                                            Click="OnOpenMitreMonitor" AutomationProperties.Name="Open the Agent activity monitor">
-                                        <TextBlock Text="Open MITRE monitor" FontSize="12" />
-                                    </Button>
-                                </ui:SettingCard.Footer>
-                            </ui:SettingCard>
                             <ui:SettingCard Glyph="&#xE7F4;" Title="Open on the second display"
                                             Description="Sends it to whichever display VibeCode is not on, so watching it never means covering the thing it is reporting on. Drag it elsewhere and it stays there — this only decides where it goes when it would otherwise land on top of the app.">
                                 <ToggleButton x:Name="TelemetryCompanionDisplayToggle" Style="{StaticResource Switch}"

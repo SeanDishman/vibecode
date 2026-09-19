@@ -23,9 +23,6 @@ namespace VibeCode;
 
 public partial class MainWindow : Window
 {
-    private MitreMonitorController? _mitreMonitor;
-
-    internal void OpenMitreMonitor() => _mitreMonitor?.Open();
 
     public static readonly DependencyProperty SurfaceActiveChatProperty = DependencyProperty.Register(
         nameof(SurfaceActiveChat), typeof(ChatViewModel), typeof(MainWindow));
@@ -154,7 +151,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        _mitreMonitor = new MitreMonitorController(this, _vm);
 
         // Only the primary shell owns the phone bridge: the second-monitor window shares this view model, and two
         // listeners on one port would leave the second one permanently in "address already in use".
@@ -324,8 +320,6 @@ public partial class MainWindow : Window
     /// while the chats themselves keep running under the replacement window.</summary>
     private void DetachShellWiring()
     {
-        _mitreMonitor?.Dispose();
-        _mitreMonitor = null;
         AppSettings.Changed -= OnSettingsChanged;   // unsubscribe before the final Save so it doesn't reload
         AppSettings.ActiveAccountAdopted -= OnActiveAccountAdopted;
         _vm.Chats.CollectionChanged -= OnChatsChanged;

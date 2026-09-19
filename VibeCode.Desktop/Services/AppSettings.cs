@@ -329,8 +329,6 @@ public sealed class AppSettings
     /// <summary>Travel the charts to each new reading instead of snapping, and keep a slow ripple on the
     /// sparklines. Presentation only - every figure still settles on the real one.</summary>
     public bool TelemetryLiveAnimation { get; set; } = true;
-    /// <summary>Enable agent status reporting and event logging independently of the monitor window.</summary>
-    public bool MitreMonitorEnabled { get; set; } = true;
     /// <summary>How far back the telemetry wall looks, in hours - 1 to 720. Remembered because the wall is a
     /// window you set up once and leave running for weeks; re-picking the range at every launch would be a
     /// chore. An unrecognised value falls back to the same 1 h default rather than failing the window.

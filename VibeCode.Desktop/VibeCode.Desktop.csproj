@@ -11,7 +11,7 @@
     <!-- THE version number. MSBuild stamps it onto the assembly and Settings > About reads it back through
          AppVersion.Current. Keep it Major.Minor.Patch - AppVersion parses a leading 'v' and a 4th part, but
          nothing else. -->
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Deterministic>true</Deterministic>
     <PathMap>$(MSBuildProjectDirectory)=/src/VibeCode.Desktop</PathMap>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -26,14 +26,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Desktop embeds the MCP assembly and owns the self-contained single-file host. The standalone MCP
-         executable intentionally has UseAppHost=false; forwarding Desktop's publish flags makes it fail NETSDK1067. -->
-    <ProjectReference Include="..\VibeCode.AgentStatus.Mcp\VibeCode.AgentStatus.Mcp.csproj"
-                      GlobalPropertiesToRemove="SelfContained;PublishSingleFile">
-      <!-- The embedded helper uses Desktop's runtime/dependency metadata. Its own standalone metadata would
-           otherwise be copied beside VibeCode.exe and break the installer's single-file contract. -->
-      <AdditionalProperties Condition="'$(PublishSingleFile)' == 'true'">GenerateDependencyFile=false;GenerateRuntimeConfigurationFiles=false</AdditionalProperties>
-    </ProjectReference>
     <PackageReference Include="MdXaml" Version="1.27.0" />
     <!-- Already arrives with MdXaml, which renders every fenced code block as an AvalonEdit editor. Named here
          because UI/MarkdownView.cs matches on that type by name to swap those editors back into plain text. -->

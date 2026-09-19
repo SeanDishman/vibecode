@@ -29,7 +29,6 @@ those runtimes. A separate **GLM provider** connects through an API account you 
 - [Queues and the orchestrator wall](#queues-and-the-orchestrator-wall)
 - [Second Brain - memory across chats](#second-brain---memory-across-chats)
 - [MCP servers - one catalog, every CLI](#mcp-servers---one-catalog-every-cli)
-- [Agent activity monitor](#agent-activity-monitor)
 - [Usage and cost tracking](#usage-and-cost-tracking)
 - [Android companion](#android-companion)
 - [Everything else](#everything-else)
@@ -204,16 +203,6 @@ or ACP for Kimi and Grok.
   until it passes validation and you approve it.
 - **Not a proxy.** Each CLI remains the MCP client and owns its own tool approvals; VibeCode only configures.
 
-## Agent activity monitor
-
-Enable **Agent activity monitor** in Settings to collect status reports from Codex sessions. The dashboard shows
-task, stage, activity, and working/waiting/completed state, with separate root and child activity. Closing the
-dashboard stops its display refreshes while configured reporting continues.
-
-The included status MCP server validates reports and returns receipts. Reports are display metadata; they do not
-execute commands or change permissions. See the [status-server guide](VibeCode.AgentStatus.Mcp/README.md) for the
-message format and standalone use.
-
 ## Usage and cost tracking
 
 VibeCode tracks what you spend across every provider and model in one dashboard: estimated spend, tokens in and
@@ -363,7 +352,6 @@ VibeCode.Desktop/
   Themes/                   Dark.xaml (design tokens) and Cli.xaml
   Assets/                   Background art and bundled application resources
   MainWindow.xaml(.cs)      Shell: sidebar, chat, composer, bridge overlay
-VibeCode.AgentStatus.Mcp/    Status-reporting MCP host and message contracts
 mobile/VibeCodeMobile/      Android companion source and Gradle wrapper
 tests/VibeCode.PublicTests/ Provider, token-rate, and WPF layout regression checks
 scripts/                   Build, mobile-template validation, and publish helpers

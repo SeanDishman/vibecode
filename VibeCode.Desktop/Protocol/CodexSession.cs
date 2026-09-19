@@ -57,31 +57,6 @@ public sealed partial class CodexSession : ICodingSession
     public bool HasExited => _disposed || _proc is null || _proc.HasExited;
 
     private readonly CodexSessionOptions _options;
-    private readonly SemaphoreSlim _reportingReloadGate = new(1, 1);
-    private int _reportingVersion, _loadedReportingVersion;
-
-    private void OnReportingChanged()
-    {
-        Interlocked.Increment(ref _reportingVersion);
-        if (SessionId is not null && !_disposed) _ = RefreshReportingAsync();
-    }
-
-    private async Task RefreshReportingAsync()
-    {
-        await _reportingReloadGate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            var version = Volatile.Read(ref _reportingVersion);
-            if (_disposed || SessionId is null || version == _loadedReportingVersion) return;
-            AgentStatusReporting.RegisterHome(_options.HomeDirectory ?? CodexEnvironment.HomeDirectory);
-            // Codex queues this until its next turn; never restart a running conversation to change reporting.
-            await RequestAsync("config/mcpServer/reload", new JsonObject()).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-            _loadedReportingVersion = version;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or OperationCanceledException)
-        { CrashLog.Note("AgentStatusReportingReload", ex.GetType().Name); }
-        finally { _reportingReloadGate.Release(); }
-    }
     private Process? _proc;
     private StreamWriter? _stdin;
     // Stdin writes go through a single-consumer queue drained by a background task. Writing the pipe directly on
@@ -248,7 +223,6 @@ public sealed partial class CodexSession : ICodingSession
 
     public void Start()
     {
-        AgentStatusReporting.Changed += OnReportingChanged;
         var psi = CodexEnvironment.CreateAppServerStartInfo(_options.Cwd, _options.HomeDirectory,
             _options.SwarmsEnabled, _options.SwarmMaxWorkers, _options.McpServers);
         psi.ArgumentList.Add("-c");
@@ -323,7 +297,6 @@ public sealed partial class CodexSession : ICodingSession
             SessionId = threadResponse?["result"]?["thread"]?["id"]?.GetValue<string>()
                         ?? threadResponse?["result"]?["thread"]?["sessionId"]?.GetValue<string>();
             if (SessionId is null) throw new InvalidOperationException("Codex app-server did not return a thread id.");
-            await RefreshReportingAsync();
 
             // Naming a fresh thread creates durable user-facing metadata without spending a model turn. It also
             // keeps an empty host chat resumable if the user activates a Bridge before sending its first message.
@@ -385,7 +358,6 @@ public sealed partial class CodexSession : ICodingSession
                 ["model"] = _model ?? DefaultModelId(),
                 ["permissionMode"] = _permissionMode,
             });
-            ObserveMonitorAccess(threadResponse?["result"]);
             if (_options.Resume is not null)
             {
                 _hydratingHistory = true;
@@ -617,7 +589,6 @@ public sealed partial class CodexSession : ICodingSession
         JsonObject? p = null;
         try
         {
-            await RefreshReportingAsync();
             var input = BuildInput(content);
             p = new JsonObject
             {
@@ -632,7 +603,6 @@ public sealed partial class CodexSession : ICodingSession
             ApplySecurity(p, legacyThreadShape: false);
             var response = await RequestAsync("turn/start", p);
             TrackAcceptedTurn(response);
-            ObserveMonitorAccess(p, "accepted-turn");
         }
         catch (Exception ex)
         {
@@ -788,15 +758,6 @@ public sealed partial class CodexSession : ICodingSession
     private void HandleNotification(string method, JsonObject? p)
     {
         NotificationReceived?.Invoke(method, p?.DeepClone().AsObject());
-        var monitorParams = p;
-        if (method == "serverRequest/resolved" && p?["threadId"] is null && p?["requestId"] is { } requestId
-            && _approvalParams.TryGetValue("codex:" + RpcKey(requestId), out var originalApproval)
-            && originalApproval["threadId"] is { } approvalThread)
-        {
-            monitorParams = p.DeepClone().AsObject();
-            monitorParams["threadId"] = approvalThread.DeepClone();
-        }
-        if (MitreRuntimeTelemetry.FromNotification(method, monitorParams, SessionId) is { } observation) Emit(observation);
         var threadId = NotificationThreadId(p);
         var isRootThread = IsRootThread(threadId);
         switch (method)
@@ -875,10 +836,6 @@ public sealed partial class CodexSession : ICodingSession
     // HandleLine; this avoids launching a model turn just to verify parent/child event scoping.
     internal void PrimeNotificationFixture(string sessionId) => SessionId = sessionId;
     internal void HandleNotificationFixture(string method, JsonObject? p) => HandleNotification(method, p);
-    internal void ObserveMonitorAccess(JsonNode? settings, string source = "server")
-    {
-        if (SessionId is { } id) Emit(MitreRuntimeTelemetry.Access(settings, id, id, source));
-    }
 
     private static string? NotificationThreadId(JsonObject? p)
     {
@@ -1064,7 +1021,6 @@ public sealed partial class CodexSession : ICodingSession
 
     private void HandleServerMessage(string method, JsonObject? p, JsonNode rpcId)
     {
-        if (MitreRuntimeTelemetry.FromNotification(method, p, SessionId) is { } observation) Emit(observation);
         var key = "codex:" + RpcKey(rpcId);
         _approvalRpcIds[key] = rpcId.DeepClone();
         _approvalMethods[key] = method;
@@ -2343,7 +2299,6 @@ public sealed partial class CodexSession : ICodingSession
 
     public void Dispose()
     {
-        AgentStatusReporting.Changed -= OnReportingChanged;
         _disposed = true;
         CancelReserveRecovery();
         _writeQueue.Writer.TryComplete();

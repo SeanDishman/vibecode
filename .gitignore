@@ -19,7 +19,6 @@ artifacts/
 bin-*/
 obj-*/
 VibeCode.Desktop/.*/
-VibeCode.AgentStatus.Mcp/.*/
 build/
 .gradle/
 .kotlin/

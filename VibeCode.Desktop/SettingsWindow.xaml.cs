@@ -114,7 +114,6 @@ public partial class SettingsWindow : Window
             RefreshDualMonitorAvailability();
             TelemetryCompanionDisplayToggle.IsChecked = s.TelemetryOnCompanionDisplay;
             TelemetryAnimationToggle.IsChecked = s.TelemetryLiveAnimation;
-            MitreMonitorToggle.IsChecked = s.MitreMonitorEnabled;
             AboutVersionText.Text = AppVersion.Current.IsKnown
                 ? $"Version {AppVersion.Current}"
                 : "Version unknown";
@@ -684,18 +683,6 @@ public partial class SettingsWindow : Window
     private void OnOpenTelemetryHud(object sender, RoutedEventArgs e) => UsageHudWindow.Open(Owner ?? this);
 
     private void OnOpenTelemetryWall(object sender, RoutedEventArgs e) => UsageDashboardWindow.Open(Owner ?? this);
-
-    private void OnOpenMitreMonitor(object sender, RoutedEventArgs e)
-    {
-        if (Owner is MainWindow main) main.OpenMitreMonitor();
-    }
-
-    private void OnMitreMonitorChanged(object sender, RoutedEventArgs e)
-    {
-        if (!_ready) return;
-        AppSettings.Current.MitreMonitorEnabled = MitreMonitorToggle.IsChecked == true;
-        AppSettings.Current.Save();
-    }
 
     private void OnTelemetryCompanionDisplayChanged(object sender, RoutedEventArgs e)
     {
