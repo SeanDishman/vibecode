@@ -274,6 +274,91 @@ public sealed class AccountService
         catch { return null; }
     }
 
+    /// <summary>
+    /// The home that STORES this account's conversations, whether or not its login still works.
+    ///
+    /// Deliberately not <see cref="ConfigDirectory"/>: that one returns null for a signed-out/removed profile so a NEW
+    /// chat doesn't spawn somewhere it can't authenticate. Resuming needs the opposite guarantee - Claude Code resolves
+    /// a session id inside its own CLAUDE_CONFIG_DIR only, so pointing a resume anywhere else makes it answer "No
+    /// conversation found with session ID". For an account the user signed out of, that turned "your login expired"
+    /// into "your conversations are gone". Targeting the real home instead surfaces the honest sign-in error, and the
+    /// transcript still replays either way.
+    /// </summary>
+    public string? HistoryDirectory(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        try
+        {
+            // migrateLegacy: false - this is a read-only lookup and must not rewrite a profile's credential layout.
+            var directory = ResolveConfigDirectory(id, migrateLegacy: false);
+            return Directory.Exists(directory) ? directory : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The home a chat's transcripts live in, treating null/empty as the shared <c>~/.claude</c>.</summary>
+    private string? HistoryHome(string? id) =>
+        string.IsNullOrWhiteSpace(id) ? SharedConfigDir : HistoryDirectory(id);
+
+    /// <summary>
+    /// Copy one conversation into another account's home so the SAME thread can carry on there.
+    ///
+    /// This is what makes "my account is maxed out" survivable: Claude Code resolves a session id only inside its own
+    /// CLAUDE_CONFIG_DIR, so re-spawning a chat under a fresh login without moving its transcript first just yields
+    /// "No conversation found" - the conversation appears to be destroyed by the very act of rescuing it. Codex has had
+    /// this since accounts were split per-home (CodexAccountService.MigrateThread); Claude never did, which left an
+    /// exhausted Claude chat with nowhere to go but a brand-new conversation.
+    ///
+    /// A COPY, not a move: the origin account keeps its own history, so a migration can never be the thing that loses
+    /// a transcript. Returns false when there was nothing to copy.
+    /// </summary>
+    public bool MigrateTranscript(string sessionId, string? fromAccountId, string? toAccountId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return false;
+        try
+        {
+            // Deliberately NOT ConfigDirectory(): that returns null for a login that no longer authenticates, and
+            // migrating AWAY from a dead/exhausted account is exactly when this runs.
+            var fromHome = HistoryHome(fromAccountId);
+            var toHome = HistoryHome(toAccountId);
+            if (fromHome is null || toHome is null) return false;
+            if (string.Equals(fromHome, toHome, StringComparison.OrdinalIgnoreCase)) return true;   // already there
+
+            var sourceRoot = Path.Combine(fromHome, "projects");
+            if (!Directory.Exists(sourceRoot)) return false;
+            var copied = false;
+            // The per-project folder name encodes the cwd, and Claude Code looks the session up under that same
+            // encoding - so the relative path has to be preserved exactly, not flattened.
+            foreach (var file in Directory.EnumerateFiles(sourceRoot, sessionId + ".jsonl", SearchOption.AllDirectories))
+            {
+                var destination = Path.Combine(toHome, "projects", Path.GetRelativePath(sourceRoot, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                AtomicCopy(file, destination);   // atomic: a half-written transcript is unresumable
+                copied = true;
+            }
+            if (copied) CopySessionSidecars(fromHome, toHome, sessionId);
+            return copied;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Carry a session's todo list across with it. Best-effort: the transcript is what the resume needs.</summary>
+    private static void CopySessionSidecars(string fromHome, string toHome, string sessionId)
+    {
+        try
+        {
+            var source = Path.Combine(fromHome, "todos");
+            if (!Directory.Exists(source)) return;
+            var target = Path.Combine(toHome, "todos");
+            foreach (var file in Directory.EnumerateFiles(source, sessionId + "*.json"))
+            {
+                Directory.CreateDirectory(target);
+                AtomicCopy(file, Path.Combine(target, Path.GetFileName(file)));
+            }
+        }
+        catch { /* todos are a nicety; the conversation still resumes without them */ }
+    }
+
     /// <summary>The account currently active in ~/.claude.json, or null if not logged in with a subscription.</summary>
     public AccountInfo? Current()
     {
@@ -659,7 +744,15 @@ public sealed class AccountService
                 AtomicWrite(Path.Combine(profileRoot, "account.json"),
                     metadata.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                 AtomicWrite(ProfileDescriptorPath(id), new JsonObject { ["kind"] = "private" }.ToJsonString());
-                if (movedOld && Directory.Exists(backup)) Directory.Delete(backup, recursive: true);
+                // Signing in again as an account you already had is a LOGIN refresh, not a reset. The old home is
+                // being replaced by a home Claude Code just created from scratch, which has no history in it - so
+                // carry the conversations across before the old one goes. Deleting the backup outright is how
+                // "sign out, sign back in" used to erase every transcript that account had.
+                if (movedOld && Directory.Exists(backup))
+                {
+                    AdoptConversationHistory(backup, targetHome);
+                    try { Directory.Delete(backup, recursive: true); } catch { /* history is already carried over */ }
+                }
             }
             catch
             {
@@ -772,10 +865,83 @@ public sealed class AccountService
                 return SwitchOutcome.SaveFailed;
             }
         }
-        try { var d = Path.Combine(StoreDir, id); if (Directory.Exists(d)) Directory.Delete(d, recursive: true); }
-        catch { /* best-effort */ }
+        ForgetLoginOnly(id);
         LastSelectError = null;
         return SwitchOutcome.Ok;
+    }
+
+    /// <summary>Move an old Claude home's conversation record into a freshly created one. Only ever ADDS: a file the
+    /// new home already has wins, so this can never overwrite something the CLI just wrote.</summary>
+    private static void AdoptConversationHistory(string oldHome, string newHome)
+    {
+        // Everything Claude Code keeps a conversation in. Credentials and config are deliberately absent: those
+        // belong to the new login.
+        foreach (var folder in new[] { "projects", "todos", "statsig", "shell-snapshots" })
+        {
+            var source = Path.Combine(oldHome, folder);
+            if (!Directory.Exists(source)) continue;
+            try { CopyMissingFiles(source, Path.Combine(newHome, folder)); }
+            catch { /* one unreadable subtree must not stop the rest of the history moving */ }
+        }
+        try
+        {
+            var history = Path.Combine(oldHome, "history.jsonl");
+            var target = Path.Combine(newHome, "history.jsonl");
+            if (File.Exists(history) && !File.Exists(target)) File.Copy(history, target);
+        }
+        catch { /* titles are a nicety; the transcripts are what matter */ }
+    }
+
+    private static void CopyMissingFiles(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            var target = Path.Combine(destination, Path.GetFileName(file));
+            if (File.Exists(target)) continue;
+            try { File.Copy(file, target); } catch { /* skip a locked file, keep the rest */ }
+        }
+        foreach (var directory in Directory.EnumerateDirectories(source))
+            CopyMissingFiles(directory, Path.Combine(destination, Path.GetFileName(directory)));
+    }
+
+    /// <summary>
+    /// Remove the LOGIN and nothing else.
+    ///
+    /// This used to be <c>Directory.Delete(ProfileRoot(id), recursive: true)</c>, which also took
+    /// <c>claude-home\projects\**\*.jsonl</c> with it - every conversation that account had ever had. The dialog
+    /// offering the action says it "only forgets VibeCode's saved copy of the login", and users read that, said yes,
+    /// and permanently lost hundreds of transcripts. Removing an account is a credential operation; it must not be
+    /// a history operation. Deleting <c>account.json</c> is what drops the row from <see cref="List"/>, so the
+    /// account still disappears from the UI - the conversations simply stay on disk, where the project browser and
+    /// a re-added account can both still reach them.
+    /// </summary>
+    private static void ForgetLoginOnly(string id)
+    {
+        var root = ProfileRoot(id);
+        if (!Directory.Exists(root)) return;
+        var home = PrivateConfigDir(id);
+        string[] loginFiles =
+        [
+            Path.Combine(home, ".credentials.json"),
+            Path.Combine(home, ".claude.json"),
+            Path.Combine(root, "credentials.json"),      // pre-private-home layout
+            Path.Combine(root, "account.json"),          // presence of this is what List() enumerates on
+            ProfileDescriptorPath(id),
+        ];
+        foreach (var file in loginFiles)
+            try { if (File.Exists(file)) File.Delete(file); } catch { /* best-effort */ }
+
+        // Leave a note next to the retained history so the folder is self-explanatory to anyone who finds it later.
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "REMOVED-ACCOUNT.txt"),
+                $"This Claude account was removed from VibeCode on {DateTime.Now:yyyy-MM-dd HH:mm}." + Environment.NewLine +
+                "Its saved login was deleted. Its conversation history under claude-home\\projects was deliberately" + Environment.NewLine +
+                "KEPT - removing an account is not meant to delete anything you wrote." + Environment.NewLine +
+                "Sign in with the same account again to make it usable, or delete this folder by hand to reclaim the space.");
+        }
+        catch { /* the note is a courtesy, not part of the operation */ }
     }
 
     /// <summary>Next saved Claude profile to prefer after removing <paramref name="exceptId"/>, or null if none.</summary>

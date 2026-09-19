@@ -12,7 +12,7 @@ namespace VibeCode.Services;
 ///
 /// The anchor (4 Wh per 1M output tokens per billion active params, all-in) comes from two independent routes
 /// that agree to within 7%:
-///   - DeepSeek's published V3/R1 production numbers (2025-02-27, 1,814 H800s, 608B input / 168B output tokens
+///   - The open-infra-index V3/R1 production disclosure (2025-02-27, 1,814 H800s, 608B input / 168B output tokens
 ///     in 24h) work out to ~5.6 Wh per 1M output tokens per billion active params on Hopper.
 ///   - Epoch AI's GPT-4o estimate (0.3 Wh for a 500-token answer at ~100B active params) gives ~6.0.
 ///   - LMSYS' GB200 NVL72 measurements give ~1.1, i.e. Blackwell is several times better, so 4 is a deliberate
@@ -24,7 +24,7 @@ namespace VibeCode.Services;
 /// serving cost is mostly GPU-seconds:
 ///   - output costs ~5x an input token (identical FLOPs, but decoding runs at 5-15% utilisation against
 ///     prefill's 30-50%; measured production ratios land between 2x and 10x)
-///   - a cache READ skips prefill entirely, ~0.1x an input token (DeepSeek's production split implies ~0.095)
+///   - a cache READ skips prefill entirely, ~0.1x an input token (that same production split implies ~0.095)
 ///   - a cache WRITE is a prefill plus a store, ~1.25x
 /// That last pair is why this app's numbers are not dominated by its 300M+ token counts: almost all of them are
 /// cache reads.
@@ -33,14 +33,14 @@ namespace VibeCode.Services;
 /// datacenter overhead on top of it:  litres = (kWh - PUE overhead) x WUE.
 ///
 /// HONESTY: the uncertainty here is a factor of 3-5x for any single model, and up to 20x across published
-/// methodologies. The dominant unknown is active parameter count, which only Moonshot and DeepSeek publish;
+/// methodologies. The dominant unknown is active parameter count, which only a couple of open-weight labs publish;
 /// every closed model below is a tier estimate. Efficiency also improves roughly 2-5x a year, so these
 /// constants decay. Show one significant figure and call it an estimate.
 ///
 /// Sources: Google/Elsworth et al., arXiv:2508.15734 (Aug 2025) - the 0.24 Wh median prompt, its breakdown and
 /// WUE 1.15; Epoch AI, "How much energy does ChatGPT use?" (Feb 2025); Oviedo et al., Joule 2026
 /// (arXiv:2509.20241) - median 0.31 Wh/query, and the finding that non-production assumptions overstate by
-/// 4-20x; DeepSeek open-infra-index V3/R1 inference disclosure (Mar 2025); LMSYS GB200 NVL72 (Sep 2025);
+/// 4-20x; open-infra-index V3/R1 inference disclosure (Mar 2025); LMSYS GB200 NVL72 (Sep 2025);
 /// LBNL 2024 US Data Center Energy Usage Report - off-site water.
 /// </summary>
 public static class ModelEnergy
@@ -80,7 +80,7 @@ public static class ModelEnergy
     // ---------- per-model active parameters ----------
 
     /// <summary>
-    /// Billions of ACTIVE parameters per token. Only Moonshot and DeepSeek publish this; everything else is a
+    /// Billions of ACTIVE parameters per token. Only a couple of open-weight labs publish this; everything else is a
     /// tier estimate, and the honest error bar is about 3x either way.
     ///
     /// Closed models are tiered by their own provider's output price, which is a fair proxy WITHIN a provider
@@ -93,6 +93,8 @@ public static class ModelEnergy
         // Claude. Frontier tier bills at 2x Opus, so it is carried at 2x Opus here too.
         ["claude-fable-5"]    = 600,
         ["claude-mythos-5"]   = 600,
+        ["claude-fable-5-1"]  = 600,
+        ["claude-mythos-5-1"] = 600,
         ["claude-opus-5"]     = 300,
         ["claude-opus-4-8"]   = 300,
         ["claude-opus-4-7"]   = 300,
@@ -103,7 +105,11 @@ public static class ModelEnergy
         ["claude-sonnet-4-5"] = 60,
         ["claude-haiku-4-5"]  = 15,
 
-        // OpenAI, scaled off Epoch AI's GPT-4o figure by this lineup's own output prices ($30 / $15 / $6).
+        // OpenAI, scaled off Epoch AI's GPT-4o figure by this lineup's own output prices ($50 / $30 / $15 / $6),
+        // i.e. 5B active params per dollar of output. Astra's $50 puts it at 250 on that line - deliberately the
+        // lineup's own scale rather than the 600 the identically-priced Anthropic frontier pair carries, since
+        // those are separate per-model estimates and not price-derived.
+        ["gpt-6-astra"]   = 250,
         ["gpt-5.6-sol"]   = 150,
         ["gpt-5.5"]       = 150,
         ["gpt-5.6-terra"] = 75,
@@ -125,6 +131,15 @@ public static class ModelEnergy
         // xAI publishes nothing. Sized just under Opus on the strength of it being a very large MoE.
         ["grok-4.5"]                     = 250,
         ["grok-4-5"]                     = 250,
+
+        // Zhipu GLM. PUBLISHED for the 4.5/4.6 generation: 32B active of 355B total. Carried forward to the 5.x
+        // ids, which have published no architecture - so these are the same kind of estimate as the closed models
+        // above, not a disclosure. Listed rather than left out because the fallback is the 300B Opus tier, which
+        // would report this sparse MoE as burning roughly ten times the energy it does.
+        ["zai-org/GLM-4.7"]       = 32,
+        ["zai-org/GLM-5.2"]       = 32,
+        ["zai-org/GLM-5.2-Fast"]  = 32,
+        ["zai-org/GLM-5.3-Flash"] = 32,
     };
 
     /// <summary>Opus-tier fallback, matching the pricing fallback: this app defaults to Opus.</summary>

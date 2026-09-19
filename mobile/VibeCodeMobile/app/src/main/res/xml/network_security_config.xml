@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is off everywhere. The desktop bridge is HTTPS-only, and its certificate is verified by the pin the
+  app stored at pairing time (see PinnedTls.kt) rather than by a CA, so no user or system trust anchors are
+  needed or granted here.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

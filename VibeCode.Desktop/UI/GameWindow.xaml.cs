@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
 using VibeCode.Services;
@@ -124,6 +127,28 @@ public partial class GameWindow : Window
     /// <summary>Open one game window at a time; selecting the current game simply brings it forward.</summary>
     internal static void Open(Window owner, GameDefinition game)
     {
+        if (App.IsWineCompatibility
+            && Environment.GetEnvironmentVariable("VIBECODE_FORCE_WEBVIEW2") != "1")
+        {
+            try
+            {
+                // WebView2 has no supported Linux runtime. Keep every game usable by serving the exact embedded
+                // files over loopback and opening them in Kali's real browser; ES modules and relative assets then
+                // retain the HTTP origin they require instead of failing under file://.
+                SeedGameFiles(game);
+                var address = WineGameHost.UrlFor(game);
+                if (!App.TryOpenExternalUri(address))
+                    throw new InvalidOperationException($"Open this address in a browser: {address}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner,
+                    "VibeCode could not open the Linux game fallback.\n\n" + ex.Message,
+                    "Game unavailable", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            return;
+        }
+
         if (_open is { IsLoaded: true } existing)
         {
             if (existing._game.Id.Equals(game.Id, StringComparison.OrdinalIgnoreCase))
@@ -625,5 +650,139 @@ public partial class GameWindow : Window
         if (ReferenceEquals(_open, this)) _open = null;
         if (GameView.CoreWebView2 is { } core) core.NavigationCompleted -= OnNavigationCompleted;
         GameView.Dispose();
+    }
+
+    /// <summary>
+    /// Small process-local static-file server for Wine. HttpListener depends on Windows HTTP.sys and URL ACLs,
+    /// neither of which is reliable in Wine, so this intentionally uses an ordinary loopback TcpListener.
+    /// It never binds outside 127.0.0.1 and never serves a path outside VibeCode's seeded Games directory.
+    /// </summary>
+    private static class WineGameHost
+    {
+        private static readonly object Gate = new();
+        private static TcpListener? _listener;
+        private static int _port;
+
+        internal static string UrlFor(GameDefinition game)
+        {
+            EnsureStarted();
+            var relative = string.Join("/", game.EntryPath
+                .Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Select(Uri.EscapeDataString));
+            return $"http://127.0.0.1:{_port}/{relative}?v={GameFilesStamp(game)}";
+        }
+
+        private static void EnsureStarted()
+        {
+            lock (Gate)
+            {
+                if (_listener is not null) return;
+                var listener = new TcpListener(IPAddress.Loopback, 0);
+                listener.Start();
+                _listener = listener;
+                _port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                _ = Task.Run(() => AcceptLoopAsync(listener));
+            }
+        }
+
+        private static async Task AcceptLoopAsync(TcpListener listener)
+        {
+            while (true)
+            {
+                TcpClient client;
+                try { client = await listener.AcceptTcpClientAsync().ConfigureAwait(false); }
+                catch { return; }
+                _ = Task.Run(() => ServeAsync(client));
+            }
+        }
+
+        private static async Task ServeAsync(TcpClient client)
+        {
+            using (client)
+            await using (var stream = client.GetStream())
+            {
+                try
+                {
+                    using var reader = new StreamReader(
+                        stream, Encoding.ASCII, detectEncodingFromByteOrderMarks: false,
+                        bufferSize: 8192, leaveOpen: true);
+                    var requestLine = await reader.ReadLineAsync().ConfigureAwait(false);
+                    if (string.IsNullOrWhiteSpace(requestLine))
+                    {
+                        await WriteStatusAsync(stream, "400 Bad Request").ConfigureAwait(false);
+                        return;
+                    }
+
+                    string? header;
+                    do { header = await reader.ReadLineAsync().ConfigureAwait(false); }
+                    while (!string.IsNullOrEmpty(header));
+
+                    var request = requestLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (request.Length < 2 || request[0] is not ("GET" or "HEAD"))
+                    {
+                        await WriteStatusAsync(stream, "405 Method Not Allowed").ConfigureAwait(false);
+                        return;
+                    }
+
+                    var escapedPath = request[1].Split('?', 2)[0].TrimStart('/');
+                    var decoded = Uri.UnescapeDataString(escapedPath).Replace('/', Path.DirectorySeparatorChar);
+                    var root = Path.GetFullPath(GamesDir).TrimEnd(Path.DirectorySeparatorChar)
+                               + Path.DirectorySeparatorChar;
+                    var path = Path.GetFullPath(Path.Combine(root, decoded));
+                    if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await WriteStatusAsync(stream, "403 Forbidden").ConfigureAwait(false);
+                        return;
+                    }
+                    if (Directory.Exists(path)) path = Path.Combine(path, "index.html");
+                    if (!File.Exists(path))
+                    {
+                        await WriteStatusAsync(stream, "404 Not Found").ConfigureAwait(false);
+                        return;
+                    }
+
+                    var bytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+                    var response = "HTTP/1.1 200 OK\r\n"
+                                   + $"Content-Type: {ContentType(path)}\r\n"
+                                   + $"Content-Length: {bytes.Length}\r\n"
+                                   + "Cache-Control: no-store\r\n"
+                                   + "X-Content-Type-Options: nosniff\r\n"
+                                   + "Connection: close\r\n\r\n";
+                    var responseBytes = Encoding.ASCII.GetBytes(response);
+                    await stream.WriteAsync(responseBytes).ConfigureAwait(false);
+                    if (request[0] == "GET") await stream.WriteAsync(bytes).ConfigureAwait(false);
+                }
+                catch
+                {
+                    try { await WriteStatusAsync(stream, "500 Internal Server Error").ConfigureAwait(false); }
+                    catch { /* browser disconnected */ }
+                }
+            }
+        }
+
+        private static async Task WriteStatusAsync(Stream stream, string status)
+        {
+            var response = Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 {status}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(response).ConfigureAwait(false);
+        }
+
+        private static string ContentType(string path) =>
+            Path.GetExtension(path).ToLowerInvariant() switch
+            {
+                ".html" or ".htm" => "text/html; charset=utf-8",
+                ".js" or ".mjs" => "text/javascript; charset=utf-8",
+                ".css" => "text/css; charset=utf-8",
+                ".json" => "application/json; charset=utf-8",
+                ".svg" => "image/svg+xml",
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                ".wav" => "audio/wav",
+                ".mp3" => "audio/mpeg",
+                ".ogg" => "audio/ogg",
+                _ => "application/octet-stream",
+            };
     }
 }

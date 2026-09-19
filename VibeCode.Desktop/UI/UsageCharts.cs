@@ -402,8 +402,21 @@ public sealed class ModelShareDonut : UsageChartBase
         set => SetValue(MetricProperty, value);
     }
 
+    /// <summary>The ring's natural height, used whenever nothing constrains it.</summary>
+    private const double NaturalHeight = 200;
+
+    /// <summary>
+    /// Natural height, but never MORE than it was actually offered.
+    ///
+    /// Returning the constant unconditionally was a real bug rather than a tidy default: WPF keeps the
+    /// unclipped desired size, arranges the element at THAT, and then layout-clips it back to what the parent
+    /// allowed - so a donut given 164px was drawn for 200 and had 36px sliced off its bottom, which is exactly
+    /// what a clipped ring looks like on the telemetry wall. The chart's own geometry is derived from
+    /// RenderSize, so asking for no more than it can have is also what keeps the circle round.
+    /// </summary>
     protected override Size MeasureOverride(Size availableSize) =>
-        new(double.IsInfinity(availableSize.Width) ? 220 : availableSize.Width, 200);
+        new(double.IsInfinity(availableSize.Width) ? 220 : availableSize.Width,
+            double.IsInfinity(availableSize.Height) ? NaturalHeight : Math.Min(NaturalHeight, availableSize.Height));
 
     protected override int HitTest(Point p)
     {

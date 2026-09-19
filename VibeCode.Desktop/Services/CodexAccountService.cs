@@ -433,39 +433,7 @@ public sealed class CodexAccountService
             if (string.IsNullOrWhiteSpace(result.AccountId))
                 return new CodexLoginResult { Error = "OpenAI sign-in completed, but Codex did not expose a stable account id. The existing saved accounts were left unchanged." };
 
-            lock (_fileGate)
-            {
-                var accounts = LoadAccounts();
-                var existing = accounts.FirstOrDefault(x => x.Metadata.Id == result.AccountId);
-                SavedAccount metadata;
-                string accountDirectory;
-                if (existing is null)
-                {
-                    accountDirectory = AvailableAccountDirectory(result.AccountId);
-                    Directory.Move(pendingDirectory, accountDirectory);
-                    pendingDirectory = null;
-                    metadata = new SavedAccount
-                    {
-                        Id = result.AccountId,
-                        UsesLegacyHome = false,
-                        HomeFolder = "home",
-                        SavedAt = DateTime.Now,
-                    };
-                }
-                else
-                {
-                    accountDirectory = existing.DirectoryPath;
-                    metadata = existing.Metadata;
-                    CopyAuthAtomically(pendingHome, HomeOf(existing));
-                    metadata.SavedAt = DateTime.Now;
-                }
-
-                metadata.Name = result.Name ?? metadata.Name;
-                metadata.Email = result.Email ?? metadata.Email;
-                metadata.Plan = result.Plan ?? metadata.Plan;
-                WriteMetadata(accountDirectory, metadata);
-                WriteActive(metadata.Id);
-            }
+            SaveCompletedLogin(pendingHome, result);
             AccountsChanged?.Invoke();
             return result;
         }
@@ -483,6 +451,35 @@ public sealed class CodexAccountService
             if (pendingDirectory is not null)
                 try { Directory.Delete(pendingDirectory, recursive: true); } catch { /* best-effort pending-login cleanup */ }
             if (gateHeld) _operationGate.Release();
+        }
+    }
+
+    private void SaveCompletedLogin(string pendingHome, CodexLoginResult result)
+    {
+        lock (_fileGate)
+        {
+            var accounts = LoadAccounts();
+            var existing = accounts.FirstOrDefault(x => x.Metadata.Id == result.AccountId);
+            var accountDirectory = existing?.DirectoryPath ?? AvailableAccountDirectory(result.AccountId!);
+            var metadata = existing?.Metadata ?? new SavedAccount
+            {
+                Id = result.AccountId!,
+                UsesLegacyHome = false,
+                HomeFolder = "home",
+            };
+
+            // Login homes contain disposable plugin clones and other CLI caches. Windows may still hold
+            // their directories open after app-server exits, so moving the entire home can reject a valid
+            // login with AccessDenied. No chat has run here: persist only the credential file atomically,
+            // and let the account's normal startup prepare its own configuration and caches.
+            var destinationHome = existing is null ? Path.Combine(accountDirectory, "home") : HomeOf(existing);
+            CopyAuthAtomically(pendingHome, destinationHome);
+            metadata.SavedAt = DateTime.Now;
+            metadata.Name = result.Name ?? metadata.Name;
+            metadata.Email = result.Email ?? metadata.Email;
+            metadata.Plan = result.Plan ?? metadata.Plan;
+            WriteMetadata(accountDirectory, metadata);
+            WriteActive(metadata.Id);
         }
     }
 

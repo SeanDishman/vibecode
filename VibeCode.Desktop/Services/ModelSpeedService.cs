@@ -57,8 +57,22 @@ public sealed class ModelSpeedService
     public ModelSpeed? For(ModelChoice? model)
     {
         var id = model is null ? null : OpenRouterId(model);
-        if (id is null) return null;
-        lock (_gate) return _speeds.TryGetValue(id, out var entry) ? entry.Speed : null;
+        return id is null ? null : ById(id);
+    }
+
+    /// <summary>The cached speed for an OpenRouter id, or null while it is unknown. Never blocks.</summary>
+    public ModelSpeed? ById(string? openRouterId)
+    {
+        if (string.IsNullOrWhiteSpace(openRouterId)) return null;
+        lock (_gate) return _speeds.TryGetValue(openRouterId, out var entry) ? entry.Speed : null;
+    }
+
+    /// <summary>When the cached answer for an id was written, or null if there has never been one. Lets a caller
+    /// show how old a reading is rather than implying every figure is current.</summary>
+    public DateTime? FetchedAt(string? openRouterId)
+    {
+        if (string.IsNullOrWhiteSpace(openRouterId)) return null;
+        lock (_gate) return _speeds.TryGetValue(openRouterId, out var entry) ? entry.At : null;
     }
 
     /// <summary>
@@ -73,13 +87,30 @@ public sealed class ModelSpeedService
             var id = OpenRouterId(model);
             if (id is not null && !ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
         }
+        PrefetchIds(ids);
+    }
+
+    /// <summary>
+    /// The same lookup for callers that already hold OpenRouter ids rather than picker rows — the telemetry wall's
+    /// model board, which watches a fixed set of models this app may never have opened a picker for.
+    ///
+    /// <paramref name="maxAge"/> overrides how stale a cached reading may be before it is re-fetched. The board
+    /// refreshes on a shorter cycle than the picker's default, and without this every other refresh would be a
+    /// no-op against a cache entry that had not yet expired.
+    /// </summary>
+    public void PrefetchIds(IEnumerable<string> openRouterIds, TimeSpan? maxAge = null)
+    {
+        var ids = new List<string>();
+        foreach (var id in openRouterIds)
+            if (!string.IsNullOrWhiteSpace(id) && !ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
         if (ids.Count == 0) return;
 
+        var lifetime = maxAge ?? CacheLifetime;
         lock (_gate)
         {
             var now = DateTime.UtcNow;
             ids.RemoveAll(id => _inFlight.Contains(id)
-                                || (_speeds.TryGetValue(id, out var entry) && now - entry.At < CacheLifetime));
+                                || (_speeds.TryGetValue(id, out var entry) && now - entry.At < lifetime));
             if (ids.Count == 0) return;
             foreach (var id in ids) _inFlight.Add(id);
         }
@@ -204,7 +235,7 @@ public sealed class ModelSpeedService
         ["opusplan"] = "anthropic/claude-opus-5",
         ["sonnet"] = "anthropic/claude-sonnet-5",
         ["haiku"] = "anthropic/claude-haiku-4.5",
-        ["fable"] = "anthropic/claude-fable-5",
+        ["fable"] = "anthropic/claude-fable-5-1",
         ["k3"] = "moonshotai/kimi-k3",
         ["kimi-for-coding"] = "moonshotai/kimi-k2.7-code",
         ["kimi-for-coding-highspeed"] = "moonshotai/kimi-k2.7-code",

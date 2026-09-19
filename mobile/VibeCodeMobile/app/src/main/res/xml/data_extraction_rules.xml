@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nothing this app stores should ever leave the device: the pairing token and the pinned certificate are
+     credentials for someone's PC, not preferences worth restoring onto a new phone. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="." />
+    </device-transfer>
+</data-extraction-rules>

@@ -88,9 +88,12 @@ public partial class SettingsWindow : Window
             var s = AppSettings.Current;
             RandomCheck.IsChecked = s.RandomBackground;
             ShowAllCheck.IsChecked = !s.ShowOnlyOwnedSessions;
+            IsolateChatsCheck.IsChecked = s.IsolateChatsByAccount;
             VisSlider.Value = Math.Clamp(s.BackgroundVisibility, 0, 80);
             ClientIdBox.Text = s.SpotifyClientId ?? "";
             HideEmailsToggle.IsChecked = s.HideEmails;
+            RunInBackgroundToggle.IsChecked = s.RunInBackground;
+            BorderlessToggle.IsChecked = s.Borderless;
             CompactModeToggle.IsChecked = s.CompactMode;
             NotifyTurnEndToggle.IsChecked = s.NotifyOnTurnEnd;
             NotifyAwaitingInputToggle.IsChecked = s.NotifyOnAwaitingInput;
@@ -100,15 +103,28 @@ public partial class SettingsWindow : Window
             DualMonitorBridgeToggle.IsChecked = s.DualMonitorBridge;
             DualMonitorDoubleSessionsToggle.IsChecked = s.DualMonitorDoubleSessions;
             BridgeRealtimeSharingToggle.IsChecked = s.BridgeRealtimeSharing;
+            BridgePeerMessagingToggle.IsChecked = s.BridgePeerMessaging;
             BridgeAgentLimitSlider.Value = s.BridgeAgentLimit;
+            SupervisionEnabledToggle.IsChecked = s.AgentSupervisionEnabled;
+            SupervisionStaleSlider.Value = Math.Clamp(s.SupervisionStaleSeconds, 30, 1800);
+            SupervisionGraceSlider.Value = Math.Clamp(s.SupervisionInterventionGraceSeconds, 30, 600);
+            SupervisionRestartsSlider.Value = Math.Clamp(s.SupervisionMaxRestarts, 0, 3);
+            DemonModeToggle.IsChecked = DemonTeamLive;   // live state, not a stored preference — see DemonStartFolder
+            DemonReviewToggle.IsChecked = s.DemonOrchestratorReviewsWork;
+            RefreshDualMonitorAvailability();
             TelemetryCompanionDisplayToggle.IsChecked = s.TelemetryOnCompanionDisplay;
             TelemetryAnimationToggle.IsChecked = s.TelemetryLiveAnimation;
+            MitreMonitorToggle.IsChecked = s.MitreMonitorEnabled;
+            AboutVersionText.Text = AppVersion.Current.IsKnown
+                ? $"Version {AppVersion.Current}"
+                : "Version unknown";
             RebuildNotificationSounds();
             RebuildBackgrounds();
             RefreshHidden();
             RefreshMcpServers();
             RefreshModeCards();
             _ready = true;
+            InitializeSettingsSearch();
         };
     }
 
@@ -125,27 +141,58 @@ public partial class SettingsWindow : Window
         BackgroundSection.IsEnabled = !cli;
         BackgroundSection.Opacity = cli ? 0.45 : 1.0;
         CliModeHint.Visibility = cli ? Visibility.Visible : Visibility.Collapsed;
+        // Borderless uncovers the background art, and CLI mode has none. Hidden outright rather than greyed out:
+        // a switch that is still ON while doing nothing is worse than no switch at all. The stored preference is
+        // left alone, so it comes back exactly as it was when the user picks Custom background again.
+        BorderlessSection.Visibility = cli ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>Set when the user picked a different UI mode, or flipped Borderless - both are theme-dictionary
+    /// changes, and both need the same rebuild. The shell re-skins itself once this dialog is gone - Settings is
+    /// modal and owned by that shell, and swapping a modal dialog's owner out from under it is not safe.
+    /// Same shape as <see cref="DemonStartFolder"/>: decided here, acted on out there.</summary>
+    public bool UiModeChanged { get; private set; }
+
+    private void OnBorderlessChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        var previous = AppSettings.Current.Borderless;
+        var target = BorderlessToggle.IsChecked == true;
+        if (previous == target) return;
+        AppSettings.Current.Borderless = target;
+        if (AppSettings.Current.TrySave() is { } err)
+        {
+            // Same rule the mode cards follow: never re-skin into a look that never landed on disk, or the next
+            // launch comes back without it and the switch has silently lied.
+            AppSettings.Current.Borderless = previous;
+            BorderlessToggle.IsChecked = previous;
+            MessageBox.Show(this, $"Couldn't save the borderless setting:\n{err.Message}", "Borderless",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        UiModeChanged = true;
+        Close();
     }
 
     private void OnPickMode(object sender, RoutedEventArgs e)
     {
         if (!_ready) return;
         var target = ReferenceEquals(sender, ModeCardCli) ? "cli" : "background";
-        if (string.Equals(AppSettings.Current.UiMode, target, StringComparison.OrdinalIgnoreCase)) return;
-        var label = target == "cli" ? "CLI mode" : "Custom background mode";
-        if (MessageBox.Show(this,
-                $"Switch to {label}?\n\nVibeCode restarts to apply the new look. Open chats are saved and reopened automatically.",
-                "Change mode", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        var previous = AppSettings.Current.UiMode;
+        if (string.Equals(previous, target, StringComparison.OrdinalIgnoreCase)) return;
         AppSettings.Current.UiMode = target;
         if (AppSettings.Current.TrySave() is { } err)
         {
-            // don't restart into a mode that never landed on disk - the relaunch would come back unchanged
-            AppSettings.Current.UiMode = target == "cli" ? "background" : "cli";
+            // don't re-skin into a mode that never landed on disk - the next launch would come back unchanged
+            AppSettings.Current.UiMode = previous;
             MessageBox.Show(this, $"Couldn't save the mode change:\n{err.Message}", "Change mode",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        App.RestartToApplyTheme();
+        // No confirmation prompt: this no longer restarts anything. The look changes in place, chats keep running,
+        // and clicking the other card puts it back.
+        UiModeChanged = true;
+        Close();
     }
 
     private void EnableDarkTitleBar()
@@ -281,10 +328,26 @@ public partial class SettingsWindow : Window
         AppSettings.Current.Save();   // fires Changed -> the main window reloads the project list
     }
 
+    private void OnIsolateChatsChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.IsolateChatsByAccount = IsolateChatsCheck.IsChecked == true;
+        AppSettings.Current.Save();   // fires Changed -> the main window re-applies the sidebar filter live
+    }
+
     private void OnCompactModeChanged(object sender, RoutedEventArgs e)
     {
         if (!_ready) return;
         AppSettings.Current.CompactMode = CompactModeToggle.IsChecked == true;
+        AppSettings.Current.Save();
+    }
+
+    /// <summary>Takes effect on the next close - there is nothing to apply now, and the shell re-reads it off the
+    /// Changed event to relabel its close button.</summary>
+    private void OnRunInBackgroundChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.RunInBackground = RunInBackgroundToggle.IsChecked == true;
         AppSettings.Current.Save();
     }
 
@@ -399,11 +462,157 @@ public partial class SettingsWindow : Window
         AppSettings.Current.Save();   // fires Changed -> the main window re-briefs any live bridge panes
     }
 
+    private void OnBridgePeerMessagingChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.BridgePeerMessaging = BridgePeerMessagingToggle.IsChecked == true;
+        AppSettings.Current.Save();   // fires Changed -> live bridge panes are re-briefed with (or without) the channel
+    }
+
     private void OnBridgeAgentLimitChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (!_ready) return;
         AppSettings.Current.BridgeAgentLimit = BridgeAgentPolicy.ClampLimit((int)Math.Round(e.NewValue));
         AppSettings.Current.Save();
+    }
+
+    // ---------- supervision + Demon Mode ----------
+
+    private void OnSupervisionEnabledChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.AgentSupervisionEnabled = SupervisionEnabledToggle.IsChecked == true;
+        AppSettings.Current.Save();
+    }
+
+    private void OnSupervisionStaleChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.SupervisionStaleSeconds = (int)Math.Round(e.NewValue);
+        AppSettings.Current.Save();   // a running team picks the new threshold up on its next scan
+    }
+
+    private void OnSupervisionGraceChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.SupervisionInterventionGraceSeconds = (int)Math.Round(e.NewValue);
+        AppSettings.Current.Save();
+    }
+
+    private void OnSupervisionRestartsChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.SupervisionMaxRestarts = (int)Math.Round(e.NewValue);
+        AppSettings.Current.Save();
+    }
+
+    // ---------- Demon Mode ----------
+    //
+    // Settings is the ONLY way in and out of Demon Mode. It used to be a stored "enabled" preference that merely added
+    // a Normal/Demon question to New chat, which meant the decision was made in one place, armed in a second, and
+    // spent in a third when a folder was finally picked. Now the switch IS the team: on asks for the folder and starts
+    // it, off stops it. Nothing is persisted — a Demon team is deliberately never resumed, so a remembered "on" could
+    // only ever be a lie the next time VibeCode starts.
+
+    /// <summary>True when a Demon team is already running, so the switch opens showing reality.</summary>
+    public bool DemonTeamLive { get; init; }
+
+    /// <summary>Whether Kimi's shared CLI login is usable, so the account picker can offer it. Handed in by the
+    /// owner: it is the answer to an async CLI probe the main view-model owns, and Settings must not guess it.</summary>
+    public bool KimiAvailable { get; init; }
+
+    /// <summary>The folder the user picked for a new team, or null if they did not start one. Read by the owner once
+    /// this dialog closes: the view-model lives out there, and the Bridge has to be on screen and unobstructed by the
+    /// time sixteen sessions start appearing in it.</summary>
+    public string? DemonStartFolder { get; private set; }
+
+    /// <summary>Set when the user switched a live team off.</summary>
+    public bool DemonStopRequested { get; private set; }
+
+    /// <summary>AI account, model, thinking level and permission mode for the whole roster, asked for right after
+    /// the folder. Non-null whenever <see cref="DemonStartFolder"/> is.</summary>
+    public TeamSetup? DemonSetup { get; private set; }
+
+    private void OnDemonModeChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        if (DemonModeToggle.IsChecked == true)
+        {
+            if (DemonTeamLive) return;                    // already running — the switch is just showing that
+            // Folder, then which account and what the sessions run as. Both are asked BEFORE anything spawns, because
+            // the CLI takes the login, model and effort at launch: choosing them afterwards would mean restarting the
+            // whole team. Cancelling either one cancels the start. Re-entrancy on the reset is fine — it fires
+            // Unchecked, which falls through to the DemonTeamLive check below and does nothing.
+            if (PickDemonFolder() is not { } folder)
+            {
+                DemonModeToggle.IsChecked = false;
+                return;
+            }
+            if (SessionSetupWindow.AskForTeam(this, AppSettings.Current.DefaultProvider, KimiAvailable)
+                is not { } setup)
+            {
+                DemonModeToggle.IsChecked = false;
+                return;
+            }
+            DemonStartFolder = folder;
+            DemonSetup = setup;
+            Close();
+            return;
+        }
+        if (DemonTeamLive) { DemonStopRequested = true; Close(); }
+    }
+
+    private string? PickDemonFolder()
+    {
+        // Automated/off-screen runs get no shell dialog — an unanswered modal would hang every smoke test — so the
+        // folder comes from the same env var that starts a team at launch. Empty there still means "cancelled",
+        // which is what keeps the cancel path exercisable too.
+        if (Environment.GetEnvironmentVariable("VIBECODE_HIDDEN") == "1")
+        {
+            var fromEnv = Environment.GetEnvironmentVariable("VIBECODE_DEMON_START");
+            return Directory.Exists(fromEnv) ? fromEnv : null;
+        }
+
+        var dlg = new Microsoft.Win32.OpenFolderDialog
+        {
+            // The size is asked for in the step AFTER this one, so the title names the range rather than a number
+            // the user has not chosen yet.
+            Title = $"Choose the project for a Demon team " +
+                    $"({DemonModePolicy.MinimumSessionCount}-{DemonModePolicy.MaximumSessionCount} sessions)",
+        };
+        try
+        {
+            return dlg.ShowDialog(this) == true ? dlg.FolderName : null;
+        }
+        catch (ArgumentException)
+        {
+            return null;   // the shell refused to open; treat it as a cancel rather than taking the window down
+        }
+    }
+
+    private void OnDemonReviewChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.DemonOrchestratorReviewsWork = DemonReviewToggle.IsChecked == true;
+        AppSettings.Current.Save();
+    }
+
+    /// <summary>
+    /// A Demon team and the second display cannot both be had, so while one is running the dual-monitor switches are
+    /// disabled and say why.
+    ///
+    /// Disabled rather than accepted-and-ignored on purpose: the setting is persistent, so accepting it would leave a
+    /// switch reading "on" for a window that is never going to open, and the user would go looking for the display
+    /// bug instead of the sentence explaining it. The refusal text is the same one the Bridge header shows when a
+    /// team starts with the setting already on — one rule, one wording.
+    /// </summary>
+    private void RefreshDualMonitorAvailability()
+    {
+        DualMonitorBridgeToggle.IsEnabled = !DemonTeamLive;
+        DualMonitorDoubleSessionsToggle.IsEnabled = !DemonTeamLive;
+        DemonBlocksDualMonitorNote.Text = DualMonitorBridgePolicy.DemonRefusal +
+                                          " End the team above to use a second display.";
+        DemonBlocksDualMonitorNote.Visibility = DemonTeamLive ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // ---------- hidden projects ----------
@@ -439,13 +648,14 @@ public partial class SettingsWindow : Window
     /// matching ListBoxItem, instead of renumbering a column of index comparisons.</summary>
     private UIElement[] Panes => new UIElement[]
     {
-        PaneAppearance, PaneNotifications, PaneBridge, PaneUsage,
+        PaneGeneral, PaneAppearance, PaneNotifications, PaneBridge, PaneUsage,
         PaneProjects, PaneMcp, PaneExtensions, PanePrivacy, PaneAbout,
     };
 
     private void OnRailChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (PaneAppearance is null) return;   // during InitializeComponent
+        if (PaneGeneral is null) return;   // during InitializeComponent
+        if (_settingsSearchReady && SettingsSearchBox.Text.Length > 0) SettingsSearchBox.Clear();
         var selected = Rail.SelectedIndex;
         var panes = Panes;
         for (var i = 0; i < panes.Length; i++)
@@ -474,6 +684,18 @@ public partial class SettingsWindow : Window
     private void OnOpenTelemetryHud(object sender, RoutedEventArgs e) => UsageHudWindow.Open(Owner ?? this);
 
     private void OnOpenTelemetryWall(object sender, RoutedEventArgs e) => UsageDashboardWindow.Open(Owner ?? this);
+
+    private void OnOpenMitreMonitor(object sender, RoutedEventArgs e)
+    {
+        if (Owner is MainWindow main) main.OpenMitreMonitor();
+    }
+
+    private void OnMitreMonitorChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.MitreMonitorEnabled = MitreMonitorToggle.IsChecked == true;
+        AppSettings.Current.Save();
+    }
 
     private void OnTelemetryCompanionDisplayChanged(object sender, RoutedEventArgs e)
     {
@@ -793,6 +1015,97 @@ public partial class SettingsWindow : Window
         _copyTimer?.Stop();
     }
 
+    // ---------- speech to text: Groq ----------
+
+    private void OnGroqSpeechEnabledChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        // The switch's TwoWay binding already saved AppSettings. Nothing else to start or stop: SpeechService reads
+        // the flag at the moment it transcribes, so the next mic click simply lands on the other backend.
+        GroqSpeechStatus();
+    }
+
+    /// <summary>Keep the not-yet-saved status line honest when the card is reopened or the switch is flipped back.
+    /// It is a warning, not a result, so it must not linger as "Key accepted" from a previous visit.</summary>
+    private void GroqSpeechStatus()
+    {
+        if (GroqSpeechService.Instance.HasKey) return;   // the saved-key half of the card is showing instead
+        GroqKeyStatus.Foreground = (Brush)FindResource("Amber");
+        GroqKeyStatus.Text = "Dictation still runs offline until a key is saved.";
+    }
+
+    private void OnCopyGroqKeyLink(object sender, RoutedEventArgs e)
+    {
+        try { Clipboard.SetText("https://console.groq.com/keys"); }
+        catch { /* clipboard briefly locked by another app */ }
+        GroqLinkCopied.Visibility = Visibility.Visible;
+        _groqCopyTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _groqCopyTimer.Tick -= OnGroqCopyTimer;
+        _groqCopyTimer.Tick += OnGroqCopyTimer;
+        _groqCopyTimer.Stop();
+        _groqCopyTimer.Start();
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _groqCopyTimer;
+
+    private void OnGroqCopyTimer(object? sender, EventArgs e)
+    {
+        GroqLinkCopied.Visibility = Visibility.Collapsed;
+        _groqCopyTimer?.Stop();
+    }
+
+    private async void OnSaveGroqKey(object sender, RoutedEventArgs e)
+    {
+        var key = GroqKeyBox.Password?.Trim() ?? "";
+        if (key.Length == 0)
+        {
+            GroqKeyStatus.Foreground = (Brush)FindResource("Red");
+            GroqKeyStatus.Text = "Paste a key first.";
+            return;
+        }
+
+        GroqSaveBtn.IsEnabled = false;
+        GroqKeyStatus.Foreground = (Brush)FindResource("Muted");
+        GroqKeyStatus.Text = "Checking the key with Groq…";
+
+        // Verified before it is stored, exactly like ApiKeyDialog: a typo caught here beats one that surfaces later
+        // as a mic click that just fails.
+        var result = await GroqSpeechService.ValidateKeyAsync(key);
+        GroqSaveBtn.IsEnabled = true;
+
+        if (!result.Ok)
+        {
+            GroqKeyStatus.Foreground = (Brush)FindResource("Red");
+            GroqKeyStatus.Text = result.Message;
+            return;
+        }
+
+        if (!GroqSpeechService.Instance.SaveKey(key))
+        {
+            GroqKeyStatus.Foreground = (Brush)FindResource("Red");
+            GroqKeyStatus.Text = "Windows wouldn't encrypt the key, so it was not saved.";
+            return;
+        }
+        GroqKeyBox.Clear();   // the saved-key half of the card takes over; nothing keeps the plaintext on screen
+    }
+
+    private void OnRemoveGroqKey(object sender, RoutedEventArgs e)
+    {
+        GroqSpeechService.Instance.ClearKey();
+        GroqKeyBox.Clear();
+        GroqSpeechStatus();
+    }
+
+    // ---------- phone extension ----------
+
+    private void OnPhoneEnabledChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        // the switch's TwoWay binding already saved AppSettings and, when switching off, stopped the bridge;
+        // nudge the titlebar button to re-read the flag
+        PhoneBridgeService.Instance.NotifyEnabledChanged();
+    }
+
     // ---------- weather extension ----------
 
     private CancellationTokenSource? _placeSearch;
@@ -812,8 +1125,23 @@ public partial class SettingsWindow : Window
         OnWeatherSearch(sender, e);
     }
 
+    private void OnWeatherSearchFocusChanged(object sender, RoutedEventArgs e) => RefreshWeatherSearchHint();
+
+    /// <summary>The grey "Search a U.S. or Canadian city" sitting on top of the empty field. Driven from here
+    /// rather than by HintVisibilityConverter: the field lives inside an ExtensionCard's Body, so its logical
+    /// parent is a ContentPresenter in the card TEMPLATE, and an ElementName binding would look for
+    /// WeatherSearchBox in the template's namescope and silently never find it.</summary>
+    private void RefreshWeatherSearchHint() =>
+        WeatherSearchHint.Visibility =
+            !WeatherSearchBox.IsKeyboardFocusWithin && string.IsNullOrWhiteSpace(WeatherSearchBox.Text)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
     private async void OnWeatherSearchTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
+        // Before the guards: picking a place writes the box's text with autocomplete suppressed, and the hint
+        // still has to get out of the way for it.
+        RefreshWeatherSearchHint();
         if (!_ready || _suppressWeatherAutocomplete) return;
 
         _placeSearch?.Cancel();

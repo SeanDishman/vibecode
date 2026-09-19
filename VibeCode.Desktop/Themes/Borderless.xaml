@@ -1,0 +1,64 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ================================================================
+         Borderless - an OVERLAY, merged on top of Themes/Dark.xaml, never loaded on its own.
+         (Application.Resources resolves a key through its merged dictionaries last-one-wins, so every
+         SurfaceX below beats the base theme's copy for anything that asks for it from outside that file.)
+
+         It redefines only the structural surface keys: the chrome stops painting itself, so the background
+         art - which MainWindow stretches behind the whole window in this mode - IS the app's background, and
+         each region is told apart by a thin black outline instead of a filled grey card.
+
+         Deliberately NOT touched: Bg0/Bg1/Bg2/Bg3, Card, CodeBg, Overlay, GlassBar. Buttons, popups, menus,
+         your own messages, tool cards and code blocks keep their fills, because a transcript still has to be
+         readable over somebody's wallpaper.
+
+         Never merged in CLI mode - a flat black terminal has no art to reveal (AppSettings.IsBorderless).
+         ================================================================ -->
+
+    <!-- titlebar, sidebar, right panel / chat header + canvas / bridge pane box / pane header + composer bars -->
+    <SolidColorBrush x:Key="SurfaceChrome" Color="Transparent" />
+    <SolidColorBrush x:Key="SurfaceCanvas" Color="Transparent" />
+    <SolidColorBrush x:Key="SurfacePane" Color="Transparent" />
+    <SolidColorBrush x:Key="SurfaceBar" Color="Transparent" />
+
+    <!-- The single chat's composer bubble, which is why a chat used to read as "not borderless" next to a Bridge
+         on the same wallpaper. A pane's composer is a SurfaceBar strip, so it emptied out with the pane; the main
+         one was a filled Bg2 slab and stayed one - and with every panel around it gone it became the biggest solid
+         block on screen, sitting exactly where the eye lands. Empty it, and the two composers match. The bubble
+         keeps its outline (and its accent focus ring), so it is still a box you type into; and it sits in the
+         darkest band of the backdrop scrim, which is where the pane composer already reads fine. -->
+    <SolidColorBrush x:Key="SurfaceComposer" Color="Transparent" />
+
+    <!-- the one thing that survives: a thin black line around and between every region. Without it the panes
+         lose their edges entirely against a busy wallpaper and the layout stops reading as panes at all.
+         Slightly translucent so it sits ON the art rather than punching a hole in it. -->
+    <SolidColorBrush x:Key="SurfaceOutline" Color="#D9000000" />
+
+    <!-- Chips that float in a bar (the account usage pills, the parked-pane restore chip) lose their FILL and keep
+         a hairline instead - the opposite of what this used to do. Keeping the fill was meant to back their text,
+         but with the bar behind them no longer painted it left the Claude/Codex/Kimi/Grok readouts as the only
+         filled slabs in a borderless bridge header, which is exactly what stops it reading as borderless. Emptied,
+         they match the bare glyph buttons beside them; the outline is what keeps a chip reading as a chip rather
+         than as loose text, and it is the same black hairline every other region gets above. Hover and the open
+         state still fill (their templates name Bg3 directly), so the pills answer the pointer either way. -->
+    <SolidColorBrush x:Key="ChipFill" Color="Transparent" />
+    <SolidColorBrush x:Key="ChipOutline" Color="#D9000000" />
+
+    <!-- square the panes off: a rounded card with no fill reads as a mistake, a rectangle reads as a frame -->
+    <CornerRadius x:Key="RadPane">0</CornerRadius>
+    <CornerRadius x:Key="RadPaneTop">0</CornerRadius>
+    <CornerRadius x:Key="RadPaneBottom">0</CornerRadius>
+
+    <!-- Send button: the circle as an OUTLINE, not a filled disc. With every panel gone the solid blue disc
+         was the last filled slab on screen, but losing the circle altogether left the arrow floating with no
+         target to aim at - so the ring stays and only the fill goes. Accent ring, accent arrow, and a soft
+         wash on hover so it still answers the pointer. Interrupt is unaffected: while a turn is running that
+         state overrides all of these with its own red outline, which is the same shape in a different colour. -->
+    <SolidColorBrush x:Key="SendButtonFill" Color="Transparent" />
+    <SolidColorBrush x:Key="SendButtonFillHover" Color="#244C8DF5" />
+    <SolidColorBrush x:Key="SendButtonGlyph" Color="#4C8DF5" />
+    <SolidColorBrush x:Key="SendButtonRing" Color="#4C8DF5" />
+
+</ResourceDictionary>

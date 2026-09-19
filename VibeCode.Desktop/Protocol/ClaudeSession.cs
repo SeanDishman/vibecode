@@ -216,6 +216,10 @@ public sealed class ClaudeSession : ICodingSession
     public static string ResolveCliPath()
     {
         var candidates = new List<string>();
+        // Matches the override every other provider already honours. The Linux package installs the official
+        // Windows CLI into its own Wine prefix and points at it this way, since that path is on no standard PATH.
+        if (Environment.GetEnvironmentVariable("VIBECODE_CLAUDE_PATH") is { Length: > 0 } configured)
+            candidates.Add(configured.Trim('"'));
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         candidates.Add(Path.Combine(appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"));
@@ -289,7 +293,13 @@ public sealed class ClaudeSession : ICodingSession
         };
         if (options.IncludePartialMessages) args.Add("--include-partial-messages");
         if (!string.IsNullOrEmpty(options.Model)) { args.Add("--model"); args.Add(options.Model!); }
-        if (!string.IsNullOrEmpty(options.Effort)) { args.Add("--effort"); args.Add(options.Effort!); }
+        // "ultracode" is one of the CLI's effort LEVELS ("<low|medium|high|xhigh|max|ultracode|auto>"), not a
+        // separate switch - it resolves to xhigh plus standing dynamic-workflow orchestration. --effort itself
+        // only accepts low|medium|high|xhigh|max, so the level is translated here: xhigh on the command line
+        // (which also satisfies "ultracode needs xhigh" for the launch-effort pin) plus the settings key below.
+        var ultracode = IsUltracodeLevel(options.Effort);
+        var effort = ultracode ? "xhigh" : options.Effort;
+        if (!string.IsNullOrEmpty(effort)) { args.Add("--effort"); args.Add(effort!); }
         // Newer Claude models (Opus 4.7+/Opus 5/Sonnet 5+/Fable/Mythos) default thinking.display to "omitted":
         // the stream still emits thinking blocks, but thinking / thinking_delta are empty and only the
         // encrypted signature remains. Interactive Claude Code shows summaries when the user opts in;
@@ -304,6 +314,13 @@ public sealed class ClaudeSession : ICodingSession
         {
             settings["fastMode"] = true;
             settings["fastModePerSessionOptIn"] = true;
+        }
+        if (ultracode)
+        {
+            settings["ultracode"] = true;
+            // The CLI's own description: "Requires workflows to be enabled and an xhigh-capable model." Dynamic
+            // workflows default off, so without this the flag is accepted and then quietly does nothing.
+            settings["enableWorkflows"] = true;
         }
         args.Add("--settings");
         args.Add(settings.ToJsonString());
@@ -750,20 +767,23 @@ public sealed class ClaudeSession : ICodingSession
     /// <summary>
     /// Claude models Anthropic has shipped that the local Claude Code CLI may not yet advertise in
     /// <c>initialize.models</c>. Kept in sync with <see cref="VibeCode.UI.ProviderModelCatalog"/> fallbacks.
+    /// <para><c>Fast</c> is per-row: fast mode is an Opus 4.8-and-newer tier, so a blanket true advertised it
+    /// on Opus 4.6 too. The API runs <c>speed:fast</c> on 4.6 at standard speed, so the effort popup must not
+    /// claim 4.6 can do Fast; it switches to Opus 5 instead, matching Claude Code's <c>/fast</c>.</para>
     /// </summary>
-    private static readonly (string Value, string Display, string Description)[] KnownModelExtras =
+    private static readonly (string Value, string Display, string Description, bool Fast)[] KnownModelExtras =
     [
-        ("claude-opus-5", "Claude Opus 5",
-            "Near-Fable intelligence for complex agentic coding and enterprise work, at half Fable price."),
+        ("claude-opus-5", "Opus 5",
+            "Near-Fable intelligence for complex agentic coding and enterprise work, at half Fable price.", true),
         ("claude-opus-4-8", "Opus 4.8",
-            "Previous flagship Opus. Highly autonomous on long-horizon agentic and knowledge work."),
+            "Previous flagship Opus. Highly autonomous on long-horizon agentic and knowledge work.", true),
         ("claude-opus-4-6", "Opus 4.6",
-            "Older Opus. Still accepts temperature and a fixed thinking budget that 4.7+ dropped."),
+            "Older Opus. Still accepts temperature and a fixed thinking budget that 4.7+ dropped.", false),
     ];
 
     /// <summary>
     /// Insert known model IDs the CLI omitted. Placed after the default/alias rows when possible so
-    /// "Claude Opus 5" appears near the top of the picker instead of buried under Haiku.
+    /// "Opus 5" appears near the top of the picker instead of buried under Haiku.
     /// </summary>
     internal static void EnsureKnownModels(JsonArray models)
     {
@@ -811,7 +831,7 @@ public sealed class ClaudeSession : ICodingSession
             }
         }
 
-        foreach (var (value, display, description) in KnownModelExtras)
+        foreach (var (value, display, description, fast) in KnownModelExtras)
         {
             if (existing.Contains(value)) continue;
             var levels = effortTemplate is null
@@ -826,8 +846,8 @@ public sealed class ClaudeSession : ICodingSession
                 ["supportedEffortLevels"] = levels,
                 ["supportsEffort"] = supportsEffort || levels.Count > 0,
                 ["supportsAutoMode"] = supportsAuto,
-                // Opus 5 ships Fast mode on Claude Platform / Claude Code usage credits.
-                ["supportsFastMode"] = true,
+                // Opus 5 and 4.8 ship Fast mode; 4.6 does not (API no-op at standard speed). The UI switches.
+                ["supportsFastMode"] = fast,
                 ["isDefault"] = false,
             });
             existing.Add(value);
@@ -934,6 +954,39 @@ public sealed class ClaudeSession : ICodingSession
         req["effort"] = effort;   // always sent; explicit null reverts effort to the CLI default (runtime effort rides on set_model)
         return SafeRequest(req);
     }
+
+    /// <summary>The CLI exposes "ultracode" as an effort level, but its real value is xhigh plus a separate
+    /// <c>ultracode</c> flag. One predicate so every translation point agrees on the spelling.</summary>
+    public static bool IsUltracodeLevel(string? level) =>
+        string.Equals(level, "ultracode", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Apply session-scoped flag settings to a RUNNING CLI, so switching to or from the ultracode level takes
+    /// effect on this chat instead of only its next start - <c>set_model</c> carries an effort but has no field
+    /// for the ultracode flag. Verified against claude 2.1.215, which answers with <c>{"subtype":"success"}</c>.
+    /// </summary>
+    public Task SetFlagSettingsAsync(string? effortLevel, bool ultracode) =>
+        SafeRequest(new JsonObject
+        {
+            ["subtype"] = "apply_flag_settings",
+            ["settings"] = new JsonObject { ["effortLevel"] = effortLevel, ["ultracode"] = ultracode },
+        });
+
+    /// <summary>
+    /// Turn fast mode on or off on a RUNNING CLI, so the toggle belongs to this chat rather than only to its next
+    /// start. Same control request interactive Claude Code sends for its own <c>/fast</c> command: the CLI merges
+    /// the settings object into this session's flag settings, which is the source its Agent-SDK fast-mode gate
+    /// reads. The key is always sent - omitting it would leave the previous value in place - but as <c>false</c>
+    /// rather than the null the interactive client uses, because the settings schema types this one as a plain
+    /// optional boolean ("when absent or false, fast mode is off") with no null tolerance, and a rejected parse
+    /// would take the effort/ultracode flags sitting in the same bag down with it.
+    /// </summary>
+    public Task SetFastModeAsync(bool on) =>
+        SafeRequest(new JsonObject
+        {
+            ["subtype"] = "apply_flag_settings",
+            ["settings"] = new JsonObject { ["fastMode"] = on },
+        });
 
     private async Task SafeRequest(JsonObject request)
     {

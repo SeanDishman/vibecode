@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:editor="http://icsharpcode.net/sharpdevelop/avalonedit"
         Title="Code" Height="720" Width="1040" MinHeight="320" MinWidth="560"
         WindowStartupLocation="CenterOwner" WindowStyle="None" ResizeMode="CanResize"
         Background="{DynamicResource Bg0}" TextOptions.TextFormattingMode="Ideal"
@@ -22,27 +23,40 @@
             <!-- title bar -->
             <Border Grid.Row="0" Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}"
                     BorderThickness="0,0,0,1">
-                <DockPanel LastChildFill="False" Margin="12,0,8,0">
-                    <TextBlock DockPanel.Dock="Left" Text="&#xE7C3;" FontFamily="{DynamicResource Icons}" FontSize="14"
-                               Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                    <TextBlock x:Name="TitleFile" DockPanel.Dock="Left" Text="file" FontWeight="SemiBold" FontSize="13"
-                               Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                    <TextBlock x:Name="TitleDir" DockPanel.Dock="Left" Text="" FontSize="11.5"
-                               Foreground="{DynamicResource Faint}" VerticalAlignment="Center" Margin="10,1,0,0"
-                               TextTrimming="CharacterEllipsis" MaxWidth="420" />
-
+                <DockPanel LastChildFill="True" Margin="12,0,8,0">
                     <!-- close -->
-                    <Button DockPanel.Dock="Right" Click="OnClose" Style="{DynamicResource IconButton}"
+                    <Button x:Name="CloseButton" DockPanel.Dock="Right" Click="OnClose" Style="{DynamicResource IconButton}"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True" Width="34" Height="30"
-                            ToolTip="Close" Content="&#xE8BB;" FontFamily="{DynamicResource Icons}" FontSize="12" />
+                            ToolTip="Close" AutomationProperties.Name="Close code viewer"
+                            Content="&#xE8BB;" FontFamily="{DynamicResource Icons}" FontSize="12" />
                     <!-- copy -->
-                    <Button DockPanel.Dock="Right" Click="OnCopy" Style="{DynamicResource GhostButton}"
+                    <Button x:Name="CopyButton" DockPanel.Dock="Right" Click="OnCopy" Style="{DynamicResource GhostButton}"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True" Padding="10,5" Margin="0,0,4,0"
                             VerticalAlignment="Center" ToolTip="Copy the file text">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8C8;" FontFamily="{DynamicResource Icons}" FontSize="12"
                                        Foreground="{DynamicResource Muted}" Margin="0,0,6,0" />
                             <TextBlock Text="Copy" FontSize="12" Foreground="{DynamicResource Muted}" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="SaveButton" DockPanel.Dock="Right" Click="OnSave" Style="{DynamicResource GhostButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True" Padding="10,5" Margin="0,0,4,0"
+                            Visibility="Collapsed" IsEnabled="False" VerticalAlignment="Center"
+                            ToolTip="Save changes (Ctrl+S)" AutomationProperties.Name="Save file">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74E;" FontFamily="{DynamicResource Icons}" FontSize="12"
+                                       Foreground="{DynamicResource Accent}" Margin="0,0,6,0" />
+                            <TextBlock Text="Save" FontSize="12" Foreground="{DynamicResource Text}" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="EditButton" DockPanel.Dock="Right" Click="OnEdit" Style="{DynamicResource GhostButton}"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True" Padding="10,5" Margin="0,0,4,0"
+                            IsEnabled="False" VerticalAlignment="Center" ToolTip="Edit the current file"
+                            AutomationProperties.Name="Edit file">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE70F;" FontFamily="{DynamicResource Icons}" FontSize="12"
+                                       Foreground="{DynamicResource Accent}" Margin="0,0,6,0" />
+                            <TextBlock Text="Edit" FontSize="12" Foreground="{DynamicResource Text}" />
                         </StackPanel>
                     </Button>
 
@@ -54,27 +68,60 @@
                             VerticalAlignment="Center" Margin="0,0,10,0">
                         <TextBlock x:Name="TitleLang" Text="Text" FontSize="10.5" Foreground="{DynamicResource Muted}" />
                     </Border>
+                    <TextBlock DockPanel.Dock="Left" Text="&#xE7C3;" FontFamily="{DynamicResource Icons}" FontSize="14"
+                               Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock x:Name="TitleFile" Text="file" FontWeight="SemiBold" FontSize="13"
+                                   Foreground="{DynamicResource Text}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="TitleDir" Text="" FontSize="10"
+                                   Foreground="{DynamicResource Faint}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                    </StackPanel>
                 </DockPanel>
             </Border>
 
             <!-- code surface -->
             <Border Grid.Row="1" Background="{DynamicResource CodeBg}">
-                <RichTextBox x:Name="Code" IsReadOnly="True" IsReadOnlyCaretVisible="False" BorderThickness="0"
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Border x:Name="EditorErrorBanner" Grid.Row="0" Visibility="Collapsed" Margin="12,10,12,2" Padding="12,9"
+                            Background="{DynamicResource RedSoft}" BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                            CornerRadius="{StaticResource Rad5}">
+                        <TextBlock x:Name="EditorErrorText" TextWrapping="Wrap" Foreground="{DynamicResource Text}"
+                                   FontSize="12" AutomationProperties.LiveSetting="Assertive" />
+                    </Border>
+                <RichTextBox x:Name="Code" Grid.Row="1" IsReadOnly="True" IsReadOnlyCaretVisible="False" BorderThickness="0"
                              Background="Transparent" Foreground="{DynamicResource Text}"
                              FontFamily="{DynamicResource Mono}" FontSize="12.5" Padding="8,8,24,16"
                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                              AcceptsReturn="False" AcceptsTab="False" SelectionBrush="{DynamicResource AccentDim}"
                              VerticalContentAlignment="Top" />
+                <editor:TextEditor x:Name="Editor" Grid.Row="1" Visibility="Collapsed" TextChanged="OnEditorTextChanged"
+                                   Background="Transparent" Foreground="{DynamicResource Text}"
+                                   FontFamily="{DynamicResource Mono}" FontSize="12.5" Padding="8,8,24,16"
+                                   BorderThickness="0" ShowLineNumbers="True" LineNumbersForeground="{DynamicResource Faint}"
+                                   WordWrap="False" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                                   AutomationProperties.Name="Code editor" />
+                </Grid>
             </Border>
 
             <!-- status strip -->
             <Border Grid.Row="2" Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource BorderSoft}"
                     BorderThickness="0,1,0,0" Padding="12,4">
-                <DockPanel>
-                    <TextBlock x:Name="FootMode" DockPanel.Dock="Left" FontSize="11" Foreground="{DynamicResource Faint}" />
-                    <TextBlock x:Name="FootInfo" DockPanel.Dock="Right" FontSize="11" FontFamily="{DynamicResource Mono}"
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="FootMode" Grid.Column="0" FontSize="11" Foreground="{DynamicResource Faint}"
+                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                    <TextBlock x:Name="FootInfo" Grid.Column="1" FontSize="11" FontFamily="{DynamicResource Mono}"
                                Foreground="{DynamicResource Faint}" />
-                </DockPanel>
+                </Grid>
             </Border>
         </Grid>
     </Border>

@@ -47,6 +47,8 @@ public static class UsagePalette
         // 0 - Claude frontier
         ["claude-fable-5"] = 0,
         ["claude-mythos-5"] = 0,
+        ["claude-fable-5-1"] = 0,
+        ["claude-mythos-5-1"] = 0,
         // 1 - Claude Opus
         ["claude-opus-5"] = 1,
         ["claude-opus-4-8"] = 1,
@@ -57,9 +59,13 @@ public static class UsagePalette
         ["claude-sonnet-5"] = 2,
         ["claude-sonnet-4-6"] = 2,
         ["claude-sonnet-4-5"] = 2,
-        // 3 - Claude Haiku
+        // 3 - Claude Haiku. Freed up again when the ninth entity that had taken this slot was removed; there are
+        // eight hues, and with eight entities left every one of them gets its own rather than folding into the
+        // neutral "Other".
         ["claude-haiku-4-5"] = 3,
-        // 4 - OpenAI premium tier ($5 / $30 per Mtok)
+        // 4 - OpenAI premium tier. Astra ($10/$50) costs 2.5x the $5/$30 pair under it, but colour follows the
+        // entity's tier and not its price, so OpenAI's flagships stay one hue.
+        ["gpt-6-astra"] = 4,
         ["gpt-5.6-sol"] = 4,
         ["gpt-5.5"] = 4,
         // 5 - OpenAI efficient tiers
@@ -139,7 +145,9 @@ public static class UsagePalette
     private static string? KnownDisplay(string id) => id switch
     {
         "claude-fable-5" => "Fable 5",
+        "claude-fable-5-1" => "Fable 5.1",
         "claude-mythos-5" => "Mythos 5",
+        "claude-mythos-5-1" => "Mythos 5.1",
         "claude-opus-5" => "Opus 5",
         "claude-opus-4-8" => "Opus 4.8",
         "claude-opus-4-7" => "Opus 4.7",
@@ -149,6 +157,7 @@ public static class UsagePalette
         "claude-sonnet-4-6" => "Sonnet 4.6",
         "claude-sonnet-4-5" => "Sonnet 4.5",
         "claude-haiku-4-5" => "Haiku 4.5",
+        "gpt-6-astra" => "GPT-6 Astra",
         "gpt-5.6-sol" => "GPT-5.6 Sol",
         "gpt-5.6-terra" => "GPT-5.6 Terra",
         "gpt-5.6-luna" => "GPT-5.6 Luna",
@@ -158,6 +167,13 @@ public static class UsagePalette
         "kimi-k2.7-code-highspeed" or "kimi-for-coding-highspeed" or "kimi-code/kimi-for-coding-highspeed"
             => "Kimi K2.7 Turbo",
         "grok-4.5" or "grok-4-5" => "Grok 4.5",
+        // GLM on Baseten. Named explicitly rather than left to the slug title-caser below: that path happens to
+        // produce the right words for these four ids today, but only because of where the hyphens fall.
+        // NB this switch is ordinal, so the casing has to be the id's own.
+        "zai-org/GLM-5.3-Flash" => "GLM 5.3 Flash",
+        "zai-org/GLM-5.2" => "GLM 5.2",
+        "zai-org/GLM-5.2-Fast" => "GLM 5.2 Fast",
+        "zai-org/GLM-4.7" => "GLM 4.7",
         _ => null,
     };
 

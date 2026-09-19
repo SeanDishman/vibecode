@@ -465,9 +465,8 @@ public sealed class KimiSession : ICodingSession
     private void EmitInit()
     {
         var selectedModel = CurrentModelId() ?? _model ?? "default";
-        var publicModel = _isGrok && Grok45Preset.IsGrok45(selectedModel)
-            ? Grok45Preset.NormalModelId
-            : selectedModel;
+        var publicModel = _isGrok && !string.IsNullOrWhiteSpace(_requestedModel)
+            ? _requestedModel! : selectedModel;
         Emit(new JsonObject
         {
             ["type"] = "system",
@@ -630,8 +629,13 @@ public sealed class KimiSession : ICodingSession
         {
             if (_basePromptPending)
             {
-                _basePromptPending = false;
-                text = SystemContextOpen + "\n" + _options.AppendSystemPrompt! + "\n" + SystemContextClose
+                var contexts = new List<string>(2);
+                if (_basePromptPending)
+                {
+                    contexts.Add(_options.AppendSystemPrompt!);
+                    _basePromptPending = false;
+                }
+                text = SystemContextOpen + "\n" + string.Join("\n\n", contexts) + "\n" + SystemContextClose
                        + (text.Length == 0 ? "" : "\n\n" + text);
             }
             if (text.Length > 0) prompt.Add(new JsonObject { ["type"] = "text", ["text"] = text });
@@ -1170,6 +1174,9 @@ public sealed class KimiSession : ICodingSession
     private void EmitStreamEvent(JsonObject ev) => Emit(new JsonObject
     {
         ["type"] = "stream_event",
+        // session/load emits transcript chunks before initialization finishes. Capture their origin here:
+        // the UI can already say running when the user queues Send now during a slow resume.
+        ["is_replay"] = _isGrok && !_initialized,
         ["event"] = ev,
     });
 
@@ -1354,7 +1361,6 @@ public sealed class KimiSession : ICodingSession
         Models = ModelsFromConfig(options);
         var model = options.OfType<JsonObject>().FirstOrDefault(x => x["id"]?.GetValue<string>() == "model");
         var providerModel = model?["currentValue"]?.GetValue<string>();
-        if (_initialized && providerModel is not null) _requestedModel = providerModel;
         _model = providerModel ?? _model;
         var thinking = options.OfType<JsonObject>().FirstOrDefault(x => x["id"]?.GetValue<string>() == "thinking");
         if (thinking?["currentValue"]?.GetValue<string>() is { } effort) _effort = effort;
@@ -1404,18 +1410,34 @@ public sealed class KimiSession : ICodingSession
         return result;
     }
 
+    /// <summary>
+    /// Take a fresh catalog from a Grok model-state payload. <c>_x.ai/models/update</c> is an ACCOUNT-level push —
+    /// the runtime logs it with no session id, unlike the per-session <c>model_changed</c> — so its currentModelId
+    /// is the CLI's own current model, not this chat's. Letting it redefine the selection is what walked a Grok 4.6
+    /// chat back to 4.5: the picker re-rendered as 4.5, the view model copied that into its model field, and the
+    /// set_model that rides along with the next prompt's effort handed "grok-4.5" back to the runtime — so the
+    /// mislabel became real one message later. The list and its effort tiers are worth taking from this payload;
+    /// the selection is adopted only when this session does not already have one.
+    /// </summary>
     private void ApplyGrokModelState(JsonObject? state, bool notify)
     {
         if (state is null) return;
         var current = state["currentModelId"]?.GetValue<string>();
         Models = GrokModelsFromState(state, _requestedModel);
-        _model = current ?? _model;
+        SelectRequestedGrokRow();
+        // A selection outlives a catalog that momentarily lacks it: Grok publishes a one-entry "grok-build"
+        // placeholder before its real catalog resolves, and taking that as the session's model would hand the
+        // placeholder straight back to the runtime on the next prompt.
+        var selected = string.IsNullOrWhiteSpace(_requestedModel)
+            ? current
+            : Grok45Preset.BackendModel(_requestedModel);
+        _model = selected ?? _model;
         var currentInfo = (state["availableModels"] as JsonArray)?.OfType<JsonObject>()
-            .FirstOrDefault(row => string.Equals(row["modelId"]?.GetValue<string>(), current,
+            .FirstOrDefault(row => string.Equals(row["modelId"]?.GetValue<string>(), _model,
                 StringComparison.OrdinalIgnoreCase));
         if (currentInfo?["_meta"]?["reasoningEffort"]?.GetValue<string>() is { } effort)
             _effort = effort;
-        if (_initialized && current is not null && !Grok45Preset.IsGrok45(current))
+        if (_initialized && string.IsNullOrWhiteSpace(_requestedModel) && current is not null)
             _requestedModel = current;
         if (!notify) return;
         EmitInit();
@@ -1426,24 +1448,32 @@ public sealed class KimiSession : ICodingSession
     {
         var current = update["model_id"]?.GetValue<string>() ?? update["modelId"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(current)) return;
-        _model = current;
-        if (!Grok45Preset.IsGrok45(current)) _requestedModel = current;
-        foreach (var row in Models.OfType<JsonObject>())
-        {
-            var value = row["value"]?.GetValue<string>();
-            row["isDefault"] = string.Equals(Grok45Preset.BackendModel(value), current,
-                StringComparison.OrdinalIgnoreCase);
-        }
+        _model = _requestedModel = current;
+        SelectRequestedGrokRow();
         if (update["reasoning_effort"]?.GetValue<string>() is { } effort) _effort = effort;
         EmitInit();
         Initialized?.Invoke();
+    }
+
+    private bool SelectRequestedGrokRow()
+    {
+        var requested = _requestedModel?.Trim();
+        if (string.IsNullOrEmpty(requested)) return false;
+        var match = Models.OfType<JsonObject>().FirstOrDefault(row =>
+            string.Equals(row["value"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase))
+            ?? Models.OfType<JsonObject>().FirstOrDefault(row =>
+                string.Equals(row["resolvedModel"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase)
+                || Grok45Preset.IsGrok45(row["resolvedModel"]?.GetValue<string>()) && Grok45Preset.IsGrok45(requested));
+        if (match is null) return false;
+        foreach (var row in Models.OfType<JsonObject>()) row["isDefault"] = ReferenceEquals(row, match);
+        if (match["value"]?.GetValue<string>() is { Length: > 0 } value) _requestedModel = value;
+        return true;
     }
 
     internal static JsonArray GrokModelsFromState(JsonObject? state, string? requestedModel = null)
     {
         var result = new JsonArray();
         var current = state?["currentModelId"]?.GetValue<string>();
-        var foundGrok45 = false;
         if (state?["availableModels"] is JsonArray available)
         foreach (var info in available.OfType<JsonObject>())
         {
@@ -1463,11 +1493,12 @@ public sealed class KimiSession : ICodingSession
                 if (!string.IsNullOrWhiteSpace(token)) efforts.Add(token);
             }
             var isGrok45 = Grok45Preset.IsGrok45(value, display);
-            foundGrok45 |= isGrok45;
+            var publicValue = isGrok45 ? Grok45Preset.NormalModelId : value;
+            var publicDisplay = isGrok45 ? Grok45Preset.NormalDisplayName : display;
             result.Add(new JsonObject
             {
-                ["value"] = isGrok45 ? Grok45Preset.NormalModelId : value,
-                ["displayName"] = isGrok45 ? Grok45Preset.NormalDisplayName : display,
+                ["value"] = publicValue,
+                ["displayName"] = publicDisplay,
                 ["description"] = isGrok45 ? Grok45Preset.NormalDescription : info["description"]?.GetValue<string>(),
                 ["resolvedModel"] = value,
                 ["supportedEffortLevels"] = efforts,
@@ -1478,7 +1509,15 @@ public sealed class KimiSession : ICodingSession
             });
         }
 
-        if (!foundGrok45)
+        // A last-resort row for a runtime that advertised NOTHING - only then. The test used to be "no Grok 4.5 in
+        // the list", which fabricated a 4.5 row whenever the runtime named its models something else, and marked
+        // that invented row isDefault. Grok comes up with a one-entry placeholder catalog ("grok-build") before its
+        // real catalog resolves, and every consequence followed from that single fabricated row: CurrentModelId
+        // returned "grok-4.5", EmitInit reported it as the session's model, the pill snapped from Grok 4.6 back to
+        // Grok 4.5, and RebuildEffortOptions then offered only the hardcoded low/medium/high below - so xhigh, which
+        // 4.6 has and 4.5 does not, was dropped and the reasoning level went blank. The runtime's own list is
+        // authoritative; when it names a model we have never heard of, show THAT, not an invented 4.5.
+        if (result.Count == 0)
         {
             var efforts = new JsonArray("low", "medium", "high");
             result.Insert(0, new JsonObject
@@ -1497,11 +1536,8 @@ public sealed class KimiSession : ICodingSession
         return result;
     }
 
-    private string? ResolveBackendModel(string? requestedModel)
-    {
-        if (_isGrok) return Grok45Preset.BackendModel(requestedModel ?? Grok45Preset.NormalModelId);
-        return requestedModel;
-    }
+    private string? ResolveBackendModel(string? requestedModel) =>
+        _isGrok ? Grok45Preset.BackendModel(requestedModel ?? Grok45Preset.NormalModelId) : requestedModel;
 
     private string? CurrentModelId() => Models.OfType<JsonObject>()
         .FirstOrDefault(x => x["isDefault"]?.GetValue<bool>() == true)?["value"]?.GetValue<string>()
@@ -1672,22 +1708,16 @@ public sealed class KimiSession : ICodingSession
         {
             _requestedModel = string.IsNullOrWhiteSpace(model)
                               || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)
-                ? Grok45Preset.NormalModelId
-                : model;
-            _model = ResolveBackendModel(_requestedModel);
+                ? _requestedModel ?? Grok45Preset.NormalModelId : model;
             _effort = _requestedEffort = effort;
-            foreach (var row in Models.OfType<JsonObject>())
-                row["isDefault"] = string.Equals(row["value"]?.GetValue<string>(), _requestedModel,
-                    StringComparison.OrdinalIgnoreCase);
+            SelectRequestedGrokRow();
+            _model = ResolveBackendModel(_requestedModel);
             if (_initialized && SessionId is not null && _model is not null)
                 await SafeSetGrokModelAsync(_model, effort);
             return;
         }
-
         _requestedModel = string.IsNullOrWhiteSpace(model)
-                          || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : model;
+                          || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase) ? null : model;
         _model = ResolveBackendModel(_requestedModel);
         _effort = _requestedEffort = effort;
         if (!_initialized || SessionId is null) return;

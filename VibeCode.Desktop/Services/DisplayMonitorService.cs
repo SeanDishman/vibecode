@@ -37,6 +37,29 @@ internal static class DisplayMonitorService
         return hwnd == nint.Zero ? nint.Zero : MonitorFromWindow(hwnd, MonitorDefaultToNearest);
     }
 
+    /// <summary>Physical display bounds including the taskbar, for borderless fullscreen only.</summary>
+    public static MonitorWorkArea FullBoundsFor(Window window)
+    {
+        var monitor = MonitorFor(window, ensureHandle: true);
+        var info = new MonitorInfoEx { Size = Marshal.SizeOf<MonitorInfoEx>() };
+        if (!GetMonitorInfo(monitor, ref info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return new(monitor, info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom);
+    }
+
+    public static MonitorWorkArea WindowPixelBounds(Window window)
+    {
+        if (!GetWindowRect(new WindowInteropHelper(window).EnsureHandle(), out var rect))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return new(MonitorFor(window), rect.Left, rect.Top, rect.Right, rect.Bottom);
+    }
+
+    public static void SetPixelBounds(Window window, MonitorWorkArea bounds)
+    {
+        if (!SetWindowPos(new WindowInteropHelper(window).EnsureHandle(), nint.Zero,
+                bounds.Left, bounds.Top, bounds.Width, bounds.Height, SwpNoZOrder | SwpNoActivate))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
     public static bool TryGetCompanionWorkArea(Window mainWindow, out MonitorWorkArea target)
     {
         target = default;
@@ -56,6 +79,25 @@ internal static class DisplayMonitorService
             ? candidates.OrderBy(x => x.Left).ThenBy(x => x.Top).First()
             : candidates.OrderBy(x => SquaredCenterDistance(current, x)).ThenBy(x => x.Left).ThenBy(x => x.Top).First();
         return true;
+    }
+
+    /// <summary>Prefer a display physically left of the shell, falling back to the nearest companion.</summary>
+    public static bool TryGetLeftCompanionWorkArea(Window mainWindow, out MonitorWorkArea target)
+    {
+        var selected = SelectLeftCompanionWorkArea(EnumerateWorkAreas(), MonitorFor(mainWindow));
+        target = selected ?? default;
+        return selected.HasValue;
+    }
+
+    internal static MonitorWorkArea? SelectLeftCompanionWorkArea(
+        IReadOnlyList<MonitorWorkArea> monitors, nint currentHandle)
+    {
+        var candidates = monitors.Where(x => x.Handle != currentHandle).ToList();
+        if (monitors.Count < 2 || candidates.Count == 0) return null;
+        var current = monitors.FirstOrDefault(x => x.Handle == currentHandle);
+        if (current.Handle == nint.Zero) return candidates.OrderBy(x => x.Left).ThenBy(x => x.Top).First();
+        return candidates.OrderBy(x => x.CenterX < current.CenterX ? 0 : 1)
+            .ThenBy(x => SquaredCenterDistance(current, x)).ThenBy(x => x.Left).ThenBy(x => x.Top).First();
     }
 
     /// <summary>

@@ -156,7 +156,7 @@ public static partial class GrokAccountLoginService
                 {
                     var fallback = await FetchBillingFallbackAsync(authFilePath, version, token).ConfigureAwait(false);
                     billing = fallback.Billing;
-                    usageError = fallback.Error ?? usageError;
+                    usageError = fallback.Billing is not null ? null : fallback.Error ?? usageError;
                 }
             }
 
@@ -601,39 +601,11 @@ public static partial class GrokAccountLoginService
         process.Dispose();
     }
 
-    public static bool TryGetTrustedLoginUrl(string text, out string url)
-    {
-        foreach (Match match in UrlRegex().Matches(text))
-        {
-            var candidate = match.Value.TrimEnd('.', ',', ';', ')', ']', '}', '>', '"');
-            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var parsed)
-                || parsed.Scheme != Uri.UriSchemeHttps
-                || parsed.UserInfo.Length != 0
-                || !IsTrustedLoginHost(parsed.Host))
-                continue;
-            url = parsed.AbsoluteUri;
-            return true;
-        }
-        url = string.Empty;
-        return false;
-    }
+    public static bool TryGetTrustedLoginUrl(string text, out string url) =>
+        GrokLoginUrl.TryGetTrusted(text, out url);
 
-    public static string RedactLoginOutput(string text) =>
-        UrlRegex().Replace(text, match =>
-        {
-            var candidate = match.Value.TrimEnd('.', ',', ';', ')', ']', '}', '>', '"');
-            return TryGetTrustedLoginUrl(candidate, out _) ? "[xAI sign-in link]" : "[link omitted]";
-        });
-
-    private static bool IsTrustedLoginHost(string host) =>
-        host.Equals("x.ai", StringComparison.OrdinalIgnoreCase)
-        || host.EndsWith(".x.ai", StringComparison.OrdinalIgnoreCase)
-        || host.Equals("grok.com", StringComparison.OrdinalIgnoreCase)
-        || host.EndsWith(".grok.com", StringComparison.OrdinalIgnoreCase);
+    public static string RedactLoginOutput(string text) => GrokLoginUrl.Redact(text);
 
     [GeneratedRegex(@"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", RegexOptions.Compiled)]
     private static partial Regex AnsiRegex();
-
-    [GeneratedRegex(@"https://[^\s\x1b]+", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
-    private static partial Regex UrlRegex();
 }

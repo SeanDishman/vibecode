@@ -10,6 +10,9 @@
         Loaded="OnLoaded" Closed="OnClosed" KeyDown="OnKeyDown">
 
     <Window.Resources>
+        <!-- The speed board hides its "tok/s" unit until a reading actually lands, so a tile with no data reads
+             as "— / no data" rather than as a model running at zero. -->
+        <BooleanToVisibilityConverter x:Key="BoolVis" />
         <!-- Local copies of the HUD's chip and caption idiom. Local rather than shared for the same reason the
              HUD keeps its own: the originals live in SettingsWindow's resources, and hoisting them into
              Dark.xaml would leave the CLI theme without them. DynamicResource so this follows either theme. -->
@@ -52,9 +55,10 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />   <!-- header -->
             <RowDefinition Height="Auto" />   <!-- ticker row -->
-            <RowDefinition Height="1.35*" />  <!-- the big one -->
-            <RowDefinition Height="*" />      <!-- the two zoomed-out twins -->
+            <RowDefinition Height="1.2*" />   <!-- the ranged throughput -->
+            <RowDefinition Height="*" />      <!-- the two live panels -->
             <RowDefinition Height="Auto" />   <!-- share + models + system -->
+            <RowDefinition Height="Auto" />   <!-- model speed board (OpenRouter) -->
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -71,20 +75,22 @@
                        Foreground="{DynamicResource Faint}" Margin="16,0,0,0" VerticalAlignment="Center"
                        DockPanel.Dock="Left" />
 
-            <!-- The range lives in the WINDOW header, not on a card, because it scopes every panel below it:
-                 tickers, all three graphs, the donut, the model list and the system stats all redraw against
-                 the one span. A chip on a single card would imply the rest were something else. -->
+            <!-- The range lives in the WINDOW header, not on a card, because it scopes almost every panel below it:
+                 tickers, the throughput graph, the donut, the model list and the system stats all redraw against
+                 the one span. A chip on a single card would imply the rest were something else.
+                 The two LIVE panels are the deliberate exception: they are a readout of what is streaming right
+                 now, so they hold their 5 s / 10 s buckets whichever span is picked, and say so in their captions. -->
             <Border DockPanel.Dock="Left" Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}"
                     Padding="3" Margin="20,0,0,0" VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal">
                     <RadioButton x:Name="Range1H" Style="{StaticResource WallChip}" Content="1 H"
-                                 GroupName="WallRange" Checked="OnRangeChanged" />
+                                 GroupName="WallRange" IsChecked="True" Checked="OnRangeChanged" />
                     <RadioButton x:Name="Range6H" Style="{StaticResource WallChip}" Content="6 H"
                                  GroupName="WallRange" Checked="OnRangeChanged" />
                     <RadioButton x:Name="Range12H" Style="{StaticResource WallChip}" Content="12 H"
                                  GroupName="WallRange" Checked="OnRangeChanged" />
                     <RadioButton x:Name="Range24H" Style="{StaticResource WallChip}" Content="24 H"
-                                 GroupName="WallRange" IsChecked="True" Checked="OnRangeChanged" />
+                                 GroupName="WallRange" Checked="OnRangeChanged" />
                     <RadioButton x:Name="Range7D" Style="{StaticResource WallChip}" Content="7 D"
                                  GroupName="WallRange" Checked="OnRangeChanged" />
                     <RadioButton x:Name="Range30D" Style="{StaticResource WallChip}" Content="30 D"
@@ -180,9 +186,10 @@
             </Border>
         </UniformGrid>
 
-        <!-- The big panel: the finest resolution the selected range gets, which is the one that actually shows a
-             working session taking shape. One metric across all three graphs, chosen here; the bucket size and
-             every caption on this window are written by Refresh, so the range strip is their single source. -->
+        <!-- THE throughput panel: the selected range at the finest resolution it gets, which is the one that
+             actually shows a working session taking shape. One metric across every graph on this wall, chosen
+             here; the bucket size and every caption on this window are written by Refresh, so the range strip
+             and this chip strip are their single source. -->
         <Border Grid.Row="2" Style="{DynamicResource Card}" Padding="16,12" Margin="0,0,0,12">
             <DockPanel>
                 <DockPanel DockPanel.Dock="Top" LastChildFill="False" Margin="0,0,0,8">
@@ -200,11 +207,19 @@
                         </StackPanel>
                     </Border>
                 </DockPanel>
-                <ui:HourlyThroughput x:Name="GraphFine" />
+                <!-- Plot=Line on all three throughput panels: they are the wall's time series, and a time series
+                     of mostly-idle buckets reads as a broken field of columns. Every other chart here (share,
+                     by-model, the tile sparklines) stays as it is. -->
+                <ui:HourlyThroughput x:Name="GraphFine" Plot="Line" />
             </DockPanel>
         </Border>
 
-        <!-- The same range, zoomed out twice, side by side. -->
+        <!-- The live pair: the last few minutes at SECOND resolution, one bar per 5 s and one per 10 s.
+             These are the only panels on the wall the range strip does not scope, and deliberately so - the
+             ranged graph above cannot draw a bar narrower than its own finest bucket (2 minutes at the shortest
+             range), so "what is this machine doing right now" is a reading it structurally cannot show. They
+             are also fed from a different source: tokens stamped as they STREAMED rather than as the turn that
+             committed them, which is what stops a four-minute turn landing as one spike. -->
         <Grid Grid.Row="3" Margin="0,0,0,12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
@@ -212,16 +227,16 @@
             </Grid.ColumnDefinitions>
             <Border Grid.Column="0" Style="{DynamicResource Card}" Padding="16,12" Margin="0,0,6,0">
                 <DockPanel>
-                    <TextBlock x:Name="GraphMidCaption" DockPanel.Dock="Top"
+                    <TextBlock x:Name="GraphLiveFastCaption" DockPanel.Dock="Top"
                                Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
-                    <ui:HourlyThroughput x:Name="GraphMid" />
+                    <ui:HourlyThroughput x:Name="GraphLiveFast" Plot="Line" />
                 </DockPanel>
             </Border>
             <Border Grid.Column="1" Style="{DynamicResource Card}" Padding="16,12" Margin="6,0,0,0">
                 <DockPanel>
-                    <TextBlock x:Name="GraphCoarseCaption" DockPanel.Dock="Top"
+                    <TextBlock x:Name="GraphLiveSlowCaption" DockPanel.Dock="Top"
                                Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
-                    <ui:HourlyThroughput x:Name="GraphCoarse" />
+                    <ui:HourlyThroughput x:Name="GraphLiveSlow" Plot="Line" />
                 </DockPanel>
             </Border>
         </Grid>
@@ -237,14 +252,18 @@
             </Grid.ColumnDefinitions>
             <Border Grid.Column="0" Style="{DynamicResource Card}" Padding="16,12" Margin="0,0,6,0">
                 <StackPanel>
-                    <TextBlock x:Name="WallShareCaption" Text="SHARE BY MODEL · LAST 24 H"
+                    <TextBlock x:Name="WallShareCaption" Text="SHARE BY MODEL · LAST 1 H"
                                Style="{StaticResource WallCaption}" Margin="0,0,0,4" />
-                    <ui:ModelShareDonut x:Name="WallDonut" Height="164" SurfaceKey="Bg2" />
+                    <!-- No Height. The ring derives its radius from the box it is arranged in, and pinning that
+                         box shorter than the height the chart asks for does not shrink the ring - WPF arranges
+                         at the unclipped size and clips the difference away, which is how this donut shipped
+                         with its bottom sliced off. -->
+                    <ui:ModelShareDonut x:Name="WallDonut" SurfaceKey="Bg2" />
                 </StackPanel>
             </Border>
             <Border Grid.Column="1" Style="{DynamicResource Card}" Padding="16,12" Margin="6,0,6,0">
                 <StackPanel>
-                    <TextBlock x:Name="WallModelsCaption" Text="BY MODEL · LAST 24 H"
+                    <TextBlock x:Name="WallModelsCaption" Text="BY MODEL · LAST 1 H"
                                Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
                     <ItemsControl x:Name="WallModels">
                         <ItemsControl.ItemTemplate>
@@ -267,6 +286,15 @@
             <Border Grid.Column="2" Style="{DynamicResource Card}" Padding="16,12" Margin="6,0,0,0">
                 <StackPanel>
                     <TextBlock Text="SYSTEM" Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
+                    <!-- The only row here that is about RIGHT NOW rather than the selected range, which is why
+                         it sits first: everything under it is a window of history, this is the turn being
+                         generated while you read it. "—" when nothing is streaming. -->
+                    <DockPanel Margin="0,2">
+                        <TextBlock Text="IN FLIGHT" FontFamily="{DynamicResource Mono}" FontSize="11"
+                                   Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left" />
+                        <TextBlock x:Name="WallLive" Text="—" FontFamily="{DynamicResource Mono}" FontSize="11"
+                                   Foreground="{DynamicResource Text}" TextTrimming="CharacterEllipsis" />
+                    </DockPanel>
                     <DockPanel Margin="0,2">
                         <TextBlock Text="CACHE HIT" FontFamily="{DynamicResource Mono}" FontSize="11"
                                    Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left" />
@@ -293,5 +321,61 @@
                 </StackPanel>
             </Border>
         </Grid>
+
+        <!-- Model speed board. The one panel here that is NOT about this machine: OpenRouter's median throughput
+             and end-to-end latency for each model over its last 30 minutes of real traffic, request-weighted
+             across every provider endpoint serving it. Nothing local moves these numbers, which is exactly why
+             the range strip does not scope them - and why the caption says where they came from instead. -->
+        <Border Grid.Row="5" Style="{DynamicResource Card}" Padding="16,12" Margin="0,12,0,0">
+            <StackPanel>
+                <DockPanel LastChildFill="False" Margin="0,0,0,10">
+                    <TextBlock Text="MODEL SPEED · OPENROUTER" Style="{StaticResource WallCaption}"
+                               DockPanel.Dock="Left" />
+                    <TextBlock x:Name="WallSpeedAge" FontFamily="{DynamicResource Mono}" FontSize="10"
+                               Foreground="{DynamicResource Faint}" VerticalAlignment="Center"
+                               Margin="0,0,0,0" DockPanel.Dock="Right" />
+                </DockPanel>
+                <ItemsControl x:Name="WallModelSpeeds">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <!-- One row, one column per model: the board is a comparison, and a wrapped second row
+                                 would put two models at different sizes on a wall read from across the room. -->
+                            <UniformGrid Rows="1" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}"
+                                    Padding="12,10" Margin="3,0">
+                                <StackPanel>
+                                    <DockPanel LastChildFill="True">
+                                        <Rectangle Width="9" Height="9" Fill="{Binding Swatch}" RadiusX="2" RadiusY="2"
+                                                   VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                        <TextBlock Text="{Binding DisplayName}" FontSize="11.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Text}" Margin="7,0,0,0"
+                                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </DockPanel>
+                                    <TextBlock Text="{Binding Vendor}" FontSize="9.5"
+                                               Foreground="{DynamicResource Faint}" Margin="16,1,0,0"
+                                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    <DockPanel Margin="0,8,0,0" LastChildFill="False">
+                                        <TextBlock Text="{Binding Throughput}" FontFamily="{DynamicResource Mono}"
+                                                   FontSize="26" FontWeight="Bold" DockPanel.Dock="Left"
+                                                   Foreground="{DynamicResource Text}" />
+                                        <TextBlock Text="tok/s" FontFamily="{DynamicResource Mono}" FontSize="10"
+                                                   Foreground="{DynamicResource Muted}" DockPanel.Dock="Left"
+                                                   VerticalAlignment="Bottom" Margin="4,0,0,4"
+                                                   Visibility="{Binding HasData, Converter={StaticResource BoolVis}}" />
+                                    </DockPanel>
+                                    <TextBlock Text="{Binding Latency}" FontFamily="{DynamicResource Mono}"
+                                               FontSize="10.5" Foreground="{DynamicResource Muted}"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>

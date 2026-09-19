@@ -74,6 +74,10 @@ public sealed class WeatherService : Observable
     /// <summary>Temperature rounded to whole degrees F, or "--" before the first successful fetch.</summary>
     public string TempText => _tempF is null ? "--" : $"{Math.Round(_tempF.Value)}°";
 
+    /// <summary>True once a real reading has landed. The titlebar chip has to show SOMETHING and falls back to
+    /// "--", but the settings card has the room to simply say nothing rather than print a placeholder.</summary>
+    public bool HasReading => _tempF is not null;
+
     /// <summary>Compact titlebar label: current temperature and conditions, or a prompt to pick a place.</summary>
     public string ChipText
     {
@@ -157,7 +161,7 @@ public sealed class WeatherService : Observable
 
         Raise(nameof(Place)); Raise(nameof(Lat)); Raise(nameof(Lon)); Raise(nameof(CountryCode));
         Raise(nameof(HasLocation)); Raise(nameof(ChipText)); Raise(nameof(ChipTooltip));
-        Raise(nameof(TempText)); Raise(nameof(ConditionGlyph));
+        Raise(nameof(TempText)); Raise(nameof(ConditionGlyph)); Raise(nameof(HasReading));
         LocationChanged?.Invoke(this, EventArgs.Empty);
         _ = RefreshAsync();
     }
@@ -382,6 +386,7 @@ public sealed class WeatherService : Observable
             _tempF = celsius is null ? null : celsius.GetValue<double>() * 9.0 / 5.0 + 32.0;
             Error = "";
             Raise(nameof(TempText)); Raise(nameof(ChipText)); Raise(nameof(ConditionGlyph));
+            Raise(nameof(HasReading));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -408,6 +413,7 @@ public sealed class WeatherService : Observable
         Station = "Open-Meteo";
         Error = "";
         Raise(nameof(TempText)); Raise(nameof(ChipText)); Raise(nameof(ConditionGlyph));
+        Raise(nameof(HasReading));
     }
 
     private static string DescribeWeatherCode(int code) => code switch

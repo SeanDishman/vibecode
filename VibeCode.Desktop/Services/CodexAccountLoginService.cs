@@ -483,7 +483,8 @@ public static class CodexAccountLoginService
         if (words.Length > 1 && words[0].Equals("codex", StringComparison.OrdinalIgnoreCase)) words = words[1..];
         if (words.Length == 0) return "Additional limit";
         return string.Join(" ", words.Select(word =>
-            word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..]));
+            word.Equals("gpt", StringComparison.OrdinalIgnoreCase) ? "GPT"
+                : word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..]));
     }
 
     private sealed record StoredIdentity(string? AccountId, string? Name, string? Email);

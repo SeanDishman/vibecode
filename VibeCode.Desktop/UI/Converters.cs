@@ -28,12 +28,7 @@ public static class WheelForward
         el.PreviewMouseWheel += (_, a) =>
         {
             if (a.Handled) return;
-            a.Handled = true;   // stop this control from swallowing the wheel
-            el.RaiseEvent(new MouseWheelEventArgs(a.MouseDevice, a.Timestamp, a.Delta)
-            {
-                RoutedEvent = UIElement.MouseWheelEvent,   // re-raise as bubbling so the enclosing ScrollViewer gets it
-                Source = el,
-            });
+            Forward(el, a);
         };
     }
 
@@ -62,10 +57,26 @@ public static class WheelForward
         };
     }
 
+    /// <summary>
+    /// Hand the wheel to whatever encloses this control, as a bubbling event.
+    /// <para>
+    /// Raised from the PARENT, never from the control itself. A bubble route starts AT its source, so re-raising on
+    /// the control put the control's own class handler first in line - and that handler is exactly what was eating
+    /// the wheel in the first place. FlowDocumentScrollViewer (what the markdown viewer is) swallows it outright,
+    /// which is why scrolling died whenever the pointer sat over an assistant reply while the plain TextBox
+    /// messages either side of it scrolled fine. A code block at its edge has the same problem with ScrollViewer's
+    /// handler. Starting one level up skips that handler and reaches the transcript.
+    /// </para>
+    /// </summary>
     private static void Forward(UIElement el, MouseWheelEventArgs a)
     {
-        a.Handled = true;
-        el.RaiseEvent(new MouseWheelEventArgs(a.MouseDevice, a.Timestamp, a.Delta) { RoutedEvent = UIElement.MouseWheelEvent, Source = el });
+        a.Handled = true;   // stop this control from swallowing the wheel
+        var parent = VisualTreeHelper.GetParent(el) as UIElement ?? el;
+        parent.RaiseEvent(new MouseWheelEventArgs(a.MouseDevice, a.Timestamp, a.Delta)
+        {
+            RoutedEvent = UIElement.MouseWheelEvent,
+            Source = parent,
+        });
     }
 
     /// <summary>Trap the wheel inside a popup / overlay: scroll the first nested ScrollViewer if it has room,
@@ -155,18 +166,58 @@ public static class AutoScroll
     private static void Attach(ScrollViewer sv)
     {
         var stick = true;   // start pinned to the newest message
+        // Layout passes still allowed to chase the bottom after the transcript (re)appears. The list is virtualized,
+        // so its extent is an ESTIMATE that firms up as rows realize: one ScrollToBottom lands short of the real end.
+        var chasing = 0;
+
+        void Pin()
+        {
+            chasing = 6;
+            sv.ScrollToBottom();
+        }
+
         sv.ScrollChanged += (_, a) =>
         {
-            if (a.ExtentHeightChange == 0)
+            // ScrollChanged BUBBLES. A markdown viewer or code block inside a message is a scroller of its own, and
+            // realizing one raises an extent change carrying ITS numbers - which read here as "the transcript grew"
+            // and scrolled the transcript for a reason that had nothing to do with it.
+            if (!ReferenceEquals(a.OriginalSource, sv)) return;
+
+            // Everything this behaviour does moves DOWN, so an upward move is always the user - and it wins even
+            // mid-chase, or reading a long transcript would be a fight against the scroller.
+            if (chasing > 0 && a.VerticalChange >= -1)
+            {
+                // Mid-chase every offset is ours, not the user's - reading stickiness off it would un-stick us at
+                // the halfway point the estimate happened to land on.
+                chasing--;
+                stick = true;
+                if (sv.ScrollableHeight > 0.5 && sv.VerticalOffset < sv.ScrollableHeight - 0.5) sv.ScrollToBottom();
+                else chasing = 0;
+                return;
+            }
+            chasing = 0;
+
+            // An explicit offset move IS a scroll, whatever the extent did in the SAME layout pass. A virtualized
+            // list refines its estimated extent as rows realize, so scrolling up arrives as one event carrying both
+            // changes - and reading only the extent there yanked the reader straight back to the bottom.
+            if (a.VerticalChange != 0 || a.ExtentHeightChange == 0)
                 // a plain scroll (user or programmatic): remember whether they're parked at the bottom
                 stick = sv.VerticalOffset >= sv.ScrollableHeight - 24;
             else if (stick)
                 // content grew (new output) while pinned - follow it; if they'd scrolled up, don't move
-                sv.ScrollToVerticalOffset(sv.ExtentHeight);
+                Pin();
         };
         // Expanding a card focuses/grows a child; stop WPF from auto-scrolling it into view (that's the "jumps to bottom").
         sv.AddHandler(FrameworkElement.RequestBringIntoViewEvent,
             new RequestBringIntoViewEventHandler((_, ev) => ev.Handled = true), true);
+
+        // A pane whose transcript is already IN it when the scroller is built never sees the extent grow, so following
+        // growth is not enough on its own - it would sit at the top until the agent happened to say something. That is
+        // every re-entry: leaving a chat parks the roster, and coming back rebuilds all five panes from scratch.
+        Pin();
+        // Navigating away only COLLAPSES the surface, which keeps the same scroller and skips Attach entirely. Re-pin
+        // when it comes back - unless the user had deliberately scrolled up, whose place is theirs to keep.
+        sv.IsVisibleChanged += (_, e) => { if (e.NewValue is true && stick) Pin(); };
     }
 
     // First ScrollViewer in the visual subtree (the scroll host inside a ListBox/control template).

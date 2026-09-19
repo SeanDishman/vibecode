@@ -89,6 +89,17 @@ public sealed class CodexMcpProjection
     public Dictionary<string, string> Environment { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+/// <summary>Approval scope for the Second Brain the user enabled in VibeCode. Export and deletion deliberately
+/// retain the CLI's approval behavior; routine lookups and the additive memory save can run in Auto mode.</summary>
+internal static class ManagedMemoryMcpPolicy
+{
+    public const string ServerId = "vibecode-second-brain-agentmemory-0.9.28";
+    public static readonly IReadOnlyList<string> PreapprovedTools = Array.AsReadOnly(new[]
+    {
+        "memory_recall", "memory_smart_search", "memory_sessions", "memory_audit", "memory_save",
+    });
+}
+
 /// <summary>
 /// Canonical MCP catalog plus loss-aware adapters for the four CLI integration surfaces used by VibeCode.
 /// This is a configuration adapter, not an MCP proxy: every CLI remains the MCP client and owns tool approvals.
@@ -511,6 +522,14 @@ public static partial class McpCatalog
             fields.Add($"startup_timeout_sec = {definition.StartupTimeoutSeconds}");
             fields.Add($"tool_timeout_sec = {definition.ToolTimeoutSeconds}");
             fields.Add("enabled = true");
+            if (definition.IsStdio && string.Equals(definition.Id, ManagedMemoryMcpPolicy.ServerId, StringComparison.Ordinal))
+            {
+                // approval_policy=never prohibits prompts; it does not grant MCP permission. The managed proxy
+                // lacks read-only annotations, so even memory_recall was rejected in Auto mode. Preapprove only
+                // these known tools on our own registration, leaving all other servers and tools unchanged.
+                fields.Add("tools = { " + string.Join(", ", ManagedMemoryMcpPolicy.PreapprovedTools.Select(tool =>
+                    TomlString(tool) + " = { approval_mode = \"approve\" }")) + " }");
+            }
             // Codex's -c dotted-path parser does not apply TOML quoted-key semantics to path segments: quoting a
             // safe name makes the quote characters part of the server name. Validation deliberately limits names
             // to bare TOML-key characters, so use the segment verbatim here.

@@ -1,0 +1,280 @@
+<Window x:Class="VibeCode.SessionSetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:VibeCode.UI"
+        Title="Session setup" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Width="560" Height="720" MinWidth="480" MinHeight="520"
+        Background="{StaticResource Bg0}" WindowStartupLocation="CenterOwner"
+        FontFamily="{StaticResource Ui}" FontSize="13" ShowInTaskbar="False"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolVis" />
+        <ui:NonEmptyToVisibilityConverter x:Key="ShowIfLocal" />
+
+        <!-- One selectable row: glyph, label, secondary line, and a check mark that moves with IsSelected.
+             Shared by all three lists so model / thinking / permission read as one control, not three. -->
+        <Style x:Key="ChoiceRow" TargetType="Button" BasedOn="{StaticResource GhostButton}">
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="11,9" />
+            <Setter Property="Margin" Value="0,0,0,3" />
+        </Style>
+
+        <!-- One team-size number. The whole 4-17 range fits on two lines of chips, so the size is a click rather
+             than a drag: a slider that lands on 12 when you meant 13 is a worse answer than no slider. GhostButton
+             template-binds its Background, so selecting one is a plain setter rather than a second template. -->
+        <Style x:Key="SizeChip" TargetType="Button" BasedOn="{StaticResource GhostButton}">
+            <Setter Property="MinWidth" Value="38" />
+            <Setter Property="Padding" Value="8,7" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+                    <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                BorderThickness="0,0,0,1" Padding="22,16">
+            <StackPanel>
+                <TextBlock x:Name="Heading" Text="Demon Mode setup" FontFamily="{StaticResource Display}"
+                           FontSize="17" FontWeight="SemiBold" />
+                <TextBlock x:Name="Subheading" Foreground="{StaticResource Muted}" FontSize="11.5"
+                           Margin="0,4,0,0" TextWrapping="Wrap"
+                           Text="Every session in the team starts with these. You can change any pane on its own afterwards." />
+            </StackPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                BorderThickness="0,1,0,0" Padding="18,12">
+            <!-- Buttons are docked FIRST so they claim their natural width; the summary is the fill child and
+                 ellipsizes into whatever is left. Docking the summary first let Cli's wider mono face squeeze
+                 "Cancel" down to "el". -->
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="CancelButton" Style="{StaticResource GhostButton}" Content="Cancel"
+                            Margin="0,0,8,0" Click="OnCancel" IsCancel="True" />
+                    <Button x:Name="ConfirmButton" Style="{StaticResource PrimaryButton}" Content="Start the team"
+                            Padding="18,8" Click="OnConfirm" IsDefault="True" />
+                </StackPanel>
+                <TextBlock Text="{Binding Summary}" VerticalAlignment="Center"
+                           Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis"
+                           Margin="4,0,12,0" />
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22,18">
+            <StackPanel>
+
+                <!-- 1. TEAM SIZE. Team-only, and first: it is the one answer that decides how much of the machine
+                     and the account the rest of this dialog is about to spend. A roster is never resized while it
+                     runs - the wall, the briefs and the lane plan are all built against the number chosen here - so
+                     a single pane's ⋮ menu must not offer it either. -->
+                <StackPanel Margin="0,0,0,18" Visibility="{Binding IsTeam, Converter={StaticResource BoolVis}}">
+                    <TextBlock Text="TEAM SIZE" Style="{StaticResource Caption}" FontSize="9.5" Margin="2,0,0,7" />
+                    <ItemsControl ItemsSource="{Binding TeamSizes}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource SizeChip}" Click="OnPickTeamSize" Tag="{Binding Count}"
+                                        Content="{Binding Count}"
+                                        AutomationProperties.Name="{Binding Count, StringFormat={}{0} sessions}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{Binding TeamSizeNote}" FontSize="10.5" TextWrapping="Wrap"
+                               Foreground="{StaticResource Faint}" Margin="2,2,0,0" />
+                </StackPanel>
+
+                <!-- 2. ACCOUNT. Team-only: a running session cannot change the login it authenticated with, so a
+                     single pane's ⋮ menu must not offer one. Every provider's saved logins are in one list - which
+                     AI answers and which account pays for it are the same decision. -->
+                <StackPanel Margin="0,0,0,18"
+                            Visibility="{Binding HasAccounts, Converter={StaticResource BoolVis}}">
+                    <TextBlock Text="AI ACCOUNT" Style="{StaticResource Caption}" FontSize="9.5" Margin="2,0,0,7" />
+                    <ItemsControl ItemsSource="{Binding Accounts}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource ChoiceRow}" Click="OnPickAccount"
+                                        AutomationProperties.Name="{Binding Label}">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Right" Text="&#xE73E;" FontFamily="{StaticResource Icons}"
+                                                   FontSize="11" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
+                                                   Margin="10,0,0,0"
+                                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolVis}}" />
+                                        <!-- The same round monogram the account manager uses, so a row is recognisable
+                                             as the account you picked there. -->
+                                        <Border DockPanel.Dock="Left" Width="26" Height="26" CornerRadius="13"
+                                                Background="{StaticResource AccentSoft}" VerticalAlignment="Center"
+                                                Margin="0,0,10,0">
+                                            <TextBlock Text="{Binding Initial}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Accent}" HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" />
+                                        </Border>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Label}" FontSize="12.5" Foreground="{StaticResource Text}" />
+                                            <TextBlock Text="{Binding Sub}" FontSize="10.5" TextWrapping="Wrap"
+                                                       Margin="0,2,0,0">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource Faint}" />
+                                                        <Style.Triggers>
+                                                            <!-- A broken saved login is listed rather than hidden (a
+                                                                 missing account reads as a deleted one), but a team on
+                                                                 it would fail sixteen times over. Say so. -->
+                                                            <DataTrigger Binding="{Binding Usable}" Value="False">
+                                                                <Setter Property="Foreground" Value="{StaticResource Red}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- 3. MODEL -->
+                <TextBlock Text="MODEL" Style="{StaticResource Caption}" FontSize="9.5" Margin="2,0,0,7" />
+                <ItemsControl ItemsSource="{Binding Models}"
+                              Visibility="{Binding HasModels, Converter={StaticResource BoolVis}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource ChoiceRow}" Click="OnPickModel" Tag="{Binding Value}"
+                                    AutomationProperties.Name="{Binding Display}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="&#xE73E;" FontFamily="{StaticResource Icons}"
+                                               FontSize="11" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
+                                               Margin="10,0,0,0"
+                                               Visibility="{Binding IsSelected, Converter={StaticResource BoolVis}}" />
+                                    <TextBlock DockPanel.Dock="Left" Text="&#xE9D2;" FontFamily="{StaticResource Icons}"
+                                               FontSize="12" Width="18" Foreground="{StaticResource Muted}"
+                                               VerticalAlignment="Center" Margin="0,0,10,0" TextWrapping="NoWrap" />
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Display}" FontSize="12.5" Foreground="{StaticResource Text}" />
+                                        <TextBlock Text="{Binding Description}" FontSize="10.5" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource Faint}" Margin="0,2,0,0"
+                                                   Visibility="{Binding Description, Converter={StaticResource ShowIfLocal}}" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 4. THINKING -->
+                <TextBlock Text="THINKING" Style="{StaticResource Caption}" FontSize="9.5" Margin="2,18,0,7" />
+                <ItemsControl ItemsSource="{Binding Efforts}"
+                              Visibility="{Binding HasEfforts, Converter={StaticResource BoolVis}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource ChoiceRow}" Click="OnPickEffort" Tag="{Binding Value}"
+                                    AutomationProperties.Name="{Binding Label}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="&#xE73E;" FontFamily="{StaticResource Icons}"
+                                               FontSize="11" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
+                                               Margin="10,0,0,0"
+                                               Visibility="{Binding IsSelected, Converter={StaticResource BoolVis}}" />
+                                    <!-- the same ●○ meter the composer's effort pill draws -->
+                                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Width="60"
+                                                VerticalAlignment="Center" Margin="0,0,10,0">
+                                        <TextBlock Text="{Binding Filled}" FontSize="9" Foreground="{StaticResource Accent}"
+                                                   VerticalAlignment="Center" TextWrapping="NoWrap" />
+                                        <TextBlock Text="{Binding Empty}" FontSize="9" Foreground="{StaticResource Faint}"
+                                                   VerticalAlignment="Center" TextWrapping="NoWrap" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}" FontSize="12.5" Foreground="{StaticResource Text}" />
+                                        <TextBlock Text="{Binding Description}" FontSize="10.5" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource Faint}" Margin="0,2,0,0"
+                                                   Visibility="{Binding Description, Converter={StaticResource ShowIfLocal}}" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="{Binding EffortEmptyText}" FontSize="11" Foreground="{StaticResource Faint}"
+                           TextWrapping="Wrap" Margin="2,0,0,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasEfforts}" Value="False">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <!-- 5. PERMISSIONS -->
+                <TextBlock Text="PERMISSIONS" Style="{StaticResource Caption}" FontSize="9.5" Margin="2,18,0,7" />
+                <ItemsControl ItemsSource="{Binding PermissionModes}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource ChoiceRow}" Click="OnPickMode" Tag="{Binding Value}"
+                                    AutomationProperties.Name="{Binding Label}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="&#xE73E;" FontFamily="{StaticResource Icons}"
+                                               FontSize="11" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
+                                               Margin="10,0,0,0"
+                                               Visibility="{Binding IsSelected, Converter={StaticResource BoolVis}}" />
+                                    <TextBlock DockPanel.Dock="Left" Text="{Binding Glyph}" FontFamily="{StaticResource Icons}"
+                                               FontSize="12" Width="18" VerticalAlignment="Center" Margin="0,0,10,0"
+                                               TextWrapping="NoWrap">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource Muted}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Value}" Value="auto">
+                                                        <Setter Property="Foreground" Value="{StaticResource Green}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Value}" Value="plan">
+                                                        <Setter Property="Foreground" Value="{StaticResource Blue}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Value}" Value="bypassPermissions">
+                                                        <Setter Property="Foreground" Value="{StaticResource Red}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}" FontSize="12.5">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource Text}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Value}" Value="bypassPermissions">
+                                                            <Setter Property="Foreground" Value="{StaticResource Red}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding Description}" FontSize="10.5" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource Faint}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

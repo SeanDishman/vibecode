@@ -9,7 +9,7 @@
         FontFamily="{StaticResource Ui}" FontSize="13"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="ClearType"
-        ShowInTaskbar="False">
+        ShowInTaskbar="False" PreviewKeyDown="OnSettingsSearchKeyDown">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="42" CornerRadius="0" GlassFrameThickness="-1"
@@ -348,6 +348,182 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Foreground" Value="{StaticResource Muted}" />
         </Style>
+
+        <!-- ===== one extension, one shape =====
+             The five cards in Extensions used to hand-roll this header each, and drifted: three ran their body
+             full-bleed while Phone indented it, and the in-card rule was a hairline you could not see. Defined
+             once here so the whole pane keeps a single left rail down the title column. -->
+        <Style TargetType="ui:ExtensionCard">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="GlyphFont" Value="{StaticResource Icons}" />
+            <Setter Property="Tint" Value="{StaticResource Accent}" />
+            <Setter Property="TintSoft" Value="{StaticResource AccentSoft}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ui:ExtensionCard">
+                        <Border Style="{StaticResource Card}" SnapsToDevicePixels="True">
+                            <StackPanel>
+                                <!-- header: tile | title + description | pill + switch -->
+                                <DockPanel Margin="16,14,16,14">
+                                    <Border DockPanel.Dock="Left" Width="34" Height="34" VerticalAlignment="Top"
+                                            CornerRadius="{StaticResource Rad10}" Background="{TemplateBinding TintSoft}"
+                                            Margin="0,0,13,0">
+                                        <TextBlock Text="{TemplateBinding Glyph}" FontFamily="{TemplateBinding GlyphFont}"
+                                                   FontSize="16" Foreground="{TemplateBinding Tint}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                                VerticalAlignment="Center" Margin="14,0,0,0">
+                                        <ContentPresenter ContentSource="Status" VerticalAlignment="Center"
+                                                          Margin="0,0,10,0" />
+                                        <ContentPresenter VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{TemplateBinding Title}" FontSize="13.5" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource Text}" />
+                                        <TextBlock Text="{TemplateBinding Description}" FontSize="11.5"
+                                                   Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                                                   Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <!-- body: indented to the title column, so 63px is the page's one left rail -->
+                                <Border x:Name="body" Visibility="Collapsed" Padding="16,14,16,16"
+                                        BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,1,0,0">
+                                    <ContentPresenter ContentSource="Body" Margin="47,0,0,0" />
+                                </Border>
+
+                                <!-- and what turning it on would get you, while it is off -->
+                                <TextBlock x:Name="hint" Text="{TemplateBinding OffHint}" Visibility="Collapsed"
+                                           FontSize="11" Foreground="{StaticResource Faint}" TextWrapping="Wrap"
+                                           Margin="63,0,16,15" />
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsOn" Value="True">
+                                <Setter TargetName="body" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsOn" Value="False">
+                                <Setter TargetName="hint" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <!-- after the IsOn pair: a card with nothing to show keeps its header only -->
+                            <Trigger Property="Body" Value="{x:Null}">
+                                <Setter TargetName="body" Property="Visibility" Value="Collapsed" />
+                            </Trigger>
+                            <Trigger Property="OffHint" Value="">
+                                <Setter TargetName="hint" Property="Visibility" Value="Collapsed" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- State pill beside a switch. Only ever says something the switch cannot ("Connected", "Needs a key"),
+             so it is never the same word twice on one row. -->
+        <Style x:Key="Pill" TargetType="Border">
+            <Setter Property="CornerRadius" Value="{StaticResource Rad99}" />
+            <Setter Property="Padding" Value="9,3" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="PillText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextWrapping" Value="NoWrap" />
+        </Style>
+
+        <!-- The one secondary button on this page. Disconnect, Search, Use my location, Open maps and Remove key
+             were five different treatments - a borderless ghost, a saturated blue slab, a bare word - which is
+             most of why the pane read as unfinished. -->
+        <Style x:Key="Outline" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="13,6" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ob" Background="{TemplateBinding Background}" BorderBrush="{StaticResource Border}"
+                                BorderThickness="1" CornerRadius="{StaticResource Rad8}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ob" Property="Background" Value="{StaticResource Bg3}" />
+                                <Setter TargetName="ob" Property="BorderBrush" Value="{StaticResource Overlay}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ob" Property="Background" Value="{StaticResource Bg1}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Filled primary: exactly one per setup flow, so the eye has a single place to land. -->
+        <Style x:Key="PrimaryAccent" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource OnAccent}" />
+            <Setter Property="Background" Value="{StaticResource Accent}" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="15,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="pb" Background="{TemplateBinding Background}"
+                                CornerRadius="{StaticResource Rad10}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="pb" Property="Background" Value="{StaticResource AccentHover}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="pb" Property="Background" Value="{StaticResource Overlay}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PrimarySpotify" TargetType="Button" BasedOn="{StaticResource PrimaryAccent}">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="{StaticResource SpotifyGreen}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="sb" Background="{TemplateBinding Background}"
+                                CornerRadius="{StaticResource Rad10}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="sb" Property="Background" Value="{StaticResource SpotifyGreenHover}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="sb" Property="Background" Value="{StaticResource SpotifyGreenPress}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="sb" Property="Background" Value="{StaticResource Overlay}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <DockPanel>
@@ -366,6 +542,25 @@
             </DockPanel>
         </Border>
 
+        <Border DockPanel.Dock="Top" Background="{StaticResource Bg1}" Padding="16,10"
+                BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,0,0,1">
+            <Grid>
+                <TextBox x:Name="SettingsSearchBox" FontSize="13" Padding="33,8,38,8"
+                         TextChanged="OnSettingsSearchChanged" AutomationProperties.Name="Search settings"
+                         ToolTip="Search settings across all categories (Ctrl+F)" />
+                <TextBlock Text="&#xE721;" FontFamily="{StaticResource Icons}" Foreground="{StaticResource Muted}"
+                           Margin="11,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left" IsHitTestVisible="False" />
+                <TextBlock x:Name="SettingsSearchHint" Text="Search settings…" Foreground="{StaticResource Faint}"
+                           Margin="34,0,38,0" VerticalAlignment="Center" IsHitTestVisible="False" />
+                <Button x:Name="ClearSettingsSearch" HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Style="{StaticResource GhostButton}" Width="28" Height="28" Margin="0,0,5,0" Padding="0"
+                        Visibility="Collapsed" Click="OnClearSettingsSearch" ToolTip="Clear search (Esc)"
+                        AutomationProperties.Name="Clear settings search">
+                    <TextBlock Text="&#xE711;" FontFamily="{StaticResource Icons}" FontSize="11" />
+                </Button>
+            </Grid>
+        </Border>
+
         <Grid>
             <Grid.ColumnDefinitions>
                 <!-- Wide enough for the longest label ("Bridge & agents") in CLI mode's monospace face, which
@@ -380,6 +575,12 @@
                 <ListBox x:Name="Rail" Background="Transparent" BorderThickness="0" Padding="0,8"
                          ItemContainerStyle="{StaticResource RailItem}" SelectionChanged="OnRailChanged"
                          SelectedIndex="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBoxItem AutomationProperties.Name="General">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE713;" FontFamily="{StaticResource Icons}" FontSize="15" Width="22" VerticalAlignment="Center" />
+                            <TextBlock Text="General" FontSize="13" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ListBoxItem>
                     <ListBoxItem AutomationProperties.Name="Appearance">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE771;" FontFamily="{StaticResource Icons}" FontSize="15" Width="22" VerticalAlignment="Center" />
@@ -439,8 +640,87 @@
 
             <!-- ===== content panes ===== -->
             <Grid Grid.Column="1">
+                <Grid x:Name="SettingsSearchPane" Visibility="Collapsed" Margin="24,22,20,20">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Search results" FontFamily="{StaticResource Display}" FontSize="19" FontWeight="SemiBold" />
+                    <TextBlock x:Name="SettingsSearchCount" Grid.Row="1" Foreground="{StaticResource Muted}"
+                               FontSize="12" Margin="0,6,0,14" AutomationProperties.LiveSetting="Polite" />
+                    <ListBox x:Name="SettingsSearchResults" Grid.Row="2" Background="Transparent" BorderThickness="0"
+                             HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             AutomationProperties.Name="Settings search results">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0,0,0,7" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="result" Background="Transparent" CornerRadius="{StaticResource Rad8}">
+                                                <ContentPresenter HorizontalAlignment="Stretch" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="result" Property="Background" Value="{StaticResource Bg3}" />
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="result" Property="Background" Value="{StaticResource AccentSoft}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch"
+                                        Padding="12,11" Focusable="False" Click="OnOpenSettingsSearchResult"
+                                        AutomationProperties.Name="{Binding Title}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Category}" Foreground="{StaticResource Accent}" FontSize="11" />
+                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource Text}" FontWeight="SemiBold"
+                                                   FontSize="13" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                        <TextBlock Text="{Binding Description}" Foreground="{StaticResource Muted}" FontSize="11.5"
+                                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="46" Margin="0,4,0,0" />
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock x:Name="SettingsSearchEmpty" Grid.Row="2" VerticalAlignment="Top" Margin="12,20,12,0"
+                               Text="No settings match. Try a different word or clear the search."
+                               Foreground="{StaticResource Muted}" TextWrapping="Wrap" Visibility="Collapsed" />
+                </Grid>
+                <!-- General -->
+                <ScrollViewer x:Name="PaneGeneral" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="30,24,30,30" MaxWidth="560" HorizontalAlignment="Left">
+                        <TextBlock Text="General" FontFamily="{StaticResource Display}" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock Text="How VibeCode behaves as an application — what the close button means while agents are still working."
+                                   Foreground="{StaticResource Muted}" FontSize="12" Margin="0,6,0,20" TextWrapping="Wrap" />
+
+                        <ui:SettingGroup Header="WHEN YOU CLOSE THE WINDOW">
+                            <ui:SettingCard Glyph="&#xE7C4;" Title="Run in background"
+                                            Description="On: closing the window puts VibeCode in the notification area and every chat, Bridge peer and Demon worker keeps coding. Click the icon to bring the window back, or right-click it to quit. Off: the close button ends VibeCode there and then, and every running agent with it.">
+                                <ToggleButton x:Name="RunInBackgroundToggle" Style="{StaticResource Switch}"
+                                              Checked="OnRunInBackgroundChanged" Unchecked="OnRunInBackgroundChanged"
+                                              AutomationProperties.Name="Run in background" />
+                            </ui:SettingCard>
+                        </ui:SettingGroup>
+
+                        <TextBlock Text="Notifications are the way a background VibeCode reaches you — turn on “When a chat finishes” under Notifications and a finished agent will still say so with no window open."
+                                   Foreground="{StaticResource Faint}" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </ScrollViewer>
+
                 <!-- Appearance -->
-                <ScrollViewer x:Name="PaneAppearance" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer x:Name="PaneAppearance" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
                     <StackPanel Margin="28,22,28,28" MaxWidth="540" HorizontalAlignment="Left">
                         <TextBlock Text="Appearance" FontFamily="{StaticResource Display}" FontSize="16" FontWeight="SemiBold" />
                         <TextBlock Text="Control how conversations are presented and pick the art behind the chat."
@@ -513,8 +793,19 @@
                                 </StackPanel>
                             </Button>
                         </UniformGrid>
-                        <TextBlock Text="Switching modes restarts VibeCode; open chats are saved and reopened automatically."
+                        <TextBlock Text="Switching modes re-skins VibeCode straight away. Running chats keep running — nothing restarts."
                                    Foreground="{StaticResource Faint}" FontSize="10.5" Margin="0,6,0,16" TextWrapping="Wrap" />
+
+                        <!-- Borderless belongs to Custom background: it is the background art it uncovers.
+                             RefreshModeCards() hides the whole group in CLI mode rather than greying it out. -->
+                        <ui:SettingGroup x:Name="BorderlessSection" Header="SURFACES">
+                            <ui:SettingCard Glyph="&#xE737;" Title="Borderless"
+                                            Description="Drops the grey panels. The titlebar, sidebar, chat and every Bridge pane stop painting themselves, so your background is the background of the whole window and each region is picked out by a thin black outline instead. Your messages, tool cards and code blocks keep their fill so they stay readable — turn Art visibility down if a busy image fights the text.">
+                                <ToggleButton x:Name="BorderlessToggle" Style="{StaticResource Switch}"
+                                              Checked="OnBorderlessChanged" Unchecked="OnBorderlessChanged"
+                                              AutomationProperties.Name="Borderless" />
+                            </ui:SettingCard>
+                        </ui:SettingGroup>
 
                         <ui:SettingGroup Header="CHAT">
                             <ui:SettingCard Glyph="&#xE8A7;" Title="Compact mode"
@@ -706,7 +997,7 @@
                                             Description="Each Bridge can grow to this many agents. Lowering the limit never closes agents that are already running. Nine is the default."
                                             ValueText="{Binding Value, ElementName=BridgeAgentLimitSlider, StringFormat={}{0:0}}">
                                 <ui:SettingCard.Footer>
-                                    <Slider x:Name="BridgeAgentLimitSlider" Style="{StaticResource DimSlider}" Minimum="4" Maximum="16" TickFrequency="1"
+                                    <Slider x:Name="BridgeAgentLimitSlider" Style="{StaticResource DimSlider}" Minimum="4" Maximum="17" TickFrequency="1"
                                             IsSnapToTickEnabled="True" SmallChange="1" LargeChange="2"
                                             ValueChanged="OnBridgeAgentLimitChanged"
                                             AutomationProperties.Name="Maximum agents per Bridge" />
@@ -717,6 +1008,12 @@
                                 <ToggleButton x:Name="BridgeRealtimeSharingToggle" Style="{StaticResource Switch}"
                                               Checked="OnBridgeRealtimeSharingChanged" Unchecked="OnBridgeRealtimeSharingChanged"
                                               AutomationProperties.Name="Real-time bridge sharing" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE8BD;" Title="Agents can message each other"
+                                            Description="Any agent can send a prompt straight to another with @@MSG agent=N — to hand over work outside its lane, ask the agent that owns an area, or escalate to the manager. Without this the status board is the only sideways channel. Chains are cut after a few hops so two agents cannot answer each other forever.">
+                                <ToggleButton x:Name="BridgePeerMessagingToggle" Style="{StaticResource Switch}"
+                                              Checked="OnBridgePeerMessagingChanged" Unchecked="OnBridgePeerMessagingChanged"
+                                              AutomationProperties.Name="Agents can message each other" />
                             </ui:SettingCard>
                         </ui:SettingGroup>
 
@@ -747,8 +1044,70 @@
                             </ui:SettingCard>
                         </ui:SettingGroup>
 
+                        <ui:SettingGroup Header="SUPERVISION"
+                                         Description="A dispatched agent can hang mid-tool, end a turn with nothing to say, loop, or die — and none of those announce themselves. Supervision watches every delegated agent and escalates on a bounded ladder: ask it to finish, then cancel and re-run it on the same task, then hand the task to the orchestrator. Every step is written to supervision-log.txt.">
+                            <ui:SettingCard Glyph="&#xE9D9;" Title="Supervise delegated agents"
+                                            Description="Applies to any Bridge with a manager. Always on in Demon Mode, where a read-only worker has no other way to be rescued.">
+                                <ToggleButton x:Name="SupervisionEnabledToggle" Style="{StaticResource Switch}"
+                                              Checked="OnSupervisionEnabledChanged" Unchecked="OnSupervisionEnabledChanged"
+                                              AutomationProperties.Name="Supervise delegated agents" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE916;" Title="Stalled after"
+                                            Description="Seconds an agent may run without producing any output before it counts as stalled."
+                                            ValueText="{Binding Value, ElementName=SupervisionStaleSlider, StringFormat={}{0:0}s}"
+                                            IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}">
+                                <ui:SettingCard.Footer>
+                                    <Slider x:Name="SupervisionStaleSlider" Style="{StaticResource DimSlider}" Minimum="30" Maximum="1800"
+                                            TickFrequency="30" IsSnapToTickEnabled="True" SmallChange="30" LargeChange="120"
+                                            ValueChanged="OnSupervisionStaleChanged" AutomationProperties.Name="Stalled after" />
+                                </ui:SettingCard.Footer>
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE823;" Title="Reply window after a nudge"
+                                            Description="Seconds a nudged agent has to answer before the supervisor escalates to a restart."
+                                            ValueText="{Binding Value, ElementName=SupervisionGraceSlider, StringFormat={}{0:0}s}"
+                                            IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}">
+                                <ui:SettingCard.Footer>
+                                    <Slider x:Name="SupervisionGraceSlider" Style="{StaticResource DimSlider}" Minimum="30" Maximum="600"
+                                            TickFrequency="15" IsSnapToTickEnabled="True" SmallChange="15" LargeChange="60"
+                                            ValueChanged="OnSupervisionGraceChanged" AutomationProperties.Name="Reply window after a nudge" />
+                                </ui:SettingCard.Footer>
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE72C;" Title="Restarts before takeover"
+                                            Description="How many times a stuck agent is cancelled and re-run on the same task before the orchestrator completes it directly. Zero means go straight to takeover."
+                                            ValueText="{Binding Value, ElementName=SupervisionRestartsSlider, StringFormat={}{0:0}}"
+                                            IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}">
+                                <ui:SettingCard.Footer>
+                                    <Slider x:Name="SupervisionRestartsSlider" Style="{StaticResource DimSlider}" Minimum="0" Maximum="3"
+                                            TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="1"
+                                            ValueChanged="OnSupervisionRestartsChanged" AutomationProperties.Name="Restarts before takeover" />
+                                </ui:SettingCard.Footer>
+                            </ui:SettingCard>
+                        </ui:SettingGroup>
+
+                        <ui:SettingGroup Header="DEMON MODE"
+                                         Description="A team of 4 to 17 sessions on one project: an orchestrator you type into, and read-only workers it plans for and dispatches to. The orchestrator does not review their work — it plans, dispatches, and keeps the team alive. This switch is the only way in and out: turning it on asks which folder to run in, how many sessions to open and which account they run on, then starts the team there; turning it off stops every session. A Demon team is never resumed later, so it is off again each time VibeCode starts.">
+                            <ui:SettingCard Glyph="&#xE945;" Title="Run a Demon Mode team"
+                                            Description="Asks for a project folder, then for the team size (4–17 sessions, remembered for next time), the account and the model. The sessions start a fraction of a second apart so the wall stays usable while the team comes up. Switch off to end the team and stop every session.">
+                                <ToggleButton x:Name="DemonModeToggle" Style="{StaticResource Switch}"
+                                              Checked="OnDemonModeChanged" Unchecked="OnDemonModeChanged"
+                                              AutomationProperties.Name="Run a Demon Mode team" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE8A1;" Title="Orchestrator reviews worker output"
+                                            Description="Off by design: the orchestrator plans and dispatches only, and records a lane as done when its worker reports. Turn this on to have it check, correct and validate each result before moving on — more thorough, and considerably slower. Set it before you start a team; it is read when the team is briefed.">
+                                <ToggleButton x:Name="DemonReviewToggle" Style="{StaticResource Switch}"
+                                              Checked="OnDemonReviewChanged" Unchecked="OnDemonReviewChanged"
+                                              AutomationProperties.Name="Orchestrator reviews worker output" />
+                            </ui:SettingCard>
+                        </ui:SettingGroup>
+
                         <ui:SettingGroup Header="DUAL MONITOR"
                                          Description="Both windows share one app and close together.">
+                            <!-- Demon Mode and the second display are mutually exclusive (DualMonitorBridgePolicy).
+                                 Both switches are disabled while a team is running rather than accepted and quietly
+                                 ignored, and this line is why - a dead switch with no reason is worse than none. -->
+                            <TextBlock x:Name="DemonBlocksDualMonitorNote" Visibility="Collapsed"
+                                       FontSize="11" Foreground="{StaticResource Amber}" TextWrapping="Wrap"
+                                       Margin="2,0,0,10" />
                             <ui:SettingCard Glyph="&#xE7F4;" Title="Spread Bridge across displays"
                                             Description="With 3 or more agents, keep agents 1–2 here and open the remaining Bridge panes on another display.">
                                 <ToggleButton x:Name="DualMonitorBridgeToggle" Style="{StaticResource Switch}"
@@ -1022,6 +1381,18 @@
                                     </StackPanel>
                                 </ui:SettingCard.Footer>
                             </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE83D;" Title="Agent activity monitor"
+                                            Description="See each agent's current activity, step and stage. Reporting and event logging continue while the dashboard is closed. Open it whenever you want to view progress. Existing chats pick up setting changes on their next turn.">
+                                <ToggleButton x:Name="MitreMonitorToggle" Style="{StaticResource Switch}"
+                                              Checked="OnMitreMonitorChanged" Unchecked="OnMitreMonitorChanged"
+                                              AutomationProperties.Name="Enable the agent activity dashboard" />
+                                <ui:SettingCard.Footer>
+                                    <Button Style="{StaticResource GhostButton}" Padding="13,6" HorizontalAlignment="Left"
+                                            Click="OnOpenMitreMonitor" AutomationProperties.Name="Open the Agent activity monitor">
+                                        <TextBlock Text="Open MITRE monitor" FontSize="12" />
+                                    </Button>
+                                </ui:SettingCard.Footer>
+                            </ui:SettingCard>
                             <ui:SettingCard Glyph="&#xE7F4;" Title="Open on the second display"
                                             Description="Sends it to whichever display VibeCode is not on, so watching it never means covering the thing it is reporting on. Drag it elsewhere and it stays there — this only decides where it goes when it would otherwise land on top of the app.">
                                 <ToggleButton x:Name="TelemetryCompanionDisplayToggle" Style="{StaticResource Switch}"
@@ -1051,6 +1422,12 @@
                         <CheckBox x:Name="ShowAllCheck" Content="Show all Claude Code projects" VerticalAlignment="Center" FontSize="12.5"
                                   Checked="OnShowAllChanged" Unchecked="OnShowAllChanged"
                                   AutomationProperties.Name="Show all Claude Code projects" />
+
+                        <TextBlock Text="Your chats stay in the sidebar when you switch Claude, Codex or Grok accounts — each row shows the login it runs under, and it keeps running under that login. Turn this on for the old behaviour, where every account has its own separate workspace."
+                                   Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,16,0,10" TextWrapping="Wrap" />
+                        <CheckBox x:Name="IsolateChatsCheck" Content="Only show chats from the active account" VerticalAlignment="Center" FontSize="12.5"
+                                  Checked="OnIsolateChatsChanged" Unchecked="OnIsolateChatsChanged"
+                                  AutomationProperties.Name="Only show chats from the active account" />
 
                         <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="0,20" />
 
@@ -1229,108 +1606,100 @@
 
                 <!-- Extensions -->
                 <ScrollViewer x:Name="PaneExtensions" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
-                    <StackPanel Margin="28,22,28,28" MaxWidth="540" HorizontalAlignment="Left"
-                                DataContext="{x:Static svc:SpotifyService.Instance}">
-                        <TextBlock Text="Extensions" FontFamily="{StaticResource Display}" FontSize="16" FontWeight="SemiBold" />
-                        <TextBlock Text="Connect the tools you use alongside Claude Code."
-                                   Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,6,0,16" TextWrapping="Wrap" />
+                    <StackPanel Margin="30,24,30,30" MaxWidth="560" HorizontalAlignment="Left">
+                        <TextBlock Text="Extensions" FontFamily="{StaticResource Display}" FontSize="19" FontWeight="SemiBold" />
+                        <TextBlock Text="Optional services and titlebar tools that run alongside Claude Code. Switching one off puts away everything it added."
+                                   Foreground="{StaticResource Muted}" FontSize="12" Margin="0,6,0,20" TextWrapping="Wrap" />
 
-                        <!-- Spotify card -->
-                        <Border Style="{StaticResource Card}" Padding="16">
-                            <StackPanel>
-                                <!-- header -->
-                                <DockPanel>
-                                    <Border DockPanel.Dock="Left" Width="32" Height="32" CornerRadius="{StaticResource Rad8}"
-                                            Background="{StaticResource SpotifyGreenSoft}" Margin="0,0,12,0">
-                                        <TextBlock Text="&#xEC4F;" FontFamily="{StaticResource Icons}" FontSize="16"
-                                                   Foreground="{StaticResource SpotifyGreen}" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" />
+                        <!-- ===== Spotify ===== -->
+                        <ui:ExtensionCard DataContext="{x:Static svc:SpotifyService.Instance}"
+                                          Glyph="&#xEC4F;" Tint="{StaticResource SpotifyGreen}"
+                                          TintSoft="{StaticResource SpotifyGreenSoft}"
+                                          Title="Spotify" Description="Control playback from VibeCode"
+                                          IsOn="{Binding Enabled}"
+                                          OffHint="Turn on to connect your Spotify account and drive playback without leaving the app.">
+                            <ToggleButton Style="{StaticResource Switch}" IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                          Checked="OnSpotifyEnabledChanged" Unchecked="OnSpotifyEnabledChanged"
+                                          AutomationProperties.Name="Enable Spotify" />
+
+                            <ui:ExtensionCard.Status>
+                                <Grid Visibility="{Binding Enabled, Converter={StaticResource BoolVis}}">
+                                    <Border Style="{StaticResource Pill}" Background="{StaticResource SpotifyGreenSoft}"
+                                            Visibility="{Binding IsConnected, Converter={StaticResource BoolVis}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Ellipse Width="6" Height="6" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                     Fill="{StaticResource SpotifyGreen}" />
+                                            <TextBlock Text="Connected" Style="{StaticResource PillText}"
+                                                       Foreground="{StaticResource SpotifyGreen}" />
+                                        </StackPanel>
                                     </Border>
-                                    <ToggleButton DockPanel.Dock="Right" Style="{StaticResource Switch}" VerticalAlignment="Center"
-                                                  IsChecked="{Binding Enabled, Mode=TwoWay}" Checked="OnSpotifyEnabledChanged"
-                                                  Unchecked="OnSpotifyEnabledChanged" AutomationProperties.Name="Enable Spotify" />
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="Spotify" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
-                                        <TextBlock Text="Control playback from VibeCode" FontSize="11.5" Foreground="{StaticResource Muted}" />
-                                    </StackPanel>
-                                </DockPanel>
+                                    <Border Style="{StaticResource Pill}" Background="{StaticResource AmberSoft}"
+                                            Visibility="{Binding IsConnected, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}">
+                                        <TextBlock Text="Needs setup" Style="{StaticResource PillText}"
+                                                   Foreground="{StaticResource Amber}" />
+                                    </Border>
+                                </Grid>
+                            </ui:ExtensionCard.Status>
 
-                                <!-- enabled body -->
-                                <StackPanel Visibility="{Binding Enabled, Converter={StaticResource BoolVis}}">
-                                    <Rectangle Height="1" Fill="{StaticResource BorderHairline}" Margin="0,14" />
-
-                                    <!-- not connected -->
+                            <ui:ExtensionCard.Body>
+                                <!-- Two mutually exclusive halves, stacked: a Grid takes the height of whichever one
+                                     is showing, because a collapsed child never gets measured. -->
+                                <Grid>
+                                    <!-- not connected: the two-step setup -->
                                     <StackPanel Visibility="{Binding IsConnected, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}">
-                                        <TextBlock TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource Muted}">
-                                            <Run Text="1. Create a free app at " /><Hyperlink Foreground="{StaticResource Accent}" Cursor="Hand"
-                                                       Click="OnCopyDevLink" ToolTip="Copy link to clipboard">developer.spotify.com/dashboard</Hyperlink><Run Text=" and add this exact Redirect URI:" />
+                                        <TextBlock Style="{StaticResource Caption}" Text="1 — CREATE A FREE SPOTIFY APP" />
+                                        <TextBlock TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource Muted}" Margin="0,6,0,0">
+                                            <Run Text="At " /><Hyperlink Foreground="{StaticResource Accent}" Cursor="Hand"
+                                                       Click="OnCopyDevLink" ToolTip="Copy link to clipboard">developer.spotify.com/dashboard</Hyperlink><Run Text=", add this exact Redirect URI:" />
                                         </TextBlock>
                                         <TextBlock x:Name="DevCopied" Text="&#x2713; Copied link to clipboard" FontSize="11"
-                                                   Foreground="{StaticResource SpotifyGreen}" Margin="0,4,0,0" Visibility="Collapsed" />
-                                        <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad8}" Padding="10,7" Margin="0,7,0,0">
+                                                   Foreground="{StaticResource SpotifyGreen}" Margin="0,5,0,0" Visibility="Collapsed" />
+                                        <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad8}"
+                                                Padding="11,8" Margin="0,7,0,0">
                                             <TextBox Text="{Binding Source={x:Static svc:SpotifyService.RedirectUri}, Mode=OneWay}"
                                                      IsReadOnly="True" Style="{x:Null}" Background="Transparent" BorderThickness="0"
                                                      FontFamily="{StaticResource Mono}" FontSize="11.5" Foreground="{StaticResource Muted}"
                                                      AutomationProperties.Name="Redirect URI" />
                                         </Border>
-                                        <TextBlock Text="2. Paste its Client ID:" FontSize="11.5" Foreground="{StaticResource Muted}" Margin="0,12,0,6" />
-                                        <TextBox x:Name="ClientIdBox" FontSize="12.5" Padding="10,7" FontFamily="{StaticResource Mono}"
+
+                                        <TextBlock Style="{StaticResource Caption}" Text="2 — PASTE ITS CLIENT ID" Margin="0,16,0,6" />
+                                        <TextBox x:Name="ClientIdBox" FontSize="12.5" Padding="11,8" FontFamily="{StaticResource Mono}"
                                                  AutomationProperties.Name="Spotify Client ID" />
-                                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0" VerticalAlignment="Center">
-                                            <Button x:Name="ConnectBtn" Click="OnSpotifyConnect" Padding="15,8" Cursor="Hand"
-                                                    AutomationProperties.Name="Connect Spotify">
-                                                <Button.Template>
-                                                    <ControlTemplate TargetType="Button">
-                                                        <Border x:Name="cb" Background="{StaticResource SpotifyGreen}" CornerRadius="{StaticResource Rad10}" Padding="{TemplateBinding Padding}">
-                                                            <StackPanel Orientation="Horizontal">
-                                                                <TextBlock Text="&#xEC4F;" FontFamily="{StaticResource Icons}" FontSize="12"
-                                                                           Foreground="White" VerticalAlignment="Center" />
-                                                                <TextBlock Text="Connect Spotify" Foreground="White" FontWeight="SemiBold"
-                                                                           FontSize="12.5" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                                            </StackPanel>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="cb" Property="Background" Value="{StaticResource SpotifyGreenHover}" />
-                                                            </Trigger>
-                                                            <Trigger Property="IsPressed" Value="True">
-                                                                <Setter TargetName="cb" Property="Background" Value="{StaticResource SpotifyGreenPress}" />
-                                                            </Trigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Button.Template>
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                            <Button x:Name="ConnectBtn" Style="{StaticResource PrimarySpotify}"
+                                                    Click="OnSpotifyConnect" AutomationProperties.Name="Connect Spotify">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xEC4F;" FontFamily="{StaticResource Icons}" FontSize="12"
+                                                               Foreground="White" VerticalAlignment="Center" />
+                                                    <TextBlock Text="Connect Spotify" Foreground="White" FontWeight="SemiBold"
+                                                               FontSize="12.5" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                                </StackPanel>
                                             </Button>
                                             <TextBlock x:Name="ConnectStatus" Text="Not connected" FontSize="11.5"
                                                        Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0" />
                                         </StackPanel>
                                         <TextBlock Text="Opens Spotify in your browser to authorize. Playback control requires Spotify Premium."
-                                                   FontSize="11" Foreground="{StaticResource Faint}" Margin="0,10,0,0" TextWrapping="Wrap" />
+                                                   FontSize="11" Foreground="{StaticResource Faint}" Margin="0,11,0,0" TextWrapping="Wrap" />
                                     </StackPanel>
 
-                                    <!-- connected -->
+                                    <!-- connected: the player, and the way back out -->
                                     <StackPanel Visibility="{Binding IsConnected, Converter={StaticResource BoolVis}}">
-                                        <DockPanel>
-                                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="9,4"
-                                                    Click="OnSpotifyDisconnect" AutomationProperties.Name="Disconnect Spotify">
-                                                <TextBlock Text="Disconnect" FontSize="11.5" Foreground="{StaticResource Muted}" />
-                                            </Button>
-                                            <Ellipse Width="8" Height="8" Fill="{StaticResource SpotifyGreen}" VerticalAlignment="Center" />
-                                            <TextBlock Text="Connected" FontSize="12.5" Foreground="{StaticResource Text}"
-                                                       Margin="9,0,0,0" VerticalAlignment="Center" />
-                                        </DockPanel>
-                                        <!-- mini player -->
-                                        <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad10}" Padding="12" Margin="0,12,0,0">
+                                        <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad10}" Padding="12">
                                             <DockPanel>
-                                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                                            VerticalAlignment="Center" Margin="12,0,0,0">
                                                     <Button Style="{StaticResource Transport}" Content="&#xE892;" Click="OnSpotifyPrev"
                                                             AutomationProperties.Name="Previous track" />
                                                     <Button Click="OnSpotifyToggle" Width="34" Height="34" Margin="4,0" Cursor="Hand"
                                                             AutomationProperties.Name="Play or pause">
                                                         <Button.Template>
                                                             <ControlTemplate TargetType="Button">
-                                                                <Border x:Name="pc" Width="34" Height="34" CornerRadius="{StaticResource Rad17}" Background="{StaticResource SpotifyGreen}">
+                                                                <Border x:Name="pc" Width="34" Height="34" CornerRadius="{StaticResource Rad17}"
+                                                                        Background="{StaticResource SpotifyGreen}">
                                                                     <TextBlock Text="{Binding PlayPauseGlyph}" FontFamily="{StaticResource Icons}"
-                                                                               FontSize="13" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                               FontSize="13" Foreground="White" HorizontalAlignment="Center"
+                                                                               VerticalAlignment="Center" />
                                                                 </Border>
                                                                 <ControlTemplate.Triggers>
                                                                     <Trigger Property="IsMouseOver" Value="True">
@@ -1343,16 +1712,18 @@
                                                     <Button Style="{StaticResource Transport}" Content="&#xE893;" Click="OnSpotifyNext"
                                                             AutomationProperties.Name="Next track" />
                                                 </StackPanel>
-                                                <Border DockPanel.Dock="Left" Width="48" Height="48" CornerRadius="{StaticResource Rad8}" Background="{StaticResource Bg3}"
-                                                        Margin="0,0,12,0" ClipToBounds="True">
+                                                <Border DockPanel.Dock="Left" Width="46" Height="46" CornerRadius="{StaticResource Rad8}"
+                                                        Background="{StaticResource Bg3}" Margin="0,0,12,0" ClipToBounds="True">
                                                     <Grid>
-                                                        <TextBlock Text="&#xEC4F;" FontFamily="{StaticResource Icons}" FontSize="18"
-                                                                   Foreground="{StaticResource Faint}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                        <TextBlock Text="&#xEC4F;" FontFamily="{StaticResource Icons}" FontSize="17"
+                                                                   Foreground="{StaticResource Faint}" HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center" />
                                                         <Image Source="{Binding AlbumArt}" Stretch="UniformToFill" />
                                                     </Grid>
                                                 </Border>
                                                 <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding Track}" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource Text}"
+                                                    <TextBlock Text="{Binding Track}" FontSize="13" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource Text}"
                                                                TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                                                                Visibility="{Binding HasTrack, Converter={StaticResource BoolVis}}" />
                                                     <TextBlock Text="{Binding Artist}" FontSize="11.5" Foreground="{StaticResource Muted}"
@@ -1365,112 +1736,121 @@
                                                 </StackPanel>
                                             </DockPanel>
                                         </Border>
+                                        <Button Style="{StaticResource Outline}" Content="Disconnect" Padding="11,5"
+                                                HorizontalAlignment="Right" Margin="0,10,0,0" Click="OnSpotifyDisconnect"
+                                                AutomationProperties.Name="Disconnect Spotify" />
                                     </StackPanel>
-                                </StackPanel>
+                                </Grid>
+                            </ui:ExtensionCard.Body>
+                        </ui:ExtensionCard>
 
-                                <!-- disabled hint -->
-                                <TextBlock Text="Turn on to connect your Spotify account and control playback from VibeCode."
-                                           FontSize="11" Foreground="{StaticResource Faint}" Margin="0,10,0,0" TextWrapping="Wrap"
-                                           Visibility="{Binding Enabled, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}" />
-                            </StackPanel>
-                        </Border>
+                        <!-- ===== Weather ===== -->
+                        <ui:ExtensionCard DataContext="{x:Static svc:WeatherService.Instance}"
+                                          Glyph="&#xE753;" Tint="{StaticResource WeatherBlue}"
+                                          TintSoft="{StaticResource WeatherBlueSoft}"
+                                          Title="Weather" Description="Conditions, NWS radar, and SPC Day 1–3 outlooks"
+                                          IsOn="{Binding Enabled}"
+                                          OffHint="Turn on to show U.S. or Canadian conditions next to the settings gear, and to open radar and SPC outlook maps.">
+                            <ToggleButton Style="{StaticResource Switch}" IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                          Checked="OnWeatherEnabledChanged" Unchecked="OnWeatherEnabledChanged"
+                                          AutomationProperties.Name="Enable weather" />
 
-                        <!-- Weather card. Its own DataContext: the pane above is bound to the Spotify service. -->
-                        <Border Style="{StaticResource Card}" Padding="16" Margin="0,14,0,0"
-                                DataContext="{x:Static svc:WeatherService.Instance}">
-                            <StackPanel>
-                                <!-- header -->
-                                <DockPanel>
-                                    <Border DockPanel.Dock="Left" Width="32" Height="32" CornerRadius="{StaticResource Rad8}"
-                                            Background="{StaticResource WeatherBlueSoft}" Margin="0,0,12,0">
-                                        <TextBlock Text="&#xE753;" FontFamily="{StaticResource Icons}" FontSize="16"
-                                                   Foreground="{StaticResource WeatherBlue}" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" />
+                            <ui:ExtensionCard.Status>
+                                <Grid Visibility="{Binding Enabled, Converter={StaticResource BoolVis}}">
+                                    <Border Style="{StaticResource Pill}" Background="{StaticResource AmberSoft}"
+                                            Visibility="{Binding HasLocation, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}">
+                                        <TextBlock Text="No location" Style="{StaticResource PillText}"
+                                                   Foreground="{StaticResource Amber}" />
                                     </Border>
-                                    <ToggleButton DockPanel.Dock="Right" Style="{StaticResource Switch}" VerticalAlignment="Center"
-                                                  IsChecked="{Binding Enabled, Mode=TwoWay}" Checked="OnWeatherEnabledChanged"
-                                                  Unchecked="OnWeatherEnabledChanged" AutomationProperties.Name="Enable weather" />
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="Weather" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
-                                        <TextBlock Text="Conditions, NWS radar, and SPC Day 1–3 outlooks" FontSize="11.5"
-                                                   Foreground="{StaticResource Muted}" />
-                                    </StackPanel>
-                                </DockPanel>
+                                </Grid>
+                            </ui:ExtensionCard.Status>
 
-                                <!-- enabled body -->
-                                <StackPanel Visibility="{Binding Enabled, Converter={StaticResource BoolVis}}">
-                                    <Rectangle Height="1" Fill="{StaticResource BorderHairline}" Margin="0,14" />
-
-                                    <!-- current location -->
-                                    <DockPanel Visibility="{Binding HasLocation, Converter={StaticResource BoolVis}}">
-                                        <Button DockPanel.Dock="Right" Click="OnOpenRadar" Padding="14,7" Cursor="Hand"
-                                                VerticalAlignment="Center" Margin="12,0,0,0"
-                                                AutomationProperties.Name="Open weather maps">
-                                            <Button.Template>
-                                                <ControlTemplate TargetType="Button">
-                                                    <Border x:Name="rb" Background="{StaticResource WeatherBlue}"
-                                                            CornerRadius="{StaticResource Rad10}" Padding="{TemplateBinding Padding}">
-                                                        <TextBlock Text="Open maps" Foreground="White" FontWeight="SemiBold"
-                                                                   FontSize="12.5" />
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="rb" Property="Background" Value="{StaticResource WeatherBlueHover}" />
-                                                        </Trigger>
-                                                        <Trigger Property="IsPressed" Value="True">
-                                                            <Setter TargetName="rb" Property="Background" Value="{StaticResource WeatherBluePress}" />
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Button.Template>
-                                        </Button>
+                            <ui:ExtensionCard.Body>
+                                <StackPanel>
+                                    <!-- what the titlebar chip is showing right now. No reading yet simply says
+                                         nothing at all: the titlebar chip is one line wide and has to print a
+                                         placeholder, this card has the room not to. -->
+                                    <DockPanel Margin="0,0,0,18"
+                                               Visibility="{Binding HasLocation, Converter={StaticResource BoolVis}}">
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource Outline}" Content="Open maps"
+                                                Margin="12,0,0,0" VerticalAlignment="Center" Click="OnOpenRadar"
+                                                AutomationProperties.Name="Open weather maps" />
+                                        <TextBlock DockPanel.Dock="Left" Text="{Binding ConditionGlyph}"
+                                                   FontFamily="{StaticResource Icons}" FontSize="19"
+                                                   Foreground="{StaticResource WeatherBlue}" VerticalAlignment="Center"
+                                                   Margin="0,0,12,0" />
                                         <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Place}" FontSize="12.5" Foreground="{StaticResource Text}" />
-                                            <TextBlock FontSize="11.5" Foreground="{StaticResource Muted}">
-                                                <Run Text="{Binding TempText, Mode=OneWay}" /><Run Text="  " /><Run Text="{Binding Conditions, Mode=OneWay}" />
+                                            <TextBlock Text="{Binding Place}" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Text}"
+                                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                            <TextBlock FontSize="11.5" Foreground="{StaticResource Muted}" Margin="0,1,0,0"
+                                                       Visibility="{Binding HasReading, Converter={StaticResource BoolVis}}">
+                                                <Run Text="{Binding TempText, Mode=OneWay}" /><Run Text="  ·  " /><Run Text="{Binding Conditions, Mode=OneWay}" />
                                             </TextBlock>
                                         </StackPanel>
                                     </DockPanel>
 
-                                    <!-- search -->
-                                    <DockPanel Margin="0,14,0,6" LastChildFill="True">
-                                        <Button x:Name="WeatherLocationButton" DockPanel.Dock="Right"
-                                                Style="{StaticResource GhostButton}" Padding="9,5" Margin="10,0,0,0"
-                                                Click="OnWeatherGetLocation" ToolTip="Uses your approximate network location"
+                                    <TextBlock Style="{StaticResource Caption}" Text="CHANGE LOCATION" Margin="0,0,0,7"
+                                               Visibility="{Binding HasLocation, Converter={StaticResource BoolVis}}" />
+                                    <TextBlock Style="{StaticResource Caption}" Text="PICK A LOCATION" Margin="0,0,0,7"
+                                               Visibility="{Binding HasLocation, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}" />
+
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource Outline}" Content="Search"
+                                                Padding="17,7" Margin="8,0,0,0" Click="OnWeatherSearch"
+                                                AutomationProperties.Name="Search places" />
+                                        <!-- The magnifier and the placeholder sit on top of the box rather than beside
+                                             it, so the field reads as one control instead of a bare rectangle. -->
+                                        <Grid>
+                                            <TextBox x:Name="WeatherSearchBox" FontSize="12.5" Padding="33,7,10,7"
+                                                     KeyDown="OnWeatherSearchKey" TextChanged="OnWeatherSearchTextChanged"
+                                                     GotKeyboardFocus="OnWeatherSearchFocusChanged"
+                                                     LostKeyboardFocus="OnWeatherSearchFocusChanged"
+                                                     ToolTip="Type at least 3 characters for suggestions"
+                                                     AutomationProperties.Name="Place search"
+                                                     AutomationProperties.HelpText="Suggestions appear as you type" />
+                                            <TextBlock Text="&#xE721;" FontFamily="{StaticResource Icons}" FontSize="12"
+                                                       Foreground="{StaticResource Faint}" IsHitTestVisible="False"
+                                                       HorizontalAlignment="Left" VerticalAlignment="Center" Margin="12,0,0,0" />
+                                            <!-- Driven from code-behind rather than by HintVisLocal: this lives in
+                                                 the card's Body, so its logical parent is a ContentPresenter inside
+                                                 the ExtensionCard TEMPLATE, and an ElementName binding resolves
+                                                 against the template's namescope - where WeatherSearchBox is not. -->
+                                            <TextBlock x:Name="WeatherSearchHint" Text="Search a U.S. or Canadian city"
+                                                       FontSize="12.5" Foreground="{StaticResource Faint}"
+                                                       IsHitTestVisible="False" VerticalAlignment="Center"
+                                                       Margin="34,0,0,0" TextWrapping="NoWrap" />
+                                        </Grid>
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,9,0,0">
+                                        <Button x:Name="WeatherLocationButton" DockPanel.Dock="Left"
+                                                Style="{StaticResource Outline}" Padding="11,5" Click="OnWeatherGetLocation"
+                                                ToolTip="Uses your approximate network location"
                                                 AutomationProperties.Name="Get my location">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="&#xE707;" FontFamily="{StaticResource Icons}" FontSize="12"
-                                                           Foreground="{StaticResource WeatherBlue}" Margin="0,0,6,0" />
-                                                <TextBlock Text="Get my location" FontSize="11.5"
-                                                           Foreground="{StaticResource Text}" />
+                                                <TextBlock Text="&#xE707;" FontFamily="{StaticResource Icons}" FontSize="11.5"
+                                                           Foreground="{StaticResource WeatherBlue}" Margin="0,0,7,0"
+                                                           VerticalAlignment="Center" />
+                                                <TextBlock Text="Use my location" FontSize="11.5" Foreground="{StaticResource Text}"
+                                                           VerticalAlignment="Center" />
                                             </StackPanel>
                                         </Button>
-                                        <TextBlock Text="Search in the U.S. or Canada:"
-                                                   FontSize="11.5" Foreground="{StaticResource Muted}"
-                                                   VerticalAlignment="Center" TextWrapping="Wrap" />
-                                    </DockPanel>
-                                    <DockPanel>
-                                        <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="14,8"
-                                                Margin="8,0,0,0" Click="OnWeatherSearch" AutomationProperties.Name="Search places">
-                                            <TextBlock Text="Search" FontSize="12.5" Foreground="{StaticResource Text}" />
-                                        </Button>
-                                        <TextBox x:Name="WeatherSearchBox" FontSize="12.5" Padding="10,7"
-                                                 KeyDown="OnWeatherSearchKey" TextChanged="OnWeatherSearchTextChanged"
-                                                 ToolTip="Type at least 3 characters for suggestions"
-                                                 AutomationProperties.Name="Place search"
-                                                 AutomationProperties.HelpText="Suggestions appear as you type" />
+                                        <TextBlock x:Name="WeatherStatus" FontSize="11" Foreground="{StaticResource Faint}"
+                                                   Margin="11,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   Visibility="Collapsed" />
                                     </DockPanel>
 
-                                    <TextBlock x:Name="WeatherStatus" FontSize="11" Foreground="{StaticResource Faint}"
-                                               Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
-
-                                    <ScrollViewer Margin="0,8,0,0" MaxHeight="240"
-                                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <!-- Self-relative rather than ElementName for the same namescope reason as the
+                                         placeholder above; Content is the ItemsControl, and HasItems notifies. -->
+                                    <ScrollViewer Margin="0,10,0,0" MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled"
+                                                  Visibility="{Binding Content.HasItems, RelativeSource={RelativeSource Self}, Converter={StaticResource BoolVis}}">
                                         <ItemsControl x:Name="WeatherResults">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
                                                     <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
-                                                            HorizontalAlignment="Stretch" Padding="10,7" Margin="0,0,0,2"
+                                                            HorizontalAlignment="Stretch" Padding="11,7" Margin="0,0,0,2"
                                                             Click="OnWeatherPickPlace" AutomationProperties.Name="{Binding Display}">
                                                         <StackPanel>
                                                             <TextBlock Text="{Binding Display}" FontSize="12.5"
@@ -1484,37 +1864,119 @@
                                         </ItemsControl>
                                     </ScrollViewer>
                                 </StackPanel>
+                            </ui:ExtensionCard.Body>
+                        </ui:ExtensionCard>
 
-                                <!-- disabled hint -->
-                                <TextBlock Text="Turn on to show U.S. or Canadian conditions next to the settings gear and open radar and SPC outlook maps."
-                                           FontSize="11" Foreground="{StaticResource Faint}" Margin="0,10,0,0" TextWrapping="Wrap"
-                                           Visibility="{Binding Enabled, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}" />
-                            </StackPanel>
-                        </Border>
+                        <!-- ===== Speech to text (Groq) =====
+                             Ships OFF: dictation already works offline with the local model, and this one uploads
+                             the clip to a third party, so it stays opt-in and says so. -->
+                        <ui:ExtensionCard DataContext="{x:Static svc:GroqSpeechService.Instance}"
+                                          Glyph="&#xE720;" Title="Speech to text"
+                                          Description="Groq's Whisper large-v3 instead of the offline medium.en"
+                                          IsOn="{Binding Enabled}"
+                                          OffHint="Off, the mic button transcribes on this machine with Whisper medium.en and no audio ever leaves it.">
+                            <ToggleButton Style="{StaticResource Switch}" IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                          Checked="OnGroqSpeechEnabledChanged" Unchecked="OnGroqSpeechEnabledChanged"
+                                          AutomationProperties.Name="Use Groq for speech to text" />
 
-                        <!-- Games card. Ships ON (unlike Spotify/Weather), so this mostly lets you turn the arcade
-                             off. Its own DataContext: the pane above is bound to the Spotify service. -->
-                        <Border Style="{StaticResource Card}" Padding="16" Margin="0,14,0,0"
-                                DataContext="{x:Static svc:GamesService.Instance}">
-                            <StackPanel>
-                                <!-- header -->
-                                <DockPanel>
-                                    <Border DockPanel.Dock="Left" Width="32" Height="32" CornerRadius="{StaticResource Rad8}"
-                                            Background="{StaticResource AccentSoft}" Margin="0,0,12,0">
-                                        <TextBlock Text="&#x1F3AE;" FontFamily="Segoe UI Emoji" FontSize="15"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <ui:ExtensionCard.Status>
+                                <Grid Visibility="{Binding Enabled, Converter={StaticResource BoolVis}}">
+                                    <Border Style="{StaticResource Pill}" Background="{StaticResource GreenSoft}"
+                                            Visibility="{Binding HasKey, Converter={StaticResource BoolVis}}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Ellipse Width="6" Height="6" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                     Fill="{StaticResource Green}" />
+                                            <TextBlock Text="Key saved" Style="{StaticResource PillText}"
+                                                       Foreground="{StaticResource Green}" />
+                                        </StackPanel>
                                     </Border>
-                                    <ToggleButton DockPanel.Dock="Right" Style="{StaticResource Switch}" VerticalAlignment="Center"
-                                                  IsChecked="{Binding Enabled, Mode=TwoWay}" Checked="OnGamesEnabledChanged"
-                                                  Unchecked="OnGamesEnabledChanged" AutomationProperties.Name="Enable games" />
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="Games" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource Text}" />
-                                        <TextBlock Text="Controller icon in the title bar" FontSize="11.5"
-                                                   Foreground="{StaticResource Muted}" />
-                                    </StackPanel>
-                                </DockPanel>
-                            </StackPanel>
-                        </Border>
+                                    <Border Style="{StaticResource Pill}" Background="{StaticResource AmberSoft}"
+                                            Visibility="{Binding HasKey, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}">
+                                        <TextBlock Text="Needs a key" Style="{StaticResource PillText}"
+                                                   Foreground="{StaticResource Amber}" />
+                                    </Border>
+                                </Grid>
+                            </ui:ExtensionCard.Status>
+
+                            <ui:ExtensionCard.Body>
+                                <StackPanel>
+                                    <Grid>
+                                        <!-- no key yet -->
+                                        <StackPanel Visibility="{Binding HasKey, Converter={StaticResource ShowIfLocal}, ConverterParameter=invert}">
+                                            <TextBlock TextWrapping="Wrap" FontSize="11.5" Foreground="{StaticResource Muted}">
+                                                <Run Text="Create a free key at " /><Hyperlink Foreground="{StaticResource Accent}" Cursor="Hand"
+                                                           Click="OnCopyGroqKeyLink" ToolTip="Copy link to clipboard">console.groq.com/keys</Hyperlink><Run Text=" and paste it here. It starts with &quot;gsk_&quot;." />
+                                            </TextBlock>
+                                            <TextBlock x:Name="GroqLinkCopied" Text="&#x2713; Copied link to clipboard" FontSize="11"
+                                                       Foreground="{StaticResource Green}" Margin="0,5,0,0" Visibility="Collapsed" />
+                                            <TextBlock Style="{StaticResource Caption}" Text="GROQ API KEY" Margin="0,14,0,6" />
+                                            <PasswordBox x:Name="GroqKeyBox" FontSize="12.5" Padding="11,8"
+                                                         FontFamily="{StaticResource Mono}" Background="{StaticResource Bg2}"
+                                                         Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"
+                                                         BorderThickness="1" CaretBrush="{StaticResource Text}"
+                                                         AutomationProperties.Name="Groq API key" />
+                                            <Button x:Name="GroqSaveBtn" Style="{StaticResource PrimaryAccent}"
+                                                    Content="Verify and save" HorizontalAlignment="Left" Margin="0,12,0,0"
+                                                    Click="OnSaveGroqKey" AutomationProperties.Name="Verify and save Groq API key" />
+                                            <TextBlock x:Name="GroqKeyStatus" Text="Dictation still runs offline until a key is saved."
+                                                       FontSize="11.5" Foreground="{StaticResource Amber}" TextWrapping="Wrap"
+                                                       Margin="0,9,0,0" />
+                                        </StackPanel>
+
+                                        <!-- key saved -->
+                                        <DockPanel Visibility="{Binding HasKey, Converter={StaticResource BoolVis}}">
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource Outline}" Content="Remove key"
+                                                    Padding="11,5" Margin="12,0,0,0" VerticalAlignment="Center"
+                                                    Click="OnRemoveGroqKey" AutomationProperties.Name="Remove Groq API key" />
+                                            <TextBlock Text="{Binding StatusText, Mode=OneWay}" FontSize="12.5"
+                                                       Foreground="{StaticResource Text}" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        </DockPanel>
+                                    </Grid>
+
+                                    <TextBlock Text="The mic button works exactly as before — this only changes what does the transcribing. Your recording is uploaded to Groq and billed to your key; the offline path runs Whisper medium.en on this machine and never sends the audio anywhere, so switch this off for private dictation. Leaving it off downloads that model once, about 1.5 GB, the first time you dictate."
+                                               FontSize="11" Foreground="{StaticResource Faint}" Margin="0,14,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ui:ExtensionCard.Body>
+                        </ui:ExtensionCard>
+
+                        <!-- ===== Games ===== Ships ON, so this mostly lets you turn the arcade off. -->
+                        <ui:ExtensionCard DataContext="{x:Static svc:GamesService.Instance}"
+                                          Glyph="&#x1F3AE;" GlyphFont="Segoe UI Emoji"
+                                          Title="Games" Description="Controller icon in the title bar"
+                                          IsOn="{Binding Enabled}"
+                                          OffHint="Turn on to put a controller button in the title bar, with a small arcade behind it.">
+                            <ToggleButton Style="{StaticResource Switch}" IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                          Checked="OnGamesEnabledChanged" Unchecked="OnGamesEnabledChanged"
+                                          AutomationProperties.Name="Enable games" />
+                            <!-- No body: there is nothing to configure once it is on, and a card whose only body is
+                                 one dim sentence reads as an off-state hint that forgot to disappear. -->
+                        </ui:ExtensionCard>
+
+                        <!-- ===== Phone =====
+                             Ships OFF: the phone button opens a window that can start a listening socket, so it stays
+                             out of the titlebar until it is asked for. Turning this off again also stops the bridge -
+                             see PhoneBridgeService.Enabled. -->
+                        <ui:ExtensionCard DataContext="{x:Static svc:PhoneBridgeService.Instance}"
+                                          Glyph="&#xE8EA;" Title="Phone"
+                                          Description="Read and reply to your chats from your phone"
+                                          IsOn="{Binding Enabled}"
+                                          OffHint="Turn on to put a phone button in the title bar, where pairing and the bridge itself live.">
+                            <ToggleButton Style="{StaticResource Switch}" IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                          Checked="OnPhoneEnabledChanged" Unchecked="OnPhoneEnabledChanged"
+                                          AutomationProperties.Name="Enable phone" />
+                            <ui:ExtensionCard.Body>
+                                <StackPanel>
+                                    <!-- Labelled, because StatusText is the socket's state ("Off"), not the
+                                         extension's - unprefixed it reads as contradicting the switch above it. -->
+                                    <TextBlock FontSize="11.5" Foreground="{StaticResource Muted}" TextWrapping="Wrap">
+                                        <Run Text="Bridge · " /><Run Text="{Binding StatusText, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock Text="Pairing, the generated app, and the bridge itself all live in that window — turning this off closes the bridge too."
+                                               FontSize="11" Foreground="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                </StackPanel>
+                            </ui:ExtensionCard.Body>
+                        </ui:ExtensionCard>
                     </StackPanel>
                 </ScrollViewer>
 
@@ -1556,8 +2018,11 @@
                             <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
                                 <TextBlock Text="VibeCode" FontFamily="{StaticResource Display}" FontSize="16" FontWeight="SemiBold" />
                                 <TextBlock Text="A fresh coat of paint for Claude Code" FontSize="12" Foreground="{StaticResource Muted}" />
+                                <TextBlock x:Name="AboutVersionText" Text="Version 1.0.0" FontSize="11.5"
+                                           FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}" Margin="0,3,0,0" />
                             </StackPanel>
                         </StackPanel>
+
                         <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="0,20" />
                         <TextBlock Text="Spotify is a trademark of Spotify AB. Playback control requires a Spotify Premium account and the Spotify Web API."
                                    FontSize="11" Foreground="{StaticResource Faint}" TextWrapping="Wrap" />

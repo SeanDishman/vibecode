@@ -1,0 +1,6 @@
+<resources>
+    <!-- Mirrors VibeCode.Desktop/Themes/Dark.xaml so the phone and the PC read as one product. -->
+    <color name="bg0">#FF1A1A1D</color>
+    <color name="bg1">#FF212226</color>
+    <color name="accent">#FF4C8DF5</color>
+</resources>

@@ -23,6 +23,10 @@ namespace VibeCode;
 
 public partial class MainWindow : Window
 {
+    private MitreMonitorController? _mitreMonitor;
+
+    internal void OpenMitreMonitor() => _mitreMonitor?.Open();
+
     public static readonly DependencyProperty SurfaceActiveChatProperty = DependencyProperty.Register(
         nameof(SurfaceActiveChat), typeof(ChatViewModel), typeof(MainWindow));
     public static readonly DependencyProperty SurfaceShowHomeProperty = DependencyProperty.Register(
@@ -31,6 +35,8 @@ public partial class MainWindow : Window
         nameof(SurfaceShowBridge), typeof(bool), typeof(MainWindow));
     public static readonly DependencyProperty SurfacePanelChatProperty = DependencyProperty.Register(
         nameof(SurfacePanelChat), typeof(ChatViewModel), typeof(MainWindow));
+    public static readonly DependencyProperty BorderlessModeProperty = DependencyProperty.Register(
+        nameof(BorderlessMode), typeof(bool), typeof(MainWindow));
 
     public ChatViewModel? SurfaceActiveChat
     {
@@ -52,17 +58,34 @@ public partial class MainWindow : Window
         get => (ChatViewModel?)GetValue(SurfacePanelChatProperty);
         private set => SetValue(SurfacePanelChatProperty, value);
     }
+    /// <summary>The borderless look this shell was BUILT with - it stretches the backdrop behind the titlebar and
+    /// the side panels, which is only correct while their surfaces are the transparent ones. Fixed for the life of
+    /// the window: switching the setting re-skins by building a replacement shell (App.ApplyAppearanceChange),
+    /// exactly as switching CLI mode does, so it never has to change under a window that is already up.</summary>
+    public bool BorderlessMode
+    {
+        get => (bool)GetValue(BorderlessModeProperty);
+        private set => SetValue(BorderlessModeProperty, value);
+    }
 
     private readonly MainViewModel _vm;
     private readonly bool _isBridgeMonitor;
     private readonly bool _isDoubleSessionCompanionMode;
     private readonly MainWindow? _primaryWindow;
+    private readonly bool _isAppearanceReload;   // rebuilt under a new theme over a view model that is already live
     private bool _stickToBottom = true;
     private ChatViewModel? _wired;
+    // The chat whose unsent prompt InputBox is currently SHOWING, which is not the same question as which chat is
+    // active: while the bridge overlay owns the chat column the main composer is collapsed and stale, and the panes'
+    // own composers - bound straight to ChatViewModel.Draft - are what the user is typing into. Only ever assigned
+    // by ShowChatInComposer, which loads that chat's draft into the box in the same breath, so "_composerChat is X"
+    // always means "InputBox holds X's prompt". CaptureComposerDraft leans on exactly that.
+    private ChatViewModel? _composerChat;
     private string _appliedBackground = "";
     private string? _randomChoice;       // per-launch pick; "<builtin>" sentinel for the bundled gif
     private string _hiddenSnapshot = "";
     private bool _showOnlyOwnedSnapshot = AppSettings.Current.ShowOnlyOwnedSessions;
+    private bool _isolateChatsSnapshot = AppSettings.Current.IsolateChatsByAccount;
     private bool _hideEmailsSnapshot = AppSettings.Current.HideEmails;
     private bool _compactModeSnapshot = AppSettings.Current.CompactMode;
     private bool _dualMonitorBridgeSnapshot = AppSettings.Current.DualMonitorBridge;
@@ -76,6 +99,9 @@ public partial class MainWindow : Window
     private ListCollectionView? _grokAccountManagerView;
     private bool _accountManagerRefreshQueued;
     private MainWindow? _bridgeMonitorWindow;
+
+    /// <summary>Set only in the second working shell: the Bridge header's own view of the roster THIS window shows.</summary>
+    private BridgeSurfaceContext? _bridgeHeaderContext;
     private MonitorWorkArea? _bridgeMonitorTarget;
     private HwndSource? _windowSource;
     private nint _lastMainMonitor;
@@ -83,22 +109,29 @@ public partial class MainWindow : Window
     private bool _internalBridgeMonitorClose;
     private int _settingsDialogDepth;
     private bool _isClosing;
+    private bool _closingForAppearanceReload;   // replaced by a re-skinned shell, NOT shut down - sessions live on
     private bool _bridgeCollectionRefreshQueued;
 
     private bool IsDoubleSessionCompanion => _isDoubleSessionCompanionMode;
     private ChatViewModel? ActiveChatForWindow => IsDoubleSessionCompanion ? _vm.SecondaryActiveChat : _vm.ActiveChat;
-    private ChatViewModel? PanelChatForWindow => SurfaceShowBridge ? _vm.BridgePanelChat : ActiveChatForWindow;
+    private ChatViewModel? PanelChatForWindow => SurfaceShowBridge
+        ? IsDoubleSessionCompanion ? _vm.SecondaryBridgePanelChat : _vm.BridgePanelChat
+        : ActiveChatForWindow;
 
     public MainWindow() : this(new MainViewModel(), null)
     {
     }
 
-    private MainWindow(MainViewModel vm, MainWindow? primaryWindow)
+    private MainWindow(MainViewModel vm, MainWindow? primaryWindow, bool appearanceReload = false)
     {
         _vm = vm;
+        _isAppearanceReload = appearanceReload;
         _primaryWindow = primaryWindow;
         _isBridgeMonitor = primaryWindow is not null;
         _isDoubleSessionCompanionMode = _isBridgeMonitor && AppSettings.Current.DualMonitorDoubleSessions;
+        // Read before the tree is built: the backdrop's row span is a style trigger on this, and the theme
+        // dictionaries this shell is about to resolve were chosen from the same flag.
+        BorderlessMode = AppSettings.IsBorderless;
         InitializeComponent();
         DataContext = _vm;
         RefreshSurfaceState();
@@ -111,6 +144,7 @@ public partial class MainWindow : Window
         _vm.BridgePanes.CollectionChanged += OnBridgePanesChanged;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
+        RefreshCloseButtonTooltip();
 
         if (_isBridgeMonitor)
         {
@@ -120,13 +154,26 @@ public partial class MainWindow : Window
             return;
         }
 
+        _mitreMonitor = new MitreMonitorController(this, _vm);
+
+        // Only the primary shell owns the phone bridge: the second-monitor window shares this view model, and two
+        // listeners on one port would leave the second one permanently in "address already in use".
+        PhoneBridgeService.Instance.Attach(_vm, Dispatcher);
+
         EnsureAccountManagerViews();
         _vm.AllAccounts.CollectionChanged += OnAccountManagerCollectionChanged;
         _vm.Accounts.CollectionChanged += OnAccountManagerCollectionChanged;
         _vm.CodexAccounts.CollectionChanged += OnAccountManagerCollectionChanged;
         _vm.GrokAccounts.CollectionChanged += OnAccountManagerCollectionChanged;
         RestoreWindowPlacement();
-        if (IsWeatherMapsSmoke)
+        if (_isAppearanceReload)
+        {
+            // Second life of the shell: the view model, its sessions and its accounts are already running, so this
+            // window skips startup entirely. It also skips the smoke hooks below - those stand up a FIRST launch.
+            StartupOverlay.Visibility = Visibility.Collapsed;
+            Loaded += OnAppearanceReloadLoaded;
+        }
+        else if (IsWeatherMapsSmoke)
         {
             Title = "VibeCode Weather Maps Smoke";
             StartupOverlay.Visibility = Visibility.Collapsed;
@@ -230,6 +277,22 @@ public partial class MainWindow : Window
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         if (_isClosing) return;
+
+        // "Run in background": the close button puts the window away, it does not end the work. Checked before
+        // anything below runs - _isClosing is what every timer and refresh reads as "this shell is over", and a
+        // window that is coming back must never look like that.
+        if (TryEnterBackground())
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        if (!CodeViewerWindow.ConfirmCloseEditors(_isBridgeMonitor ? this : null))
+        {
+            e.Cancel = true;
+            return;
+        }
+
         _isClosing = true;
         if (_isBridgeMonitor)
         {
@@ -241,6 +304,28 @@ public partial class MainWindow : Window
             return; // this view never owns or disposes provider sessions
         }
 
+        DetachShellWiring();
+        PersistShellState();   // no-ops under the off-screen test hook, which must not touch the user's real settings
+
+        // An appearance reload has already handed this view model to a replacement shell. Everything below ends
+        // the provider sessions, so it must not run: the window is being swapped out, the app is not going away.
+        if (_closingForAppearanceReload) return;
+
+        // Close the Demon team through its own teardown so the supervision ledger is closed with a reason and the
+        // final decision is written down, rather than fifteen sessions simply vanishing with tasks still open.
+        if (_vm.IsDemonMode) _vm.CloseDemonTeam("VibeCode is closing");
+        foreach (var p in _vm.LiveBridgePeers.ToList()) p.Close();   // includes peers parked behind other chats
+        foreach (var c in _vm.Chats.ToList()) c.Close();
+    }
+
+    /// <summary>Drop everything this *window* subscribed to or started, leaving the view model untouched. Split out
+    /// of the closing path because an appearance reload needs exactly this half and none of the session teardown:
+    /// the old shell has to stop listening (two shells on one chat would flash the taskbar twice and double-save)
+    /// while the chats themselves keep running under the replacement window.</summary>
+    private void DetachShellWiring()
+    {
+        _mitreMonitor?.Dispose();
+        _mitreMonitor = null;
         AppSettings.Changed -= OnSettingsChanged;   // unsubscribe before the final Save so it doesn't reload
         AppSettings.ActiveAccountAdopted -= OnActiveAccountAdopted;
         _vm.Chats.CollectionChanged -= OnChatsChanged;
@@ -248,20 +333,29 @@ public partial class MainWindow : Window
         _vm.Accounts.CollectionChanged -= OnAccountManagerCollectionChanged;
         _vm.CodexAccounts.CollectionChanged -= OnAccountManagerCollectionChanged;
         _vm.GrokAccounts.CollectionChanged -= OnAccountManagerCollectionChanged;
+        foreach (var c in _vm.Chats.ToList()) UnhookChat(c);
+        // Every window-owned timer, not just the three the shutdown path used to stop: on a reload this window
+        // stays alive as a detached object until the GC gets to it, and a running DispatcherTimer would keep it
+        // there polling accounts behind the shell that replaced it.
+        _tokenRefreshTimer?.Stop();
         _codexRefreshTimer?.Stop();
         _kimiRefreshTimer?.Stop();
         _grokRefreshTimer?.Stop();
+        _accountUsageTimer?.Stop();
+        _spotifyTimer?.Stop();
+        _weatherTimer?.Stop();
         _placementSaveTimer?.Stop();
         if (Application.Current is { } closingApp) closingApp.SessionEnding -= OnSessionEnding;
-        PersistShellState();   // no-ops under the off-screen test hook, which must not touch the user's real settings
-        foreach (var p in _vm.LiveBridgePeers.ToList()) p.Close();   // includes peers parked behind other chats
-        foreach (var c in _vm.Chats.ToList()) { UnhookChat(c); c.Close(); }
     }
 
     private void OnWindowClosed(object? sender, EventArgs e)
     {
         _vm.PropertyChanged -= OnMainViewModelPropertyChanged;
         _vm.BridgePanes.CollectionChanged -= OnBridgePanesChanged;
+        // The header context listens to the view model, which outlives this window: a second shell opened and closed
+        // repeatedly would otherwise leave one live listener behind each time.
+        _bridgeHeaderContext?.Dispose();
+        _bridgeHeaderContext = null;
         if (_wired is not null)
         {
             _wired.ItemsChanged -= OnChatItemsChanged;
@@ -291,12 +385,257 @@ public partial class MainWindow : Window
             _windowSource = null;
         }
 
+        // The shell is genuinely gone now, so the icon that stood in for it must go too - a leftover would sit
+        // in the notification area doing nothing until the user hovered it and it disappeared.
+        StopTrayTooltipUpdates();
+        _tray?.Dispose();
+        _tray = null;
+
         if (_bridgeMonitorWindow is { _isClosing: false } companion)
         {
             companion._internalBridgeMonitorClose = true;
             companion.Close();
         }
         _bridgeMonitorWindow = null;
+    }
+
+    // ---------- run in background (close the window, keep the agents) ----------
+
+    private TrayIcon? _tray;
+    private System.Windows.Threading.DispatcherTimer? _trayTooltipTimer;
+    private bool _companionHiddenForBackground;
+
+    /// <summary>True while the shell is put away in the notification area and its agents are still working.</summary>
+    internal bool IsRunningInBackground => _tray is { IsVisible: true };
+
+    /// <summary>
+    /// The close button's other meaning. When "run in background" is on, closing the shell hides it behind a
+    /// notification-area icon and every chat, Bridge peer and Demon worker carries on - the app is a machine for
+    /// running agents unattended, and ending nine of them mid-task on an absent-minded click is not what that
+    /// click means. Returns false when the close is a real one, and the caller lets the existing teardown run.
+    /// </summary>
+    private bool TryEnterBackground()
+    {
+        if (!BackgroundRunPolicy.ShouldStayResident(
+                AppSettings.Current.RunInBackground,
+                App.IsExiting,
+                IsPrimaryShell,
+                _closingForAppearanceReload,
+                BackgroundRunPolicy.IsAutomationRun))
+        {
+            return false;
+        }
+
+        try
+        {
+            // Persist exactly as a real close would. Surviving as a process is not a promise of surviving at all:
+            // a crash or a Task Manager kill from here must not cost more than one from a window that was open.
+            CaptureComposerDraft();
+            PersistShellState();
+
+            _tray ??= new TrayIcon(RestoreFromBackground, QuitFromTray);
+            if (!_tray.TryShow(BackgroundTooltip()))
+            {
+                // No icon means no way back in. Far better to close for real than to leave the user a process
+                // they can see in Task Manager, holding their work, reachable from nowhere.
+                CrashLog.Note("RunInBackground",
+                    "The notification-area icon could not be created, so the close was allowed to end the app.");
+                return false;
+            }
+
+            // Hidden, never closed: closing the companion is a layout decision that folds the whole Bridge back
+            // into one window, and coming back from the tray must return the exact arrangement that was left.
+            if (_bridgeMonitorWindow is { _isClosing: false, IsVisible: true } companion)
+            {
+                companion.Hide();
+                _companionHiddenForBackground = true;
+            }
+            Hide();
+
+            if (!AppSettings.Current.BackgroundNoticeShown)
+            {
+                _tray.ShowNotice(BackgroundRunPolicy.NoticeTitle, BackgroundRunPolicy.NoticeBody);
+                AppSettings.Current.BackgroundNoticeShown = true;
+                AppSettings.Current.Save();
+            }
+            StartTrayTooltipUpdates();
+            CrashLog.Note("RunInBackground",
+                "Closed to the notification area. Chats, Bridge peers and any Demon team keep running.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write(ex, "RunInBackground.Enter");
+            // Half-backgrounded is the one state with no way out of it. Put everything back and take the
+            // ordinary close, which at least ends cleanly.
+            try
+            {
+                StopTrayTooltipUpdates();
+                _tray?.Hide();
+                if (!IsVisible) Show();
+            }
+            catch { /* already reporting a failure; don't stack a second one on top of it */ }
+            return false;
+        }
+    }
+
+    /// <summary>Bring the shell back out of the notification area - the icon's click, its Open item, and a clicked
+    /// toast all land here. Idempotent, so it is safe to call on a window that was never hidden.</summary>
+    internal void RestoreFromBackground()
+    {
+        if (_isBridgeMonitor || _isClosing) return;
+        StopTrayTooltipUpdates();
+        _tray?.Hide();   // the icon stands in for a missing window; the window is back
+        if (_companionHiddenForBackground)
+        {
+            _companionHiddenForBackground = false;
+            if (_bridgeMonitorWindow is { _isClosing: false } companion) companion.Show();
+        }
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Show();
+        Activate();
+    }
+
+    /// <summary>Quit for real, from the notification icon. Deliberately routed through the window's own Closing
+    /// path rather than straight to Shutdown: that path is where the Demon team is closed with a reason, every
+    /// Bridge peer and chat is disposed, and the provider processes are actually ended.</summary>
+    private void QuitFromTray()
+    {
+        if (!CodeViewerWindow.ConfirmCloseEditors()) return;
+        App.BeginExit("Notification icon: Quit VibeCode");
+        StopTrayTooltipUpdates();
+        _tray?.Hide();
+        try { Close(); }
+        catch (Exception ex) { CrashLog.Write(ex, "RunInBackground.Quit"); }
+
+        // The shell is not necessarily the last window - a telemetry wall or a browser tab can outlive it - and
+        // with nothing left on screen there would be no way to close those by hand. End the app explicitly.
+        try { Application.Current?.Shutdown(); }
+        catch (InvalidOperationException) { /* the closing window already started the shutdown */ }
+    }
+
+    /// <summary>What the icon says it is doing. Recomputed on a timer because the answer changes on its own while
+    /// nobody is looking at the app.</summary>
+    private string BackgroundTooltip() =>
+        BackgroundRunPolicy.Tooltip(_vm.Chats.Concat(_vm.LiveBridgePeers).Distinct().Count(c => c.IsWorking));
+
+    private void StartTrayTooltipUpdates()
+    {
+        if (_trayTooltipTimer is null)
+        {
+            _trayTooltipTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(4),   // a hover-only string; polling it faster buys nothing
+            };
+            _trayTooltipTimer.Tick += (_, _) => _tray?.UpdateTooltip(BackgroundTooltip());
+        }
+        _trayTooltipTimer.Start();
+    }
+
+    private void StopTrayTooltipUpdates() => _trayTooltipTimer?.Stop();
+
+    /// <summary>Say what the close button will do before it does it. The alternative is a window that vanishes and
+    /// a user working out where it went afterwards.</summary>
+    private void RefreshCloseButtonTooltip()
+    {
+        if (_isBridgeMonitor || CloseButton is null) return;
+        CloseButton.ToolTip = BackgroundRunPolicy.CloseButtonTooltip(
+            AppSettings.Current.RunInBackground && !BackgroundRunPolicy.IsAutomationRun);
+    }
+
+    // ---------- appearance reload (theme switch without relaunching) ----------
+
+    /// <summary>The one shell that owns the sessions - as opposed to a second-monitor companion view of them.</summary>
+    internal bool IsPrimaryShell => !_isBridgeMonitor;
+
+    /// <summary>
+    /// Re-skin the app in place. Every window resolves theme brushes, styles and control templates with
+    /// StaticResource when its content is parsed, so a live theme change cannot reach a window that is already
+    /// built - the window itself has to be rebuilt. That used to mean restarting the process, which killed every
+    /// running agent; instead the replacement shell is constructed over the SAME <see cref="MainViewModel"/>, so
+    /// the chats, provider sessions, Bridge peers and Demon team never learn that anything happened.
+    /// </summary>
+    internal void ReloadShellForAppearanceChange(bool reopenSettings)
+    {
+        if (_isBridgeMonitor || _isClosing) return;
+
+        // Fold the half-typed prompt into the chat FIRST: the replacement reads it back off Draft while building,
+        // which happens before this window gets its own closing-time capture. In memory, and therefore separate
+        // from the disk flush below - that one deliberately no-ops under the off-screen test hook.
+        CaptureComposerDraft();
+        PersistShellState();
+
+        var replacement = new MainWindow(_vm, null, appearanceReload: true);
+        replacement.AdoptPlacementFrom(this);
+        // Shown before the outgoing shell closes, so the app is never momentarily windowless and the taskbar
+        // button does not blink out and back in.
+        replacement.Show();
+        if (Application.Current is { } app) app.MainWindow = replacement;
+
+        _closingForAppearanceReload = true;
+        Close();   // takes the old second-monitor companion with it; the reconcile below rebuilds it re-skinned
+
+        replacement.Activate();
+        // Queued, not called inline: the second-monitor companion is torn down by the Close() above and rebuilt by
+        // this, so it has to run after that closing has finished AND after the replacement's own Loaded (the
+        // reconcile refuses to do anything before a shell finishes coming up).
+        replacement.Dispatcher.BeginInvoke(new Action(() => replacement.ReconcileDualMonitorBridge()),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+        // Reopened rather than kept open: Settings is modal and owned by the shell, and swapping a modal dialog's
+        // owner out from under it is not safe. Background priority runs it after the reconcile above, and lets this
+        // call stack (which came *from* that dialog) unwind first.
+        if (reopenSettings)
+            replacement.Dispatcher.BeginInvoke(new Action(() => replacement.ShowSettingsDialog()),
+                System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>Carry the outgoing shell's geometry over verbatim. RestoreBounds rather than Left/Top/Width/Height
+    /// so a maximized window remembers what it un-maximizes to.</summary>
+    private void AdoptPlacementFrom(MainWindow previous)
+    {
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        var bounds = previous.RestoreBounds;
+        if (bounds is { Width: > 300, Height: > 300 })
+        {
+            Left = bounds.Left;
+            Top = bounds.Top;
+            Width = bounds.Width;
+            Height = bounds.Height;
+        }
+        WindowState = previous.WindowState == WindowState.Minimized ? WindowState.Normal : previous.WindowState;
+        _randomChoice = previous._randomChoice;   // a random backdrop must not reshuffle just because the theme did
+    }
+
+    /// <summary>The replacement shell is on screen. This re-establishes only what belongs to a *window* - it must
+    /// never run the startup path, because RestoreSession there would reopen every chat that is already open.</summary>
+    private void OnAppearanceReloadLoaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnAppearanceReloadLoaded;
+        EnableDarkTitleBar();
+        PrefillCwdBox();
+        SetNewChatProvider(AppSettings.Current.DefaultProvider, persist: false);
+        _hiddenSnapshot = HiddenSnapshot();
+        ApplyBackground();   // also rewrites the Scrim* app resources, which the two modes set very differently
+        AppSettings.Changed += OnSettingsChanged;
+        AppSettings.ActiveAccountAdopted += OnActiveAccountAdopted;
+        _vm.Chats.CollectionChanged += OnChatsChanged;
+        foreach (var c in _vm.Chats) HookChat(c);
+        // ActiveChat did not change, so the property-changed route into this never fires - the composer would come
+        // up empty and the transcript scrolled to the top without it.
+        WireActiveChat();
+
+        // The outgoing shell owned these timers and stopped them on its way out. immediate: false because every
+        // one of them already ran on launch: re-skinning is not a reason to re-hit four account APIs.
+        StartTokenRefresh(immediate: false);
+        StartCodexAccountRefresh(immediate: false);
+        StartKimiAccountRefresh(immediate: false);
+        StartGrokAccountRefresh(immediate: false);
+        StartAccountUsagePolling(immediate: false);
+        StartSpotifyPolling(immediate: false);
+        StartWeatherPolling(immediate: false);
+
+        _startupComplete = true;
+        RefreshSurfaceState();
     }
 
     private void ConfigureBridgeMonitorShell()
@@ -319,6 +658,10 @@ public partial class MainWindow : Window
         {
             // Both shells keep chat/project navigation. Identity and app-wide configuration remain in the primary.
             AccountFooter.Visibility = Visibility.Collapsed;
+            // The roster figures in the Bridge header must describe THIS window's bridge. One DataContext swap
+            // re-points every one of them; the pane grid below keeps the view model and is bound in code.
+            _bridgeHeaderContext = new BridgeSurfaceContext(_vm);
+            BridgeHeaderBar.DataContext = _bridgeHeaderContext;
         }
         else
         {
@@ -329,21 +672,32 @@ public partial class MainWindow : Window
         SetBridgePanePartition(companion: true);
     }
 
+    /// <summary>Whether the bridge overlay (and the demon wall it hosts) owns this shell's chat column, which is the
+    /// same thing as "the main composer is not the editor the user is typing into". Computed from the view model
+    /// rather than read back off <see cref="SurfaceShowBridge"/>, so it is already right while a freshly built shell
+    /// is wiring its composer up and has not run <see cref="RefreshSurfaceState"/> yet.</summary>
+    private bool ShowBridgeForWindow()
+    {
+        // Each shell answers for its OWN roster. Shell 2 may be showing a completely different bridge from the
+        // primary's, so asking whether its selected chat hosts the PRIMARY roster is the wrong question.
+        if (IsDoubleSessionCompanion)
+            return _vm.SecondaryShowBridge
+                   && _vm.SecondaryIsBridge
+                   && ReferenceEquals(ActiveChatForWindow, _vm.SecondaryBridgePanes.FirstOrDefault());
+        return _vm.ShowBridge && _vm.IsBridge;
+    }
+
     private void RefreshSurfaceState()
     {
         var active = ActiveChatForWindow;
-        var showBridge = IsDoubleSessionCompanion
-            ? _vm.SecondaryShowBridge
-            : _vm.ShowBridge;
-        if (showBridge && (!_vm.IsBridge
-                           || (IsDoubleSessionCompanion
-                               && !ReferenceEquals(active, _vm.BridgePanes.FirstOrDefault()))))
-            showBridge = false;
+        var showBridge = ShowBridgeForWindow();
 
         SurfaceActiveChat = active;
         SurfaceShowBridge = showBridge;
         SurfaceShowHome = active is null && !showBridge;
-        SurfacePanelChat = showBridge ? _vm.BridgePanelChat : active;
+        SurfacePanelChat = showBridge
+            ? IsDoubleSessionCompanion ? _vm.SecondaryBridgePanelChat : _vm.BridgePanelChat
+            : active;
 
         // Popup content is hosted in a separate visual tree, so it cannot use an ancestor-window binding.
         MorePopup.DataContext = active;
@@ -357,6 +711,7 @@ public partial class MainWindow : Window
         if (showBridge || active?.IsGrok != true) GrokUsagePopup.IsOpen = false;
         if (!showBridge) BridgeGrokUsagePopup.IsOpen = false;
         if (!showBridge) BridgeKimiUsagePopup.IsOpen = false;
+        SyncComposerToSurface();   // the surface decides which of a chat's two composers is the live one
     }
 
     private void GoHomeForWindow()
@@ -445,8 +800,11 @@ public partial class MainWindow : Window
             || (IsDoubleSessionCompanion && e.PropertyName == nameof(MainViewModel.SecondaryActiveChat)))
             WireActiveChat();
         if (e.PropertyName == nameof(MainViewModel.BridgeGridRows)) ScheduleBridgeGridRows();
+        // IsDemonSurface belongs in this list: a Demon wall refuses the second display, and it can arrive or leave
+        // (started, parked behind another Bridge, un-parked, torn down) without ShowBridge ever changing.
         if (!_isBridgeMonitor && e.PropertyName is nameof(MainViewModel.ShowBridge)
-            or nameof(MainViewModel.SecondaryShowBridge))
+            or nameof(MainViewModel.SecondaryShowBridge)
+            or nameof(MainViewModel.IsDemonSurface))
             ReconcileDualMonitorBridge();
     }
 
@@ -469,6 +827,13 @@ public partial class MainWindow : Window
 
     private void SetBridgePanePartition(bool companion)
     {
+        // Shell 2 showing a bridge of its own is not a partition of anything: it binds its whole roster, unfiltered.
+        // Splitting only ever means "one roster spread over two displays".
+        if (companion && _vm.HasSeparateSecondaryBridge)
+        {
+            BindOwnSecondaryBridgeRoster();
+            return;
+        }
         // Filter on the pane's OWN surface flag, never on its index: index-based ownership silently dragged agents
         // across displays whenever a peer was added or removed.
         var view = new ListCollectionView((IList)_vm.BridgePanes)
@@ -477,6 +842,16 @@ public partial class MainWindow : Window
         };
         _bridgePaneView = view;
         BridgePaneList.ItemsSource = view;
+        ScheduleBridgeGridRows();
+    }
+
+    /// <summary>Bind this (companion) window to the roster the second shell owns, rather than to any slice of the
+    /// primary's. Re-run whenever that roster is swapped, since the collection instance itself changes.</summary>
+    private void BindOwnSecondaryBridgeRoster()
+    {
+        _bridgePaneView = null;
+        BindingOperations.SetBinding(BridgePaneList, ItemsControl.ItemsSourceProperty,
+            new Binding(nameof(MainViewModel.SecondaryBridgePanes)));
         ScheduleBridgeGridRows();
     }
 
@@ -509,6 +884,13 @@ public partial class MainWindow : Window
 
     private void RestoreSingleMonitorBridge()
     {
+        // "Back to one roster per window" must not drag shell 2 onto the primary's roster when it is running a
+        // bridge of its own — there is nothing to un-split over there.
+        if (IsDoubleSessionCompanion && _vm.HasSeparateSecondaryBridge)
+        {
+            BindOwnSecondaryBridgeRoster();
+            return;
+        }
         _bridgePaneView = null;
         BindingOperations.SetBinding(BridgePaneList, ItemsControl.ItemsSourceProperty,
             new Binding(nameof(MainViewModel.BridgePanes)));
@@ -516,7 +898,9 @@ public partial class MainWindow : Window
     }
 
     private bool PaneBelongsToThisBridgeSurface(ChatViewModel pane) =>
-        _vm.BridgePanes.Contains(pane) && pane.OnSecondMonitor == _isBridgeMonitor;
+        IsDoubleSessionCompanion && _vm.HasSeparateSecondaryBridge
+            ? _vm.SecondaryBridgePanes.Contains(pane)
+            : _vm.BridgePanes.Contains(pane) && pane.OnSecondMonitor == _isBridgeMonitor;
 
     private void ScheduleBridgeGridRows()
     {
@@ -526,7 +910,16 @@ public partial class MainWindow : Window
         {
             if (_isClosing || !BridgePaneList.IsLoaded) return;
             BridgePaneList.UpdateLayout();
+            // Demon Mode swaps the UniformGrid for DemonWallPanel, which sizes itself from its own children (the
+            // orchestrator's 2x2 block makes a shared row count meaningless) - so there is simply nothing to set.
             if (FindVisualDescendant<UniformGrid>(BridgePaneList) is not { } grid) return;
+            // Density is measured from the roster THIS window is showing; shell 2's own bridge is its own grid.
+            if (IsDoubleSessionCompanion && _vm.HasSeparateSecondaryBridge)
+            {
+                grid.Rows = DualMonitorBridgePolicy.RowsForVisiblePaneCount(
+                    _vm.SecondaryBridgePanes.Count(p => p.BridgePaneShown));
+                return;
+            }
             var panes = _bridgePaneView is null
                 ? _vm.BridgePanes.AsEnumerable()
                 : _bridgePaneView.Cast<ChatViewModel>();
@@ -543,23 +936,27 @@ public partial class MainWindow : Window
             CloseBridgeMonitorInternal();
             return;
         }
-
         var settings = AppSettings.Current;
         var monitorCount = DisplayMonitorService.ActiveMonitorCount;
         var bridgeVisible = _vm.ShowBridge || _vm.SecondaryShowBridge;
+        var demonWall = _vm.IsDemonSurface;
         var shouldSplit = DualMonitorBridgePolicy.ShouldSplit(
             settings.DualMonitorBridge,
             bridgeVisible,
             _vm.BridgePanes.Count,
-            monitorCount);
+            monitorCount,
+            demonWall);
         var shouldOpen = DualMonitorBridgePolicy.ShouldOpenCompanion(
             settings.DualMonitorBridge,
             settings.DualMonitorDoubleSessions,
             bridgeVisible,
             _vm.BridgePanes.Count,
-            monitorCount);
+            monitorCount,
+            demonWall);
         var shouldPartition = DualMonitorBridgePolicy.ShouldPartition(
-            shouldSplit, settings.DualMonitorDoubleSessions, _vm.ShowBridge, _vm.SecondaryShowBridge);
+            shouldSplit, settings.DualMonitorDoubleSessions, _vm.ShowBridge, _vm.SecondaryShowBridge,
+            _vm.HasSeparateSecondaryBridge);
+        NoteDemonRefusesDualMonitor(demonWall, settings);
         if (!shouldOpen || !DisplayMonitorService.TryGetCompanionWorkArea(this, out var target))
         {
             CloseBridgeMonitorInternal();
@@ -612,6 +1009,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool _demonDualMonitorNoticed;
+
+    /// <summary>
+    /// Say out loud why the second display went away.
+    ///
+    /// A companion window that simply vanishes when a team starts is indistinguishable from a bug, and a user whose
+    /// dual-monitor switch is on has every reason to expect it to be honoured. Said once per team — the reconcile
+    /// runs on every roster and surface change — and only to someone who actually has the setting on, because to
+    /// everyone else it is a refusal of something they never asked for.
+    /// </summary>
+    private void NoteDemonRefusesDualMonitor(bool demonWall, AppSettings settings)
+    {
+        if (!demonWall) { _demonDualMonitorNoticed = false; return; }   // next team gets told again
+        if (_demonDualMonitorNoticed) return;
+        if (!settings.DualMonitorBridge && !settings.DualMonitorDoubleSessions) return;
+        _demonDualMonitorNoticed = true;
+        ShowBridgeHint(DualMonitorBridgePolicy.DemonRefusal);
+    }
+
     private void OpenBridgeMonitor(MonitorWorkArea target)
     {
         MainWindow? companion = null;
@@ -622,10 +1038,11 @@ public partial class MainWindow : Window
                 AppSettings.Current.DualMonitorBridge,
                 _vm.ShowBridge || _vm.SecondaryShowBridge,
                 _vm.BridgePanes.Count,
-                DisplayMonitorService.ActiveMonitorCount);
+                DisplayMonitorService.ActiveMonitorCount,
+                _vm.IsDemonSurface);
             var splitBridge = DualMonitorBridgePolicy.ShouldPartition(
                 splitEligible, AppSettings.Current.DualMonitorDoubleSessions,
-                _vm.ShowBridge, _vm.SecondaryShowBridge);
+                _vm.ShowBridge, _vm.SecondaryShowBridge, _vm.HasSeparateSecondaryBridge);
             if (splitBridge) AssignInitialBridgeSurfaces();
             else foreach (var pane in _vm.BridgePanes) pane.OnSecondMonitor = false;
             companion = new MainWindow(_vm, this)
@@ -779,18 +1196,24 @@ public partial class MainWindow : Window
             foreach (var c in _vm.Chats) HookChat(c);
 
             await ShowStartupStepAsync("Restoring accounts and conversations…", 68, 3);
-            _vm.RefreshAccounts();  // load the account chip + snapshot the live login FIRST, so restored chats can resolve their per-account token
-            _vm.ApplyCodexAccounts(CodexAccountService.Instance.List()); // local metadata first; network refresh happens after restore
-            _vm.ApplyGrokAccounts(GrokAccountService.Instance.List()); // adopt the legacy login and bind restored Grok chats to it
-            var savedCodexBridges = AppSettings.Current.SavedBridges
-                .Where(x => x.Provider == "codex")
-                .ToList();
-            var ownedCodexSessions = AppSettings.Current.OpenChats
-                .Where(x => x.Provider == "codex")
-                .Select(x => x.SessionId)
-                .Concat(savedCodexBridges.Select(x => (string?)x.HostSessionId))
-                .Concat(savedCodexBridges.SelectMany(x => x.Peers.Select(p => p.SessionId)));
-            Protocol.CodexEnvironment.ImportOwnedSessions(ownedCodexSessions);
+            // Each of these is guarded separately, because none of them is worth losing the conversations over: a
+            // provider whose account store is unreadable used to throw here, skip RestoreSession entirely, and leave
+            // the shell running with an empty chat list that the next autosave then wrote to disk.
+            RunStartupStep("RefreshAccounts", () => _vm.RefreshAccounts());  // account chip + live login FIRST, so restored chats resolve their per-account token
+            RunStartupStep("ApplyCodexAccounts", () => _vm.ApplyCodexAccounts(CodexAccountService.Instance.List())); // local metadata first; network refresh happens after restore
+            RunStartupStep("ApplyGrokAccounts", () => _vm.ApplyGrokAccounts(GrokAccountService.Instance.List())); // adopt the legacy login and bind restored Grok chats to it
+            RunStartupStep("ImportOwnedCodexSessions", () =>
+            {
+                var savedCodexBridges = AppSettings.Current.SavedBridges
+                    .Where(x => x.Provider == "codex")
+                    .ToList();
+                var ownedCodexSessions = AppSettings.Current.OpenChats
+                    .Where(x => x.Provider == "codex")
+                    .Select(x => x.SessionId)
+                    .Concat(savedCodexBridges.Select(x => (string?)x.HostSessionId))
+                    .Concat(savedCodexBridges.SelectMany(x => x.Peers.Select(p => p.SessionId)));
+                Protocol.CodexEnvironment.ImportOwnedSessions(ownedCodexSessions);
+            });
             _vm.RestoreSession();   // reopen last session's chats (restored chats get hooked via CollectionChanged)
 
             await ShowStartupStepAsync("Starting background services…", 88, 4);
@@ -801,6 +1224,9 @@ public partial class MainWindow : Window
             StartAccountUsagePolling(); // pre-warm + periodically refresh each account's session/week usage so changes surface
             StartSpotifyPolling();  // keep the Spotify mini-menu's now-playing fresh (no-op while the extension is off)
             StartWeatherPolling();  // keep the titlebar weather chip current (no-op while the extension is off)
+            // Resume an already-set-up Second Brain with the app. First-run downloads still wait for the user to
+            // open the brain surface, so ordinary startup never surprises them with an installation.
+            if (AppSettings.Current.AgentMemoryEnabled) _ = AgentMemoryService.Instance;
         }
         finally
         {
@@ -811,7 +1237,33 @@ public partial class MainWindow : Window
             await HideStartupOverlayAsync();
             _startupComplete = true;
             ReconcileDualMonitorBridge();
+            MaybeStartDemonTeamFromEnvironment();
         }
+    }
+
+    /// <summary>
+    /// The automation hook for Demon Mode: <c>VIBECODE_DEMON_START=&lt;folder&gt;</c> stands a team up at startup.
+    ///
+    /// Demon Mode is otherwise reachable only through the Settings switch, which asks for the folder with a native
+    /// shell picker — and a smoke test cannot drive one of those from the UIA tree with any reliability. This is the
+    /// same shape as <c>VIBECODE_DEMON_SESSIONS</c>: an env hook that exercises the real activation path rather than
+    /// a second, test-only way in. Primary window only, so a companion display does not start a second team.
+    /// </summary>
+    private void MaybeStartDemonTeamFromEnvironment()
+    {
+        if (_isBridgeMonitor || _vm.IsDemonMode) return;
+        var folder = Environment.GetEnvironmentVariable("VIBECODE_DEMON_START");
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return;
+        _vm.ActivateDemonMode(folder, AppSettings.Current.DefaultProvider);
+    }
+
+    /// <summary>Run one startup step so that its failure costs only that step. Startup is the one place where an
+    /// exception is expensive out of all proportion to its cause: everything after it is skipped, and the app then
+    /// keeps running (App handles dispatcher exceptions) in a half-built state that autosave will happily persist.</summary>
+    private static void RunStartupStep(string name, Action step)
+    {
+        try { step(); }
+        catch (Exception ex) { CrashLog.Note("StartupStepFailed", $"{name}: {ex}"); }
     }
 
     private Task ShowStartupStepAsync(string text, double progress, int step) =>
@@ -826,20 +1278,60 @@ public partial class MainWindow : Window
         ShowSettingsDialog();
     }
 
+    private void OnOpenBrain(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        MemoryMapWindow.Open(this);
+    }
+
+    private void OnOpenPhone(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        PhoneBridgeWindow.Open(this);
+    }
+
     private void ShowSettingsDialog()
     {
         var coordinator = _isBridgeMonitor ? _primaryWindow : this;
         if (coordinator is null) return;
         coordinator._settingsDialogDepth++;
+        SettingsWindow dialog;
         try
         {
-            new SettingsWindow { Owner = this }.ShowDialog();
+            dialog = new SettingsWindow
+            {
+                Owner = this,
+                DemonTeamLive = _vm.IsDemonMode,
+                KimiAvailable = _vm.IsKimiInstalled && _vm.IsKimiSignedIn,
+            };
+            dialog.ShowDialog();
         }
         finally
         {
             coordinator._settingsDialogDepth--;
             coordinator.ReconcileDualMonitorBridge();
         }
+        // Acted on after the dialog is gone, not from inside it: standing up sixteen sessions behind a modal would
+        // hide the Bridge the user is meant to be watching, and tearing one down under one is worse.
+        if (dialog.DemonStopRequested) _vm.CloseDemonTeam("Demon Mode was switched off in Settings");
+        else if (dialog.DemonStartFolder is { } folder) StartDemonTeam(folder, dialog.DemonSetup);
+
+        // Last, because it replaces the window this method is running on. Settings reopens on the other side so the
+        // user lands back where they clicked, now wearing the mode they picked.
+        if (dialog.UiModeChanged) App.ApplyAppearanceChange(reopenSettings: true);
+    }
+
+    /// <summary>Stand up a Demon team in <paramref name="path"/>. The single entry point — Demon Mode is reachable
+    /// only from the Settings switch and the automation hook, never from an ordinary New chat. The provider and the
+    /// team size come from what the user picked in setup, not from the app-wide defaults: choosing a Codex account
+    /// or a team of six and then getting a full Claude team would be the picker quietly ignoring what it asked.</summary>
+    private void StartDemonTeam(string path, TeamSetup? setup)
+    {
+        var provider = setup?.Provider ?? AppSettings.Current.DefaultProvider;
+        if (_vm.ActivateDemonMode(path, provider, setup?.AccountId, setup?.Session, setup?.SessionCount)
+            is not null) return;
+        MessageBox.Show(this, "Demon Mode couldn't start a team in that folder.", "Demon Mode",
+            MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private void OnHideProject(object sender, RoutedEventArgs e)
@@ -884,6 +1376,7 @@ public partial class MainWindow : Window
             }
             SpotifyService.Instance.NotifyEnabledChanged();   // show/hide the titlebar chip when the toggle changes
             WeatherService.Instance.NotifyEnabledChanged();   // same for the weather chip next to the gear
+            RefreshCloseButtonTooltip();                      // the close button changes meaning with the setting
             var snap = HiddenSnapshot();
             var onlyOwned = AppSettings.Current.ShowOnlyOwnedSessions;
             if (snap != _hiddenSnapshot || onlyOwned != _showOnlyOwnedSnapshot)
@@ -891,6 +1384,11 @@ public partial class MainWindow : Window
                 _hiddenSnapshot = snap;
                 _showOnlyOwnedSnapshot = onlyOwned;
                 _vm.LoadProjects();
+            }
+            if (AppSettings.Current.IsolateChatsByAccount != _isolateChatsSnapshot)
+            {
+                _isolateChatsSnapshot = AppSettings.Current.IsolateChatsByAccount;
+                _vm.RefreshChatAccountFilter();   // apply/drop the per-account sidebar filter without a restart
             }
             if (AppSettings.Current.HideEmails != _hideEmailsSnapshot)
             {
@@ -989,17 +1487,34 @@ public partial class MainWindow : Window
         // Vertical-gradient vignette instead of a flat tint: anchor the header and composer
         // zones dark, let the mid reading-band breathe. Reads as depth, not wallpaper.
         var visibility = Math.Clamp(s.BackgroundVisibility, 0, 100);
-        // Chat keeps a heavy floor (text must stay readable) - shows roughly half the slider's art.
-        byte midChat = (byte)Math.Round(255 * (1 - visibility / 100.0 * 0.5));
+        // Every reach below is "how much of the slider's art this surface may actually show". Home and Bridge
+        // normally get more than chat because something else is holding the text up - home's cards, and the
+        // translucent glass of a bridge pane. Borderless takes exactly those away: the panels stop painting,
+        // and the sidebar, titlebar and pane text end up straight on the wallpaper with nothing underneath.
+        // So in that mode every surface falls back to the CHAT reach, the one tuned for text on bare art.
+        // Without this, a light wallpaper at a high visibility (05.jpg at 80% is the case that caught it)
+        // washes the sidebar labels and the composer placeholders out to invisible.
+        var borderless = AppSettings.IsBorderless;
+        // Borderless takes the panels away, so sidebar/titlebar/pane text ends up straight on the art: every
+        // surface falls back to this one readable floor there (05.jpg at 80% washes them out without it). In
+        // background mode each surface gets its own reach instead.
+        const double borderlessFloor = 0.5;
+        // Chat now shows the SAME amount of art as the Bridge (was a heavier 0.5 floor of its own): a normal
+        // chat read as "not borderless" sitting next to a Bridge on the same wallpaper, because the Bridge's
+        // lighter scrim let the art through and the chat's heavier one buried it. The transcript's own fills
+        // (prompts, tool cards, code blocks) carry the text floor the heavy scrim used to, so only the bare
+        // canvas between/around them gets brighter - the messages stay readable.
+        double chatReach = borderless ? borderlessFloor : 0.8;
+        byte midChat = (byte)Math.Round(255 * (1 - visibility / 100.0 * chatReach));
         Application.Current.Resources["ScrimChat"] =
             MakeScrimGradient((byte)Math.Min(255, midChat + 32), (byte)Math.Min(255, midChat + 8), midChat);
         // Home shows a bit more art than chat (it's the hero), but this scene is busy - keep a firm floor.
-        byte midHome = (byte)Math.Round(255 * (1 - visibility / 100.0 * 0.9));
+        byte midHome = (byte)Math.Round(255 * (1 - visibility / 100.0 * (borderless ? borderlessFloor : 0.9)));
         Application.Current.Resources["ScrimHome"] =
             MakeScrimGradient((byte)Math.Min(255, midHome + 40), (byte)Math.Min(255, midHome + 14), midHome);
-        // Bridge sits between the two: the translucent glass panes carry their own text floor, so the
-        // backdrop can breathe through the panes and the gaps between them without hurting readability.
-        byte midBridge = (byte)Math.Round(255 * (1 - visibility / 100.0 * 0.8));
+        // Bridge: the translucent glass panes carry their own text floor, so the backdrop can breathe through
+        // the panes and the gaps between them without hurting readability. Chat now matches it.
+        byte midBridge = (byte)Math.Round(255 * (1 - visibility / 100.0 * (borderless ? borderlessFloor : 0.8)));
         Application.Current.Resources["ScrimBridge"] =
             MakeScrimGradient((byte)Math.Min(255, midBridge + 30), (byte)Math.Min(255, midBridge + 10), midBridge);
     }
@@ -1127,6 +1642,9 @@ public partial class MainWindow : Window
     /// (its roster swaps back in when the user clicks the host).</summary>
     public void NavigateToChat(ChatViewModel chat)
     {
+        // Covers the shell being away in the notification area: a toast for a chat that finished while VibeCode
+        // was closed has to bring the whole window back, icon and second monitor included.
+        RestoreFromBackground();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Show();
         Activate();
@@ -1193,21 +1711,57 @@ public partial class MainWindow : Window
             _wired.ResetPromptHistoryNavigation();
         }
         // Each chat owns its composer text, so switching chats (or relaunching) shows that chat's unsent prompt back.
-        _restoringComposerDraft = true;
-        try { if (InputBox is not null) InputBox.Text = _wired?.Draft ?? ""; }
-        finally { _restoringComposerDraft = false; }
+        ShowChatInComposer(ComposerChat());
         _stickToBottom = true;
         Dispatcher.BeginInvoke(() => { ScrollMsgToBottom(); InputBox?.Focus(); });
     }
 
     private bool _restoringComposerDraft;
 
+    /// <summary>The chat the main composer is the live editor for. Nothing while the bridge overlay owns the chat
+    /// column: each pane there has its own composer bound straight to <see cref="ChatViewModel.Draft"/>, and the
+    /// host chat is pane 1, so the chat the user is typing into is very often the active chat - just not HERE.</summary>
+    private ChatViewModel? ComposerChat() => ShowBridgeForWindow() ? null : ActiveChatForWindow;
+
+    /// <summary>Point the main composer at <paramref name="chat"/> (or at nothing) and put that chat's unsent prompt
+    /// in it, caret at the end so the user can carry straight on typing. The single writer of
+    /// <see cref="_composerChat"/>, so "the box speaks for this chat" and "the box holds this chat's text" can never
+    /// come apart.</summary>
+    private void ShowChatInComposer(ChatViewModel? chat)
+    {
+        if (InputBox is null) return;
+        _composerChat = chat;
+        _restoringComposerDraft = true;   // Draft is where this came from; don't echo it back through OnInputChanged
+        try { InputBox.Text = chat?.Draft ?? ""; }
+        finally { _restoringComposerDraft = false; }
+        InputBox.CaretIndex = InputBox.Text.Length;
+    }
+
+    /// <summary>Follow a surface change: fold the box back into whichever chat it was showing, then hand it to the
+    /// chat that just took the column. Without this the two composers for one chat drift apart - a prompt typed into
+    /// a bridge pane never showed up in the main box when the bridge was closed, and the stale main box was then
+    /// written back over it.</summary>
+    private void SyncComposerToSurface()
+    {
+        if ((_isBridgeMonitor && !IsDoubleSessionCompanion) || InputBox is null) return;
+        var live = ComposerChat();
+        if (ReferenceEquals(live, _composerChat)) return;
+        CaptureComposerDraft();
+        ShowChatInComposer(live);
+    }
+
     /// <summary>The main composer is a plain TextBox rather than a bound control, so its text has to be folded into
-    /// the chat before anything is persisted - otherwise a force quit throws away the prompt being written.</summary>
+    /// the chat before anything is persisted - otherwise a force quit throws away the prompt being written.
+    /// It refuses to write into a chat the box is not currently showing (see <see cref="_composerChat"/>): while the
+    /// bridge overlay is up this box is collapsed and empty, and copying it into the active chat - which is pane 1 of
+    /// that very bridge - is exactly how a half-typed BRIDGE prompt used to vanish the moment the window lost
+    /// focus, switched chat, or was closed.</summary>
     private void CaptureComposerDraft(ChatViewModel? chat = null)
     {
         if ((_isBridgeMonitor && !IsDoubleSessionCompanion) || InputBox is null) return;
-        if ((chat ?? ActiveChatForWindow) is { } target) target.Draft = InputBox.Text;
+        var target = chat ?? _composerChat;
+        if (target is null || !ReferenceEquals(target, _composerChat)) return;
+        target.Draft = InputBox.Text;
     }
 
     private void OnChatItemsChanged()
@@ -1416,14 +1970,25 @@ public partial class MainWindow : Window
         var hasDifferentDraft = !composerMatches
                                 && (!string.IsNullOrWhiteSpace(currentText) || owner.Attachments.Count > 0);
 
-        if (hasDifferentDraft)
+        // Rewinding an older prompt takes every prompt after it with it — that is the only order the checkpoint engine
+        // can unwind in. It is also the most destructive thing this button does, so it always asks first, and says
+        // exactly how far back it goes rather than just "continue?".
+        var cascade = item.NewerPendingTurns;
+        if (cascade > 0 || hasDifferentDraft)
         {
-            var fileText = item.UndoChangedFileCount == 0
+            var lines = new List<string>();
+            if (cascade > 0)
+                lines.Add($"Going back to this prompt also undoes the {cascade} newer prompt{(cascade == 1 ? "" : "s")} " +
+                          "after it, and removes them from the transcript. Later prompts can only be unwound first.");
+            lines.Add(item.UndoChangedFileCount == 0 && cascade == 0
                 ? "No recorded files need restoring."
-                : $"This will restore {item.UndoChangedFileCount} file{(item.UndoChangedFileCount == 1 ? "" : "s")} to their pre-prompt contents.";
-            var answer = MessageBox.Show(this,
-                $"{fileText}\n\nYour current unsent message and staged attachments will be replaced by this prompt. Continue?",
-                "Undo prompt changes", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                : "Files changed by those prompts are restored to their pre-prompt contents.");
+            if (hasDifferentDraft)
+                lines.Add("Your current unsent message and staged attachments will be replaced by this prompt.");
+            lines.Add("Continue?");
+            var answer = MessageBox.Show(this, string.Join("\n\n", lines),
+                cascade > 0 ? $"Go back {cascade + 1} prompts" : "Undo prompt changes",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
             if (answer != MessageBoxResult.Yes) return;
         }
 
@@ -1514,15 +2079,7 @@ public partial class MainWindow : Window
     // breaks a single selection). We copy the transcript wholesale instead.
     private void OnCopyConversation(object sender, RoutedEventArgs e)
     {
-        var chat = ChatFrom(sender);
-        if (chat is null) return;
-        var parts = new List<string>();
-        foreach (var it in chat.Items)
-        {
-            var line = TranscriptLine(it, chat.AgentDisplay);
-            if (!string.IsNullOrEmpty(line)) parts.Add(line);
-        }
-        SetClipboard(string.Join("\n\n", parts));
+        if (ChatFrom(sender) is { } chat) SetClipboard(ConversationText(chat));
     }
 
     // Walk up from the right-clicked block to the ChatViewModel that owns it (main chat or a bridge pane).
@@ -1536,7 +2093,10 @@ public partial class MainWindow : Window
         return ActiveChatForWindow;
     }
 
-    private static string BlockText(ItemVm item) => item switch
+    /// <summary>Clipboard text for one transcript item. Shared with the themed right-click menu
+    /// (UI/TextEditMenu.cs) and the cross-message range copy (UI/TranscriptSelection.cs) so every route to
+    /// "copy this message" produces the same thing.</summary>
+    internal static string BlockText(ItemVm item) => item switch
     {
         UserItem u => u.Text,
         TextItem t => t.Text,
@@ -1557,6 +2117,18 @@ public partial class MainWindow : Window
         CompactToolGroupItem group => GroupText(group),
         _ => "",
     };
+
+    /// <summary>The whole transcript as text, one entry per top-level item.</summary>
+    internal static string ConversationText(ChatViewModel chat)
+    {
+        var parts = new List<string>();
+        foreach (var item in chat.Items)
+        {
+            var line = TranscriptLine(item, chat.AgentDisplay);
+            if (!string.IsNullOrEmpty(line)) parts.Add(line);
+        }
+        return string.Join("\n\n", parts);
+    }
 
     private static string GroupText(CompactToolGroupItem group) =>
         string.Join("\n\n", group.Tools.Select(ToolText));
@@ -1605,21 +2177,37 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(name)) { chat.Title = name.Trim(); _vm.SaveSession(); }
     }
 
-    private void OnCopyChatTranscript(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Switch the Second Brain off for this chat, or back on. Bridge peers already running under it follow, because
+    /// they are working on the same conversation and would otherwise keep both recording it to the brain and reading
+    /// it back. <see cref="ChatViewModel.SetSecondBrainEnabled"/> owns what that means per chat, including the notice
+    /// that an already-running chat only loses the brain's MCP tools outright when it restarts.
+    /// </summary>
+    private void OnToggleChatMemory(object sender, RoutedEventArgs e)
     {
         if (Ctx<ChatViewModel>(sender) is not { } chat) return;
-        var parts = new List<string>();
-        foreach (var it in chat.Items)
-        {
-            var line = TranscriptLine(it, chat.AgentDisplay);
-            if (!string.IsNullOrEmpty(line)) parts.Add(line);
-        }
-        SetClipboard(string.Join("\n\n", parts));
+        var enabled = chat.ExcludeFromMemory;   // the row offers the opposite of the current state
+        chat.SetSecondBrainEnabled(enabled);
+        foreach (var peer in _vm.PeersOf(chat)) peer.SetSecondBrainEnabled(enabled);
+        _vm.SaveSession();
+    }
+
+    private void OnCopyChatTranscript(object sender, RoutedEventArgs e)
+    {
+        if (Ctx<ChatViewModel>(sender) is { } chat) SetClipboard(ConversationText(chat));
     }
 
     private void OnDeleteChatMenu(object sender, RoutedEventArgs e)
     {
-        if (Ctx<ChatViewModel>(sender) is { } chat) _vm.CloseChat(chat);
+        if (Ctx<ChatViewModel>(sender) is not { } chat) return;
+        // Ask, because unlike the old behaviour this one sticks. "Delete" used to be a close in a red icon: the row
+        // went away and the chat was back under Projects on the next home-screen refresh.
+        var name = string.IsNullOrWhiteSpace(chat.Title) ? "this chat" : $"\"{chat.Title}\"";
+        if (MessageBox.Show(this,
+                $"Delete {name}?\n\nIt will be removed from VibeCode and won't come back in the sidebar, Projects or " +
+                "Recent. The provider's own transcript file is left on disk, so this doesn't erase anything outside VibeCode.",
+                "Delete chat", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        _vm.DeleteChat(chat);
     }
 
     /// <summary>VibeCode chrome for small owned dialogs: dark, rounded, draggable and consistent with the main shell.</summary>
@@ -1778,11 +2366,16 @@ public partial class MainWindow : Window
     {
         provider = provider?.Trim().ToLowerInvariant() switch
         {
-            "codex" => "codex", "kimi" => "kimi", "grok" => "grok", _ => "claude",
+            "codex" => "codex", "kimi" => "kimi", "grok" => "grok",
+            _ => "claude",
         };
         if (ActiveChatForWindow is not { } chat
             || string.Equals(chat.Provider, provider, StringComparison.OrdinalIgnoreCase)) return;
-        var name = provider switch { "codex" => "Codex", "kimi" => "Kimi", "grok" => "Grok", _ => "Claude" };
+        var name = provider switch
+        {
+            "codex" => "Codex", "kimi" => "Kimi", "grok" => "Grok",
+            _ => "Claude",
+        };
         if (MessageBox.Show(this,
                 $"The open chat keeps running on {chat.AgentDisplay} with its own models. Start a new {name} chat in this project so your next message uses {name} models?",
                 $"Start a {name} chat?", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
@@ -1829,24 +2422,42 @@ public partial class MainWindow : Window
             _vm.MoveChatToProvider(chat, provider);
     }
 
+    /// <summary>Whether GLM has anything to authenticate with. Read live rather than cached: keys are added from
+    /// the account manager while the home screen is sitting behind it.</summary>
+    private static bool HasGlmKey =>
+        ApiKeyAccountService.Instance.KeysFor(Protocol.GlmPreset.ProviderId).Count > 0;
+
     private void SetNewChatProvider(string provider, bool persist)
     {
         provider = provider?.Trim().ToLowerInvariant() switch
         {
-            "codex" => "codex", "kimi" => "kimi", "grok" => "grok", _ => "claude",
+            "codex" => "codex", "kimi" => "kimi", "grok" => "grok",
+            Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
+            _ => "claude",
         };
         ClaudeProviderToggle.IsChecked = provider == "claude";
         CodexProviderToggle.IsChecked = provider == "codex";
         KimiProviderToggle.IsChecked = provider == "kimi";
         GrokProviderToggle.IsChecked = provider == "grok";
+        GlmProviderToggle.IsChecked = provider == Protocol.GlmPreset.ProviderId;
         CwdHint.Text = provider switch
         {
             "codex" => "AGENTS.md, skills, plugins and MCP servers load through VibeCode's managed Codex runtime.",
             "kimi" => "AGENTS.md, skills, MCP servers and Kimi's project context load through the installed Kimi Code CLI.",
             "grok" => "AGENTS.md, skills, MCP servers and Grok's project context load through the reviewed Grok ACP runtime.",
+            // The only provider here with no sign-in at all, so "not set up yet" has to be said in the picker.
+            // Left to itself the first turn goes out with an empty key and comes back as "Baseten rejected this
+            // API key", which sends the user looking for a key they never had.
+            Protocol.GlmPreset.ProviderId when !HasGlmKey =>
+                "No GLM key saved yet — add one under the account button (Add API key). "
+                + "Create one at app.baseten.co under API keys.",
+            Protocol.GlmPreset.ProviderId =>
+                "GLM runs inside VibeCode against Baseten's inference API. It has its own file and shell tools; "
+                + "CLI-only features such as skills and MCP servers do not apply.",
             _ => "CLAUDE.md, skills and MCP servers load exactly like the CLI.",
         };
-        CwdHint.Foreground = (Brush)FindResource("Faint");
+        CwdHint.Foreground = (Brush)FindResource(
+            provider == Protocol.GlmPreset.ProviderId && !HasGlmKey ? "Muted" : "Faint");
         if (persist && AppSettings.Current.DefaultProvider != provider)
         {
             AppSettings.Current.DefaultProvider = provider;
@@ -1945,7 +2556,8 @@ public partial class MainWindow : Window
 
     private void OnNewChatInProject(object sender, RoutedEventArgs e)
     {
-        if (Ctx<ProjectVm>(sender) is { } p && Directory.Exists(p.Cwd)) NewChatForWindow(p.Cwd);
+        if (Ctx<ProjectVm>(sender) is not { } p || !Directory.Exists(p.Cwd)) return;
+        NewChatForWindow(p.Cwd);
     }
 
     private void OnForkChat(object sender, RoutedEventArgs e)
@@ -2034,13 +2646,110 @@ public partial class MainWindow : Window
     private Button? _micButton;   // the recording button, for the glyph recolor only
     private DateTime _micBusySince;
     // How long a non-Recording busy state may last before a click is allowed to force it back to Idle. Without this,
-    // one hung transcription makes every mic in the app permanently unusable. The first-use model download gets its
-    // own, far larger budget: ~142 MB over a slow link legitimately exceeds the transcription budget, and force-
-    // resetting it would disown a download that is still running perfectly well.
-    private static readonly TimeSpan MicWedgeTimeout = TimeSpan.FromSeconds(90);
-    private static readonly TimeSpan MicDownloadTimeout = TimeSpan.FromMinutes(30);
+    // one hung transcription makes every mic in the app permanently unusable.
+    // Three seconds past SpeechService's own 180 s budget: that budget almost always expires first and reports WHY it
+    // gave up, and this is the backstop for the case where the service itself never returns at all.
+    private static readonly TimeSpan MicWedgeTimeout = TimeSpan.FromSeconds(183);
 
-    private void ClearMicOwner() { _micButton = null; _micActive = false; _micOwner = null; _micToken = 0; }
+    // The first-use model download is judged on MOVEMENT, not on elapsed time. It used to get a flat 30-minute
+    // budget, which was already the wrong shape and became wrong in fact when the model went from 142 MB to 1.46 GiB:
+    // 30 minutes is simultaneously too short for that download on an ordinary connection (it needs a sustained
+    // ~1.4 Mbit/s just to finish in time) and half an hour too long to notice a socket that died in the first minute.
+    // A download that is still receiving bytes is healthy however slow it is; one that has received none for two
+    // minutes is not coming back.
+    private static readonly TimeSpan MicDownloadStallTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>True when the one-time model download has stopped receiving data for long enough to call it dead.
+    /// Deliberately conservative: no stall clock yet (the request has not answered) counts as healthy, because the
+    /// connect itself has its own wait and force-resetting during it would kill a download that never began.</summary>
+    private static bool MicDownloadIsDead(SpeechService svc)
+    {
+        var stalled = svc.DownloadStalledFor;
+        return stalled > TimeSpan.Zero && stalled > MicDownloadStallTimeout;
+    }
+
+    /// <summary>The one-time-download hint, with live progress when there is any. Rebuilt on every watchdog tick so
+    /// a 1.5 GB fetch reads as something that is moving rather than as a hang.</summary>
+    private static string MicDownloadHint(SpeechService svc, bool still)
+    {
+        var progress = svc.DownloadProgressText;
+        return (still ? "Still downloading" : "Downloading")
+               + $" the speech model — {SpeechService.ModelDownloadSize}, one time"
+               + (progress is null ? "" : $" · {progress}")
+               + ". Transcribing right after…";
+    }
+
+    /// <summary>
+    /// Returns the mic to white on its own. The wedge budget above used to be consulted only from inside
+    /// <see cref="ToggleMic"/> — that is, only when the user clicked the mic AGAIN — so a transcription that never
+    /// came back left the button lit indefinitely and the mic looked dead: the first click did nothing visible
+    /// (it was "still transcribing"), and only a second one recovered it. Nothing was watching the clock.
+    /// </summary>
+    private System.Windows.Threading.DispatcherTimer? _micWatchdog;
+
+    private void StartMicWatchdog()
+    {
+        if (_micWatchdog is null)
+        {
+            _micWatchdog = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1),   // a second's granularity on a minute-long budget
+            };
+            _micWatchdog.Tick += OnMicWatchdogTick;
+        }
+        _micWatchdog.Start();
+    }
+
+    private void OnMicWatchdogTick(object? sender, EventArgs e)
+    {
+        var svc = SpeechService.Instance;
+        if (_micToken == 0 || !svc.IsBusy) { _micWatchdog?.Stop(); return; }
+        // Recording is the user's to end - they may be mid-sentence, and a mic that cut itself off after a minute
+        // would be a worse bug than the one this fixes. Only the phases the user cannot influence are policed.
+        if (svc.State == SpeechState.Recording) return;
+
+        string message;
+        if (svc.State == SpeechState.Downloading)
+        {
+            // A live download is not a wedge however long it takes — but it IS the phase most likely to look like
+            // one, so this tick is also where its progress reaches the user.
+            if (!MicDownloadIsDead(svc)) { ShowMicHint(MicDownloadHint(svc, still: true)); return; }
+            message = "The speech model download stopped responding and was cancelled. "
+                      + "The mic is free again — check the connection and try once more.";
+        }
+        else
+        {
+            if (DateTime.UtcNow - _micBusySince <= MicWedgeTimeout) return;
+            message = $"Speech-to-text stopped responding and was cancelled after {MicWedgeTimeout.TotalSeconds:0}s. "
+                      + "The mic is free again.";
+        }
+
+        _micWatchdog?.Stop();
+        var token = _micToken;
+        var button = _micButton;
+        // Read the owner BEFORE releasing: the release clears it, and a bridge pane's message belongs in the bridge
+        // header rather than in a composer hint the user cannot see from there.
+        var bridgePane = _micOwner as ChatViewModel;
+        svc.ForceReset();                       // burns the token, so the wedged call's continuation stays silent
+        if (!ReleaseMicIfOwned(token, button)) return;
+        if (bridgePane is not null) ShowBridgeHint(message);
+        else ShowComposerHint(message);
+    }
+
+    /// <summary>Put a mic status message wherever the owner of the running capture can actually see it. The watchdog
+    /// has no `hint` closure of its own — it fires on a timer, not from the click — so it resolves the destination
+    /// the same way the release path does: a bridge pane's message belongs in the bridge header.</summary>
+    private void ShowMicHint(string message)
+    {
+        if (_micOwner is ChatViewModel) ShowBridgeHint(message);
+        else ShowComposerHint(message);
+    }
+
+    private void ClearMicOwner()
+    {
+        _micButton = null; _micActive = false; _micOwner = null; _micToken = 0;
+        _micWatchdog?.Stop();   // every release path funnels through here, so this is the one place it must stop
+    }
 
     /// <summary>Release this window's mic bookkeeping and reset the glyph — but ONLY if <paramref name="token"/> is
     /// still the capture we describe. Returns false when a newer capture has taken over, in which case the caller is a
@@ -2054,6 +2763,14 @@ public partial class MainWindow : Window
         return true;
     }
 
+    /// <summary>Open the microphone on the press, not on the click. waveInOpen costs 38-184 ms depending on how
+    /// busy the machine is, and it used to be paid after the button had already been released — i.e. while the
+    /// user was talking. Handled on PREVIEW so it still runs if something downstream marks the event handled, and
+    /// it never starts a recording: SpeechService drops the armed device again if no click follows.
+    /// Deliberately not gated on which mic was pressed — there is one device and one SpeechService.</summary>
+    private void OnMicArm(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        => SpeechService.Instance.ArmMic();
+
     private void OnMicClick(object sender, RoutedEventArgs e)
         => ToggleMic(sender as Button, null, text => InsertAtCaret(InputBox, text), ShowComposerHint);
 
@@ -2066,7 +2783,7 @@ public partial class MainWindow : Window
             primary.OnBridgeMicClick(sender, e);
             return;
         }
-        if (Ctx<ChatViewModel>(sender) is { } vm)
+        if (Ctx<ChatViewModel>(sender) is { } vm && !vm.InputLocked)   // dictation is still typed input
         {
             _vm.SelectBridgePane(vm);
             ToggleMic(sender as Button, vm, text => AppendDraft(vm, text), ShowBridgeHint);
@@ -2076,7 +2793,7 @@ public partial class MainWindow : Window
     // Click once to start recording; click the same button again to stop, transcribe, and drop the text into the
     // composer. A click on any OTHER mic while one is busy is ignored (single capture at a time). `hint` surfaces
     // status/errors where the user is actually looking — the composer hint for the main mic, the bridge header for a
-    // pane. Without a bridge-visible hint, a pane dictation error (or the one-time ~142 MB model download) is silent,
+    // pane. Without a bridge-visible hint, a pane dictation error (or the one-time ~1.5 GB model download) is silent,
     // which reads as "the mic does nothing". Every failure/edge now leaves a visible message.
     private async void ToggleMic(Button? btn, ChatViewModel? owner, Action<string> insert, Action<string> hint)
     {
@@ -2089,10 +2806,13 @@ public partial class MainWindow : Window
             var token = _micToken;                       // the capture we are stopping; everything below is gated on it
             _micButton = btn;   // the container may have been regenerated since we started; recolor the CURRENT button
             _micBusySince = DateTime.UtcNow;             // restart the wedge clock for the transcription phase
+            StartMicWatchdog();                          // …and start something that actually watches it
             SetMicVisual(btn, SpeechState.Transcribing);
-            hint(svc.ModelReady
-                ? "Transcribing…"
-                : "Downloading the speech model — ~142 MB, one time. Transcribing right after…");
+            hint(SpeechService.UsesGroq
+                ? "Transcribing with Groq…"
+                : svc.ReadyWithoutDownload
+                    ? "Transcribing…"
+                    : MicDownloadHint(svc, still: false));
             var text = "";
             try { text = await svc.StopAndTranscribeAsync(token); }
             catch (Exception ex)
@@ -2134,21 +2854,21 @@ public partial class MainWindow : Window
             }
             else
             {
-                // The first-use model download is legitimately slow — judge it against its own budget, not the
-                // transcription one, or a perfectly healthy ~142 MB download gets force-reset at 90 s (and its
-                // still-running successor collides with it).
+                // The first-use model download is legitimately slow — judge it on whether it is still moving, not on
+                // the transcription budget, or a perfectly healthy 1.5 GB download gets force-reset mid-flight (and
+                // its still-running successor collides with it).
                 var downloading = svc.State == SpeechState.Downloading;
-                var budget = downloading ? MicDownloadTimeout : MicWedgeTimeout;
-                if (DateTime.UtcNow - _micBusySince > budget)
+                var wedged = downloading
+                    ? MicDownloadIsDead(svc)
+                    : DateTime.UtcNow - _micBusySince > MicWedgeTimeout;
+                if (wedged)
                 {
                     svc.ForceReset();   // never finished — the only escape from a dead mic
                 }
                 else
                 {
                     // Busy and not wedged yet: never restart on top of it, just say so.
-                    hint(downloading
-                        ? "Still downloading the speech model — ~142 MB, one time. Transcribing right after…"
-                        : "Still transcribing…");
+                    hint(downloading ? MicDownloadHint(svc, still: true) : "Still transcribing…");
                     return;
                 }
             }
@@ -2166,6 +2886,9 @@ public partial class MainWindow : Window
         _micActive = true;
         _micToken = newToken;          // from now on, only a continuation holding THIS token may touch the fields above
         _micBusySince = DateTime.UtcNow;
+        // Runs through the recording too (where it deliberately does nothing) so the mic is covered even if the
+        // service changes state without another trip through this method.
+        StartMicWatchdog();
         SetMicVisual(btn, SpeechState.Recording);
         hint("Listening — click the mic again to insert.");
     }
@@ -2202,7 +2925,11 @@ public partial class MainWindow : Window
                 break;
             default:
                 tb.ClearValue(TextBlock.ForegroundProperty);
-                btn.ToolTip = "Dictate (speech to text)";
+                // Name the engine: the two backends differ in where the audio goes, which is worth being able to
+                // see without opening Settings.
+                btn.ToolTip = SpeechService.UsesGroq
+                    ? "Dictate (speech to text — Groq)"
+                    : "Dictate (speech to text)";
                 break;
         }
     }
@@ -2239,6 +2966,7 @@ public partial class MainWindow : Window
         KickAccountUsage();
         KickCodexAccountRefresh(forceRefresh: false); // refresh the OpenAI row's plan + rolling usage on every open
         KickKimiAccountRefresh();                     // refresh installed/login state without creating a chat
+        KimiUsageService.Instance.Refresh();          // and the live quota behind the account row (service throttles)
         KickGrokAccountRefresh();                     // refresh bundled CLI and xAI login state
         SelectAccountManagerProvider(AppSettings.Current.DefaultProvider);
         RefreshAccountManagerViews();
@@ -2321,6 +3049,7 @@ public partial class MainWindow : Window
             "codex" => 2,
             "kimi" => 3,
             "grok" => 4,
+            Protocol.GlmPreset.ProviderId => 5,
             _ => 0,
         };
         if (AccountProviderCombo.SelectedIndex != index)
@@ -2333,19 +3062,26 @@ public partial class MainWindow : Window
     {
         // SelectionChanged can fire while InitializeComponent is still constructing the controls below the picker.
         if (AllAccountsPanel is null || ClaudeAccountsPanel is null || CodexAccountsPanel is null || KimiAccountsPanel is null
-            || GrokAccountsPanel is null
+            || GrokAccountsPanel is null || GlmAccountsPanel is null
             || AccountManagerAddButton is null || AccountManagerAddLabel is null
             || AccountManagerFooterHint is null || AccountSortCombo is null)
             return;
 
         var provider = SelectedAccountManagerProvider;
+        var glm = Protocol.GlmPreset.Is(provider);
         AllAccountsPanel.Visibility = provider == "all" ? Visibility.Visible : Visibility.Collapsed;
         ClaudeAccountsPanel.Visibility = provider == "claude" ? Visibility.Visible : Visibility.Collapsed;
         CodexAccountsPanel.Visibility = provider == "codex" ? Visibility.Visible : Visibility.Collapsed;
         KimiAccountsPanel.Visibility = provider == "kimi" ? Visibility.Visible : Visibility.Collapsed;
         GrokAccountsPanel.Visibility = provider == "grok" ? Visibility.Visible : Visibility.Collapsed;
-        AccountSortCombo.IsEnabled = provider != "kimi";
+        GlmAccountsPanel.Visibility = glm ? Visibility.Visible : Visibility.Collapsed;
+        // Sorting and status filtering are about saved LOGINS - usage, plan, sign-in state. A key has none of
+        // those, so both controls are disabled for GLM rather than left live and doing nothing. Search stays
+        // enabled because it does work on the key list (see GlmKeyMatchesSearch).
+        AccountSortCombo.IsEnabled = provider != "kimi" && !glm;
+        if (AccountStatusCombo is not null) AccountStatusCombo.IsEnabled = !glm;
         AccountManagerAddButton.IsEnabled = provider != "all";
+        AccountManagerAddButton.Visibility = Visibility.Visible;
 
         (AccountManagerAddLabel.Text, AccountManagerFooterHint.Text) = provider switch
         {
@@ -2353,9 +3089,10 @@ public partial class MainWindow : Window
             "codex" => ("Add Codex account", "Click to switch · right-click to test or remove · saved date appears at right."),
             "kimi" => ("Manage Kimi account", "Kimi keeps one shared OAuth login in the Kimi Code CLI."),
             "grok" => ("Add Grok account", "Click to switch · right-click to test, sign out, or remove · each login stays isolated."),
+            _ when glm => ("Add GLM API key", "GLM signs in with a Baseten API key rather than an account. Click a key to try it first; save several and a rate-limited one falls through."),
             _ => ("Add Claude account", "Click to switch · right-click to test or remove · saved date appears at right."),
         };
-        RefreshAccountManagerViews();
+        RefreshAccountManagerViews();   // refreshes the GLM key list too
     }
 
     private void EnsureAccountManagerViews()
@@ -2391,10 +3128,14 @@ public partial class MainWindow : Window
         (AccountStatusCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "all";
 
     private string SelectedAccountManagerSort =>
-        (AccountSortCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "active";
+        (AccountSortCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "provider";
 
     private void RefreshAccountManagerViews()
     {
+        // GLM's keys are not one of the ListCollectionViews below (they are not accounts), so they are
+        // re-filtered here rather than by the shared view refresh - otherwise typing in the search box moved
+        // every other provider's list and left this one alone.
+        RefreshGlmKeys();
         EnsureAccountManagerViews();
         if (_allAccountManagerView is null || _claudeAccountManagerView is null
             || _codexAccountManagerView is null || _grokAccountManagerView is null
@@ -2492,11 +3233,15 @@ public partial class MainWindow : Window
             "codex" => (codexVisible, _vm.CodexAccounts.Count),
             "kimi" => (kimiVisible ? 1 : 0, 1),
             "grok" => (grokVisible, _vm.GrokAccounts.Count),
+            // GLM's rows are keys, not accounts. Without this it fell through to Claude's branch and the header
+            // read "3 accounts" over a panel listing one key.
+            _ when Protocol.GlmPreset.Is(provider) => GlmKeyCounts(),
             _ => (claudeVisible, _vm.Accounts.Count),
         };
 
+        var noun = Protocol.GlmPreset.Is(provider) ? "key" : "account";
         AccountManagerResultsText.Text = visible == total
-            ? $"{total:N0} account{(total == 1 ? "" : "s")}"
+            ? $"{total:N0} {noun}{(total == 1 ? "" : "s")}"
             : $"{visible:N0} of {total:N0}";
 
         var hasSearchOrStatusFilter = !string.IsNullOrWhiteSpace(AccountSearchBox.Text)
@@ -2596,6 +3341,7 @@ public partial class MainWindow : Window
 
             var result = _mode switch
             {
+                "provider" => CompareProvider(x, y, left, right),
                 "usage-low" => CompareUsageAccounts(left, right, descending: false),
                 "usage-high" => CompareUsageAccounts(left, right, descending: true),
                 "name" => StringComparer.CurrentCultureIgnoreCase.Compare(left.Label, right.Label),
@@ -2608,6 +3354,23 @@ public partial class MainWindow : Window
             result = StringComparer.CurrentCultureIgnoreCase.Compare(left.Label, right.Label);
             return result != 0 ? result : StringComparer.OrdinalIgnoreCase.Compare(left.Id, right.Id);
         }
+
+        // Group the unified roster by AI provider (picker order), active accounts first inside each group.
+        // In the single-provider lists the rank is constant, so this degrades to the plain active ordering.
+        private static int CompareProvider(object? x, object? y, AccountManagerDescriptor left, AccountManagerDescriptor right)
+        {
+            var rank = ProviderRank(x).CompareTo(ProviderRank(y));
+            return rank != 0 ? rank : CompareActive(left, right);
+        }
+
+        private static int ProviderRank(object? item) => item switch
+        {
+            AccountInfo => 0,
+            CodexAccountInfo => 1,
+            KimiAccountEntry => 2,
+            GrokAccountInfo => 3,
+            _ => 4,
+        };
 
         private static int CompareActive(AccountManagerDescriptor left, AccountManagerDescriptor right)
         {
@@ -2651,15 +3414,49 @@ public partial class MainWindow : Window
 
         // Switching is now safe even with chats open: each chat carries its own account's OAuth token, so changing the
         // active account never touches a running chat's login. No "close chats first" warning needed anymore.
+        //
+        // The dialogs below must not claim the sidebar hides the other login's chats - it only does that when the
+        // user opted into per-account workspaces, and promising it by default is what made a switch look like
+        // VibeCode had thrown the conversations away.
         switch (_vm.SwitchAccount(a))
         {
             case Services.SwitchOutcome.Ok:
                 SetNewChatProvider("claude", persist: true);
-                MessageBox.Show(this,
-                    $"Claude Code is now active as {a.Label}.\n\n" +
-                    "New chats use this account. Chats from other Claude logins stay with those logins " +
-                    "(sidebar shows only this account's threads).",
-                    "Account switched", MessageBoxButton.OK, MessageBoxImage.Information);
+                // Switching to an account that is ITSELF maxed out just trades one dead account for another - say so
+                // up front instead of letting the next prompt fail.
+                if (a.AtLimit)
+                    MessageBox.Show(this,
+                        $"Heads up: {a.Label} is also at its usage limit ({a.UsageDisplay}). Prompts will likely fail until it resets.",
+                        "That account is at its limit too", MessageBoxButton.OK, MessageBoxImage.Warning);
+                // Chats stay under the login that created them, so a switch alone leaves an open chat still failing on
+                // the exhausted account. Offer to carry them over - the only way out that keeps the conversation.
+                var movableClaude = _vm.ClaudeChatsMovableTo(a.Id);
+                if (movableClaude.Count > 0)
+                {
+                    var askClaude = MessageBox.Show(this,
+                        $"Claude Code is now active as {a.Label}.\n\n" +
+                        $"{movableClaude.Count} open Claude chat{(movableClaude.Count == 1 ? "" : "s")}/pane{(movableClaude.Count == 1 ? "" : "s")} " +
+                        "still belong to other saved logins and keep running under them.\n\n" +
+                        "Move those chats onto this account too? (Use Yes if the old login is maxed out.)",
+                        "Account switched", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    if (askClaude == MessageBoxResult.Yes)
+                    {
+                        var (movedCount, failedChats) = _vm.MoveAllClaudeChatsToAccount(a.Id, a.Label);
+                        var summary = $"Moved {movedCount} Claude chat{(movedCount == 1 ? "" : "s")}/pane{(movedCount == 1 ? "" : "s")} to {a.Label}.";
+                        // Name them. "1 couldn't be moved" is not actionable - the user cannot rescue a chat they
+                        // cannot identify, and a chat silently left on a maxed-out login just keeps failing.
+                        if (failedChats.Count > 0)
+                            summary += $"\n\nStill on the old account — these will keep failing until you move them " +
+                                       $"from their own account menu:\n  • {string.Join("\n  • ", failedChats)}";
+                        MessageBox.Show(this, summary, "Chats updated",
+                            MessageBoxButton.OK, failedChats.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+                    }
+                }
+                else
+                    MessageBox.Show(this,
+                        $"Claude Code is now active as {a.Label}.\n\n" +
+                        "New chats use this account. " + OtherAccountChatsNote,
+                        "Account switched", MessageBoxButton.OK, MessageBoxImage.Information);
                 // Optional: re-home a chat that was left on another *provider* (not another Claude account).
                 OfferMoveOpenChatsToProvider("claude");
                 break;
@@ -2694,32 +3491,32 @@ public partial class MainWindow : Window
                     MessageBox.Show(this,
                         $"Heads up: {account.Label} is also at its usage limit ({account.UsageDisplay}). Prompts will likely fail until it resets.",
                         "That account is at its limit too", MessageBoxButton.OK, MessageBoxImage.Warning);
-                // Per-account workspaces: chats stay under the login that created them (sidebar filters by active
-                // account). Optional bulk move still available when the previous login is exhausted.
+                // Chats stay under the login that created them. Optional bulk move is still offered because that is
+                // the way out when the previous login is exhausted - not because the chats went anywhere.
                 var movable = _vm.CodexChatsMovableTo(account.Id);
                 if (movable.Count > 0)
                 {
                     var ask = MessageBox.Show(this,
                         $"OpenAI Codex is now active as {account.Label}.\n\n" +
                         $"{movable.Count} open Codex chat{(movable.Count == 1 ? "" : "s")}/pane{(movable.Count == 1 ? "" : "s")} " +
-                        "still belong to other saved logins and are hidden while this account is active " +
-                        "(switch back to see them).\n\n" +
+                        "still belong to other saved logins and keep running under them.\n\n" +
                         "Move those chats onto this account too? (Use Yes if the old login is maxed out.)",
                         "Account switched", MessageBoxButton.YesNo, MessageBoxImage.Question);
                     if (ask == MessageBoxResult.Yes)
                     {
-                        var (movedCount, failedCount) = _vm.MoveAllCodexChatsToAccount(account.Id, account.Label);
+                        var (movedCount, failedChats) = _vm.MoveAllCodexChatsToAccount(account.Id, account.Label);
                         var summary = $"Moved {movedCount} Codex chat{(movedCount == 1 ? "" : "s")}/pane{(movedCount == 1 ? "" : "s")} to {account.Label}.";
-                        if (failedCount > 0) summary += $"\n{failedCount} couldn't be moved and keep their old account.";
+                        if (failedChats.Count > 0)
+                            summary += $"\n\nStill on the old account — these will keep failing until you move them " +
+                                       $"from their own account menu:\n  • {string.Join("\n  • ", failedChats)}";
                         MessageBox.Show(this, summary, "Chats updated",
-                            MessageBoxButton.OK, failedCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+                            MessageBoxButton.OK, failedChats.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
                     }
                 }
                 else
                     MessageBox.Show(this,
                         $"OpenAI Codex is now active as {account.Label}.\n\n" +
-                        "New chats use this account. Chats from other Codex logins stay with those logins " +
-                        "(sidebar shows only this account's threads).",
+                        "New chats use this account. " + OtherAccountChatsNote,
                         "Account switched", MessageBoxButton.OK, MessageBoxImage.Information);
                 MaybeOfferProviderChat("codex");   // e.g. a Claude chat is focused: offer a Codex chat so the models flip
                 break;
@@ -2741,6 +3538,14 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>What actually happens to the chats that belong to the login you just switched away from. Reads the
+    /// live setting because the two answers are opposites, and telling the user the wrong one is the whole bug:
+    /// by default nothing leaves the sidebar, and only per-account workspaces hide anything.</summary>
+    private static string OtherAccountChatsNote => AppSettings.Current.IsolateChatsByAccount
+        ? "Chats from other logins stay with those logins, and the sidebar shows only this account's threads "
+          + "(switch back to see the others)."
+        : "Your other chats stay in the sidebar and keep running under their own logins — each row shows which.";
+
     private void ShowReloginWarning(string label) =>
         MessageBox.Show(this,
             $"{label}'s saved login is incomplete, so I didn't switch (that would have logged you out).\n\n" +
@@ -2753,9 +3558,9 @@ public partial class MainWindow : Window
     private System.Windows.Threading.DispatcherTimer? _tokenRefreshTimer;
     // Task.Run so nothing (not even the fast file I/O before the probe's first await) runs on the UI thread.
     private static void KickTokenRefresh() => _ = Task.Run(() => Services.AccountService.Instance.RefreshAllTokensAsync());
-    private void StartTokenRefresh()
+    private void StartTokenRefresh(bool immediate = true)
     {
-        KickTokenRefresh();   // once now
+        if (immediate) KickTokenRefresh();   // once now
         _tokenRefreshTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(90) };
         _tokenRefreshTimer.Tick -= OnTokenRefreshTick;
         _tokenRefreshTimer.Tick += OnTokenRefreshTick;
@@ -2767,9 +3572,9 @@ public partial class MainWindow : Window
     // automatically while chats are active; this timer also refreshes them while VibeCode is merely sitting open.
     private System.Windows.Threading.DispatcherTimer? _codexRefreshTimer;
     private int _codexRefreshRunning;
-    private void StartCodexAccountRefresh()
+    private void StartCodexAccountRefresh(bool immediate = true)
     {
-        KickCodexAccountRefresh(forceRefresh: true);
+        if (immediate) KickCodexAccountRefresh(forceRefresh: true);
         _codexRefreshTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
         _codexRefreshTimer.Tick -= OnCodexRefreshTick;
         _codexRefreshTimer.Tick += OnCodexRefreshTick;
@@ -2796,9 +3601,9 @@ public partial class MainWindow : Window
     // Kimi's ACP authenticate method only validates the cached token; it creates no session and makes no model call.
     private System.Windows.Threading.DispatcherTimer? _kimiRefreshTimer;
     private int _kimiRefreshRunning;
-    private void StartKimiAccountRefresh()
+    private void StartKimiAccountRefresh(bool immediate = true)
     {
-        KickKimiAccountRefresh();
+        if (immediate) KickKimiAccountRefresh();
         _kimiRefreshTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
         _kimiRefreshTimer.Tick -= OnKimiRefreshTick;
         _kimiRefreshTimer.Tick += OnKimiRefreshTick;
@@ -2816,6 +3621,7 @@ public partial class MainWindow : Window
         {
             var state = await KimiAccountLoginService.ReadAsync();
             _vm.ApplyKimiAccount(state);
+            if (state.IsSignedIn) KimiUsageService.Instance.Refresh();   // startup + 30-min tick keep the quota fresh
             ScheduleAccountManagerRefresh();
             return state;
         }
@@ -2825,9 +3631,9 @@ public partial class MainWindow : Window
     // Grok accounts are independently authenticated and billed through ACP using their own GROK_AUTH_PATH.
     private System.Windows.Threading.DispatcherTimer? _grokRefreshTimer;
     private int _grokRefreshRunning;
-    private void StartGrokAccountRefresh()
+    private void StartGrokAccountRefresh(bool immediate = true)
     {
-        KickGrokAccountRefresh();
+        if (immediate) KickGrokAccountRefresh();
         _grokRefreshTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
         _grokRefreshTimer.Tick -= OnGrokRefreshTick;
         _grokRefreshTimer.Tick += OnGrokRefreshTick;
@@ -2865,9 +3671,9 @@ public partial class MainWindow : Window
         // ordered by availability or attention instead of leaving a stale order until the manager is reopened.
         ScheduleAccountManagerRefresh();
     });
-    private void StartAccountUsagePolling()
+    private void StartAccountUsagePolling(bool immediate = true)
     {
-        KickAccountUsage();   // pre-warm so the numbers are ready when the account menu is opened
+        if (immediate) KickAccountUsage();   // pre-warm so the numbers are ready when the account menu is opened
         _accountUsageTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(4) };
         _accountUsageTimer.Tick -= OnAccountUsageTick;
         _accountUsageTimer.Tick += OnAccountUsageTick;
@@ -2884,14 +3690,79 @@ public partial class MainWindow : Window
     {
         var provider = SelectedAccountManagerProvider;
         if (!Services.ApiKeyAccountService.Providers.Contains(provider)) provider = "claude";
+
         CloseAccountManager();
 
         var dialog = new UI.ApiKeyDialog(provider) { Owner = this };
         if (dialog.ShowDialog() != true) return;
 
         Services.ApiKeyAccountService.Instance.Add(provider, dialog.ApiKey, dialog.AccountLabel);
+
         RefreshAccountManagerViews();
+        RefreshGlmKeys();
+        // The home screen's provider hint says "no GLM key saved yet", and it is sitting behind this dialog -
+        // so re-render it now that the answer has changed.
+        if (Protocol.GlmPreset.Is(provider)) SetNewChatProvider(AppSettings.Current.DefaultProvider, persist: false);
         await Task.CompletedTask;
+    }
+
+    /// <summary>How many GLM keys are saved, and how many the search box currently leaves showing.</summary>
+    private (int Visible, int Total) GlmKeyCounts()
+    {
+        var all = ApiKeyAccountService.Instance.For(Protocol.GlmPreset.ProviderId).ToList();
+        return (all.Count(GlmKeyMatchesSearch), all.Count);
+    }
+
+    /// <summary>Search matches a key's label and its masked form only. The secret is never searched - it is not
+    /// in memory in the clear here, and matching on it would be a way to confirm a key by guessing at it.</summary>
+    private bool GlmKeyMatchesSearch(ApiKeyAccount account)
+    {
+        var query = AccountSearchBox?.Text;
+        if (string.IsNullOrWhiteSpace(query)) return true;
+        var haystack = $"{account.Title} {account.Subtitle}";
+        return query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .All(term => haystack.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Re-render the GLM key list and its empty/count text from the key store.</summary>
+    private void RefreshGlmKeys()
+    {
+        if (GlmKeyList is null || GlmEmptyText is null || GlmKeyCountText is null) return;
+        var all = ApiKeyAccountService.Instance.For(Protocol.GlmPreset.ProviderId).ToList();
+        var shown = all.Where(GlmKeyMatchesSearch).ToList();
+        GlmKeyList.ItemsSource = shown;
+        GlmEmptyText.Text = all.Count == 0
+            ? "No GLM keys saved yet. Use \"Add API key\" below — create one at app.baseten.co under API keys."
+            : "No GLM keys match the current search.";
+        GlmEmptyText.Visibility = shown.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        GlmKeyCountText.Text = all.Count == 0
+            ? ""
+            : $"{all.Count} key{(all.Count == 1 ? "" : "s")}";
+    }
+
+    /// <summary>Make a saved key the one GLM chats try first. Already-running chats keep the key they started
+    /// with - the session captured its list at launch, exactly like the CLI providers capture their account.</summary>
+    private void OnSelectGlmKey(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag as string is not { Length: > 0 } id) return;
+        ApiKeyAccountService.Instance.Select(Protocol.GlmPreset.ProviderId, id);
+        RefreshGlmKeys();
+    }
+
+    private void OnRemoveGlmKey(object sender, RoutedEventArgs e)
+    {
+        // Stop the row's own click handler from also firing and selecting the key being deleted.
+        e.Handled = true;
+        if ((sender as FrameworkElement)?.Tag as string is not { Length: > 0 } id) return;
+        var account = ApiKeyAccountService.Instance.Accounts.FirstOrDefault(a => a.Id == id);
+        if (account is null) return;
+        if (MessageBox.Show(this,
+                $"Remove this GLM key ({account.Masked})?\n\nChats already running keep the key they started with.",
+                "Remove GLM key?", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+        ApiKeyAccountService.Instance.Remove(id);
+        RefreshGlmKeys();
+        SetNewChatProvider(AppSettings.Current.DefaultProvider, persist: false);
     }
 
     private async void OnAddAccount(object sender, RoutedEventArgs e)
@@ -2911,6 +3782,13 @@ public partial class MainWindow : Window
         if (provider == "grok")
         {
             await SignInToGrokAsync();
+            return;
+        }
+        if (Protocol.GlmPreset.Is(provider))
+        {
+            // GLM has no OAuth flow to run - a key IS the account here - so the primary button leads to the same
+            // dialog as "Add API key" rather than being a dead control labelled "Add GLM API key".
+            OnAddApiKeyAccount(sender, e);
             return;
         }
 
@@ -2992,6 +3870,18 @@ public partial class MainWindow : Window
 
         if (!state.IsInstalled)
         {
+            // The official installer is a PowerShell script, and a Wine prefix has no PowerShell to run it in.
+            // The Linux package installs Kimi itself, so point at that instead of a button that cannot work.
+            if (ExternalBrowser.IsWine)
+            {
+                MessageBox.Show(this,
+                    "Kimi Code CLI is not installed in this Wine prefix.\n\n" +
+                    "Close VibeCode and run ./install-kali.sh again from the privatelinux folder. It downloads the " +
+                    "official checksum-verified Kimi build, and rerunning it is the supported repair path.",
+                    "Kimi Code CLI not installed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             var install = MessageBox.Show(this,
                 "Kimi Code CLI is not installed. Install Kimi's official Windows build now?\n\n" +
                 "The official installer opens in PowerShell. Kimi also requires Git for Windows.",
@@ -3063,16 +3953,15 @@ public partial class MainWindow : Window
         progress.Closing += (_, _) => { if (!closingForResult) cancellation.Cancel(); };
         progress.Show();
 
+        var browserOpened = true;
         var result = await KimiAccountLoginService.LoginAsync(
-            url => Dispatcher.BeginInvoke(() =>
-            {
-                status.Text = "Finish signing in to Kimi in your browser.\nVibeCode will detect it automatically.";
-                try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-                catch { /* the verification URL remains visible in Kimi's status output */ }
-            }),
+            url => Dispatcher.BeginInvoke(() => browserOpened = ShowSignInLink(panel, status, url,
+                "Finish signing in to Kimi in your browser.\nVibeCode will detect it automatically.")),
             line => Dispatcher.BeginInvoke(() =>
             {
-                if (!line.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                // Kimi echoes the verification URL itself; ShowSignInLink already presents it properly. Once the
+                // user has been told to open the link by hand, CLI chatter must not overwrite that instruction.
+                if (browserOpened && !line.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                     status.Text = line.Length > 240 ? line[..240] + "…" : line;
             }),
             cancellation.Token);
@@ -3119,8 +4008,7 @@ public partial class MainWindow : Window
         if (!state.IsInstalled)
         {
             MessageBox.Show(this,
-                "The Grok CLI is not available. Install it so grok.exe is on PATH, place it beside VibeCode, " +
-                "or set VIBECODE_GROK_PATH.",
+                "Install the Grok CLI or set VIBECODE_GROK_PATH to its executable.",
                 "Grok runtime not found", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -3186,7 +4074,9 @@ public partial class MainWindow : Window
         var browser = ChoiceButton("Use existing browser session",
             "xAI reuses the login already present in your default browser.");
         var cookies = ChoiceButton("Paste Grok cookies",
-            "Uses your own Cookie-Editor JSON or Netscape export in a temporary private sign-in window.");
+            ExternalBrowser.IsWine
+                ? "Uses your own Cookie-Editor JSON or Netscape export to complete xAI's sign-in directly."
+                : "Uses your own Cookie-Editor JSON or Netscape export in a temporary private sign-in window.");
         var cancel = new Button
         {
             Content = "Cancel", IsCancel = true, HorizontalAlignment = HorizontalAlignment.Right,
@@ -3371,38 +4261,56 @@ public partial class MainWindow : Window
 
         GrokCookieLoginWindow? cookieWindow = null;
         string? cookieBrowserError = null;
+        var browserOpened = true;
         var result = await GrokAccountService.Instance.AddAsync(
             mode,
             url => Dispatcher.BeginInvoke(async () =>
             {
                 if (cookieImport is null)
                 {
-                    status.Text = mode == GrokLoginMode.DeviceCode
+                    browserOpened = ShowSignInLink(panel, status, url, mode == GrokLoginMode.DeviceCode
                         ? "Approve the device code with xAI in your browser.\nVibeCode will detect it automatically."
-                        : "Finish signing in to Grok with xAI in your browser.\nYour existing browser session should be reused.";
-                    try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-                    catch { /* the trusted verification URL remains available to the CLI */ }
+                        : "Finish signing in to Grok with xAI in your browser.\nYour existing browser session should be reused.");
                     return;
                 }
 
-                try
+                // WebView2 does not exist on Linux, so the private-browser exchange cannot run under Wine. The
+                // handshake itself is plain HTTP, so fall through to the direct exchange instead of failing.
+                if (!ExternalBrowser.IsWine)
                 {
-                    status.Text = "Loading your Grok session into a temporary private browser...";
-                    cookieWindow = new GrokCookieLoginWindow { Owner = this };
-                    cookieWindow.UserCancelled += (_, _) => cancellation.Cancel();
-                    cookieWindow.Show();
-                    await cookieWindow.InitializeAsync(cookieImport.Cookies, url);
+                    try
+                    {
+                        status.Text = "Loading your Grok session into a temporary private browser...";
+                        cookieWindow = new GrokCookieLoginWindow { Owner = this };
+                        cookieWindow.UserCancelled += (_, _) => cancellation.Cancel();
+                        cookieWindow.Show();
+                        await cookieWindow.InitializeAsync(cookieImport.Cookies, url);
+                        status.Text = "Waiting for xAI to finish the official OAuth exchange...";
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        cookieBrowserError = "The private sign-in browser could not start (" + ex.Message
+                                             + "). Completing the exchange directly instead.";
+                        if (cookieWindow is { IsLoaded: true }) await cookieWindow.ClearAndCloseAsync();
+                        cookieWindow = null;
+                    }
+                }
+
+                status.Text = "Completing the xAI sign-in with your pasted session...";
+                var exchange = await GrokCookieAuthExchange.RunAsync(cookieImport.Cookies, url, cancellation.Token);
+                if (exchange.Success)
+                {
+                    cookieBrowserError = null;
                     status.Text = "Waiting for xAI to finish the official OAuth exchange...";
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    cookieBrowserError = "The temporary Grok sign-in window could not be prepared: " + ex.Message;
-                    cancellation.Cancel();
-                }
+                cookieBrowserError = exchange.Error;
+                cancellation.Cancel();
             }),
             line => Dispatcher.BeginInvoke(() =>
             {
-                if (!line.Contains("[xAI sign-in link]", StringComparison.Ordinal))
+                if (browserOpened && !line.Contains("[xAI sign-in link]", StringComparison.Ordinal))
                     status.Text = line.Length > 240 ? line[..240] + "…" : line;
             }),
             cancellation.Token);
@@ -3448,6 +4356,61 @@ public partial class MainWindow : Window
             "Grok account ready", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
+    /// <summary>
+    /// Hand the provider's sign-in URL to a browser and leave the link on screen either way.
+    ///
+    /// Showing it is the point. Every one of these flows ends outside the app, so when the launch fails - which is
+    /// the normal case on Wine, where the prefix has no browser association - hiding the URL left the user with a
+    /// dialog that could never finish. With the link visible the sign-in is completable by hand on any desktop.
+    /// </summary>
+    /// <returns>True when a browser actually opened. False means the user must use the link, so callers stop
+    /// overwriting the status line with CLI progress chatter that would bury that instruction.</returns>
+    private bool ShowSignInLink(StackPanel panel, TextBlock status, string url, string waitingText)
+    {
+        var opened = ExternalBrowser.TryOpen(url, out _);
+        status.Text = opened ? waitingText : ExternalBrowser.Describe(false);
+        if (panel.Children.OfType<FrameworkElement>().Any(child => child.Name == "SignInLink")) return opened;
+
+        var link = new TextBox
+        {
+            Name = "SignInLink",
+            Text = url,
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11.5,
+            Margin = new Thickness(0, 12, 0, 0),
+            MaxHeight = 76,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        var copy = new Button
+        {
+            Content = "Copy link",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 8, 0, 0),
+            Padding = new Thickness(12, 5, 12, 5),
+        };
+        copy.SetResourceReference(StyleProperty, "GhostButton");
+        copy.Click += (_, _) =>
+        {
+            try
+            {
+                Clipboard.SetText(url);
+                copy.Content = "Copied";
+            }
+            catch
+            {
+                // Wine's clipboard can be unavailable; the link is selectable in the box regardless.
+                copy.Content = "Select the link above";
+            }
+        };
+
+        // Sit above the Cancel button rather than below it.
+        var insertAt = Math.Max(0, panel.Children.Count - 1);
+        panel.Children.Insert(insertAt, link);
+        panel.Children.Insert(insertAt + 1, copy);
+        return opened;
+    }
+
     private async Task SignInToCodexAsync()
     {
         using var cancellation = new CancellationTokenSource();
@@ -3469,11 +4432,10 @@ public partial class MainWindow : Window
         progress.Closing += (_, _) => { if (!closingForResult) cancellation.Cancel(); };
         progress.Show();
 
-        var result = await CodexAccountService.Instance.AddAsync(url =>
-        {
-            status.Text = "Finish the OpenAI sign-in in your browser.\nVibeCode will detect it and keep the session refreshed.";
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }, cancellation.Token);
+        var result = await CodexAccountService.Instance.AddAsync(url => Dispatcher.BeginInvoke(() =>
+            ShowSignInLink(panel, status, url,
+                "Finish the OpenAI sign-in in your browser.\nVibeCode will detect it and keep the session refreshed.")),
+            cancellation.Token);
         closingForResult = true;
         if (progress.IsVisible) progress.Close();
 
@@ -3612,8 +4574,7 @@ public partial class MainWindow : Window
                 SetNewChatProvider("grok", persist: true);
                 MessageBox.Show(this,
                     $"Grok is now active as {account.Label}.\n\n" +
-                    "New chats use this account. Chats from other Grok logins stay with those logins " +
-                    "(sidebar shows only this account's threads — switch back to see the others).",
+                    "New chats use this account. " + OtherAccountChatsNote,
                     "Account switched", MessageBoxButton.OK,
                     account.AtLimit ? MessageBoxImage.Warning : MessageBoxImage.Information);
                 break;
@@ -3693,18 +4654,187 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnDeleteAllGrokChats(object sender, RoutedEventArgs e)
+    {
+        CloseAccountManager();
+        if (_ctxGrokAccount is not { } account) return;
+        if (!account.Usable)
+        {
+            MessageBox.Show(this,
+                $"{account.Label} is signed out. Add the account again before deleting its chats.",
+                "Sign in first", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (MessageBox.Show(this,
+                $"Delete ALL Grok chats for {account.Label}?\n\n" +
+                "This permanently removes every conversation on this account at grok.com. It cannot be undone.\n\n" +
+                "(Projects/workspaces are left untouched.)",
+                "Delete all Grok chats", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        var authPath = GrokAccountService.Instance.AuthPathFor(account.Id);
+        if (!GrokChatBulkDeleteService.TryReadCredential(authPath, out _, out _))
+        {
+            MessageBox.Show(this,
+                $"VibeCode couldn't read {account.Label}'s saved login, so it can't delete its chats. Sign in again and retry.",
+                "Login unavailable", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // grok.com's chat API is Cloudflare-walled from most home IPs, so deletion routes through a proxy the
+        // user enters here (pre-filled with whatever was saved last time). Blank host = try directly.
+        var chosen = PromptForProxy(AppSettings.Current.GrokDeleteProxy);
+        if (chosen is null) return; // cancelled
+        var proxy = string.IsNullOrWhiteSpace(chosen) ? null : chosen;
+        AppSettings.Current.GrokDeleteProxy = proxy;
+        AppSettings.Current.Save();
+
+        var progress = new TextBlock
+        {
+            Text = $"Clearing every chat on {account.Label}…",
+            Foreground = (Brush)FindResource("Muted"),
+            Margin = new Thickness(18),
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var wait = CreateThemedDialog("Deleting Grok chats", progress, 340);
+        wait.Show();
+
+        var reporter = new Progress<int>(n => progress.Text = $"Deleted {n} chats…");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+        GrokChatBulkDeleteResult result;
+        try
+        {
+            result = await GrokChatBulkDeleteService.DeleteAllAsync(
+                authPath, string.IsNullOrWhiteSpace(proxy) ? null : proxy, reporter, cancellation.Token);
+        }
+        catch (Exception ex)
+        {
+            result = new GrokChatBulkDeleteResult { Error = ex.Message };
+        }
+        finally
+        {
+            wait.Close();
+        }
+
+        if (result.NeedsProxy)
+        {
+            // Keep the entered proxy saved so the next attempt's dialog is pre-filled and they can just tweak it.
+            MessageBox.Show(this, result.Error, "Cloudflare blocked deletion",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (result.Success)
+            MessageBox.Show(this,
+                result.Deleted == 0
+                    ? $"{account.Label} had no chats to delete — it's already clear."
+                    : $"Deleted {result.Deleted} chat(s) from {account.Label}. Its chat list is now empty.",
+                "Grok chats deleted", MessageBoxButton.OK, MessageBoxImage.Information);
+        else
+            MessageBox.Show(this,
+                result.Error ?? "Grok chat deletion failed.",
+                "Could not delete chats", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    /// <summary>
+    /// Proxy entry for the Grok "Delete all chats" action: type (HTTP/SOCKS5), host/IP, port, and optional
+    /// username + password. Pre-filled from the saved proxy. Returns the canonical proxy string, "" to try
+    /// directly (blank host), or null if cancelled.
+    /// </summary>
+    private string? PromptForProxy(string? current)
+    {
+        var parts = GrokChatBulkDeleteService.ParseProxy(current);
+        var muted = (Brush)FindResource("Muted");
+
+        var intro = new TextBlock
+        {
+            Text = "grok.com is behind Cloudflare, which blocks chat deletion from most home connections. "
+                   + "Enter a proxy to route through a clean IP. Leave the host blank to try directly.",
+            Foreground = muted, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(0, 0, 0, 14),
+        };
+
+        var type = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
+        type.Items.Add("HTTP");
+        type.Items.Add("SOCKS5");
+        type.SelectedIndex = string.Equals(parts?.Kind, "socks5", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+
+        var host = new TextBox { Text = parts?.Host ?? "", Margin = new Thickness(0, 3, 0, 3) };
+        var port = new TextBox { Text = parts is { Port: > 0 } ? parts.Port.ToString() : "", Margin = new Thickness(0, 3, 0, 3) };
+        var user = new TextBox { Text = parts?.User ?? "", Margin = new Thickness(0, 3, 0, 3) };
+        var pass = new PasswordBox { Password = parts?.Pass ?? "", Margin = new Thickness(0, 3, 0, 3) };
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(94) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        void AddRow(int r, string label, FrameworkElement field)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var lbl = new TextBlock
+            {
+                Text = label, Foreground = muted, VerticalAlignment = VerticalAlignment.Center,
+                FontSize = 12.5, Margin = new Thickness(0, 0, 10, 0),
+            };
+            Grid.SetRow(lbl, r); Grid.SetColumn(lbl, 0);
+            Grid.SetRow(field, r); Grid.SetColumn(field, 1);
+            grid.Children.Add(lbl); grid.Children.Add(field);
+        }
+        AddRow(0, "Type", type);
+        AddRow(1, "Host / IP", host);
+        AddRow(2, "Port", port);
+        AddRow(3, "Username", user);
+        AddRow(4, "Password", pass);
+
+        var ok = new Button { Content = "Save & delete", Width = 128, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+        var cancel = new Button { Content = "Cancel", Width = 90, IsCancel = true };
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 18, 0, 0),
+        };
+        buttons.Children.Add(ok);
+        buttons.Children.Add(cancel);
+
+        var panel = new StackPanel { Margin = new Thickness(18) };
+        panel.Children.Add(intro);
+        panel.Children.Add(grid);
+        panel.Children.Add(buttons);
+
+        var dialog = CreateThemedDialog("Proxy for deleting Grok chats", panel, 380);
+        string? result = null;
+        ok.Click += (_, _) =>
+        {
+            var enteredHost = host.Text.Trim();
+            if (enteredHost.Length == 0) { result = ""; dialog.DialogResult = true; return; }  // blank = try directly
+            if (!int.TryParse(port.Text.Trim(), out var enteredPort) || enteredPort is < 1 or > 65535)
+            {
+                MessageBox.Show(dialog, "Enter a valid port (1–65535).", "Proxy",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var kind = type.SelectedIndex == 1 ? "socks5" : "http";
+            var enteredUser = user.Text.Trim();
+            result = GrokChatBulkDeleteService.BuildProxyString(new GrokChatBulkDeleteService.ProxyParts(
+                kind, enteredHost, enteredPort,
+                enteredUser.Length == 0 ? null : enteredUser,
+                pass.Password.Length == 0 ? null : pass.Password));
+            dialog.DialogResult = true;
+        };
+        host.Loaded += (_, _) => host.Focus();
+        return dialog.ShowDialog() == true ? result : null;
+    }
+
     // ---------- Spotify inline player ----------
 
     private System.Windows.Threading.DispatcherTimer? _spotifyTimer;
 
-    private void StartSpotifyPolling()
+    private void StartSpotifyPolling(bool immediate = true)
     {
         // 1s heartbeat: advances the progress bar smoothly + re-syncs with Spotify every few seconds.
         _spotifyTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _spotifyTimer.Tick -= OnSpotifyTick;
         _spotifyTimer.Tick += OnSpotifyTick;
         _spotifyTimer.Start();
-        if (SpotifyService.Instance.Enabled) _ = SpotifyService.Instance.PollAsync();
+        if (immediate && SpotifyService.Instance.Enabled) _ = SpotifyService.Instance.PollAsync();
     }
 
     private void OnSpotifyTick(object? sender, EventArgs e) => SpotifyService.Instance.Heartbeat();
@@ -3729,7 +4859,7 @@ public partial class MainWindow : Window
 
     private System.Windows.Threading.DispatcherTimer? _weatherTimer;
 
-    private void StartWeatherPolling()
+    private void StartWeatherPolling(bool immediate = true)
     {
         // NWS observations update roughly hourly, so a 10 minute poll is plenty to keep the chip honest without
         // hammering a free public API. No-op while the extension is off or no place has been picked.
@@ -3737,7 +4867,9 @@ public partial class MainWindow : Window
         _weatherTimer.Tick -= OnWeatherTick;
         _weatherTimer.Tick += OnWeatherTick;
         _weatherTimer.Start();
-        OnWeatherTick(null, EventArgs.Empty);   // once now, so the chip isn't stuck on "--" after a launch
+        // Once now, so the chip isn't stuck on "--" after a launch. The chip binds straight to the service, so a
+        // shell rebuilt for an appearance change already has the last reading and skips this.
+        if (immediate) OnWeatherTick(null, EventArgs.Empty);
     }
 
     private void OnWeatherTick(object? sender, EventArgs e)
@@ -3813,11 +4945,22 @@ public partial class MainWindow : Window
     }
 
     private void OnActivateBridge(object sender, RoutedEventArgs e) => ActivateBridgeForWindow();
+    /// <summary>True when this window drives a Bridge roster of its own rather than the primary's. Every roster-level
+    /// header action (Add agent, Fork, Announce, the agent cap) has to ask this before it touches anything.</summary>
+    private bool OwnsSecondaryBridge => IsDoubleSessionCompanion && _vm.HasSeparateSecondaryBridge;
+
+    /// <summary>The roster this window's Bridge header describes.</summary>
+    private IReadOnlyList<ChatViewModel> BridgeRosterForWindow =>
+        OwnsSecondaryBridge ? _vm.SecondaryBridgePanes : _vm.BridgePanes;
+
+    private bool CanAddBridgeAgentForWindow =>
+        OwnsSecondaryBridge ? _vm.SecondaryCanAddBridgeAgent : _vm.CanAddBridgeAgent;
+
     private void OnAddBridgeAgent(object sender, RoutedEventArgs e)
     {
         // At the Settings cap the button stays clickable on purpose — silent disable left people thinking
         // Add agent was broken. Tell them the limit and offer to open Settings to raise it.
-        if (!_vm.CanAddBridgeAgent)
+        if (!CanAddBridgeAgentForWindow)
         {
             ShowBridgeAgentLimitReached();
             return;
@@ -3828,12 +4971,56 @@ public partial class MainWindow : Window
         menu.IsOpen = true;
     }
 
+    // ---------- bridge header ⋮ overflow (Fork whole bridge) ----------
+    // Same mutual-exclusion rule the other bridge-header popups follow: opening one closes the rest.
+    private void OnBridgeMoreChecked(object sender, RoutedEventArgs e)
+    {
+        BridgeUsagePopup.IsOpen = false;
+        BridgeCodexUsagePopup.IsOpen = false;
+        BridgeGrokUsagePopup.IsOpen = false;
+        BridgeKimiUsagePopup.IsOpen = false;
+        BridgeAnnouncePopup.IsOpen = false;
+        BridgeMorePopup.IsOpen = true;
+    }
+
+    private void OnBridgeMoreUnchecked(object sender, RoutedEventArgs e) => BridgeMorePopup.IsOpen = false;
+    private void OnBridgeMorePopupClosed(object? sender, EventArgs e) => BridgeMoreToggle.IsChecked = false;
+
+    // Dismiss the menu first so the fork's brand-new roster is not drawn behind a stale popup.
+    private void OnMenuForkBridge(object sender, RoutedEventArgs e)
+    {
+        BridgeMoreToggle.IsChecked = false;
+        BridgeMorePopup.IsOpen = false;
+        OnForkBridge(sender, e);
+    }
+
+    // Fork the whole roster: a second bridge whose agents each start from their original's transcript. The bridge
+    // that was on screen is parked, not closed - it keeps running and comes back from its host row in the sidebar.
+    private void OnForkBridge(object sender, RoutedEventArgs e)
+    {
+        // Forking is a primary-surface operation: it parks the roster it came from and puts the fork on the main
+        // window. Offering it for shell 2's own bridge would silently move that bridge to the other display.
+        if (OwnsSecondaryBridge) return;
+        if (!_vm.CanForkBridge) return;
+        _vm.NoteBridgeActivity();
+        if (_vm.ForkBridge() is null) return;
+        RefreshBridgePartitions();   // the surface is a brand-new roster; re-split it across the monitors
+    }
+
     private void OnAddBridgeProvider(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.Tag is not string provider) return;
-        if (!_vm.CanAddBridgeAgent)
+        if (!CanAddBridgeAgentForWindow)
         {
             ShowBridgeAgentLimitReached();
+            return;
+        }
+        // Shell 2's own bridge grows on shell 2. It is a separate roster, so there is no cross-display ownership
+        // flag to set and nothing to re-split.
+        if (OwnsSecondaryBridge)
+        {
+            _vm.AddBridgeAgentOnSecondary(provider);
+            ScheduleBridgeGridRows();
             return;
         }
         var before = _vm.BridgePanes.Count;
@@ -3847,7 +5034,7 @@ public partial class MainWindow : Window
     /// <summary>Explain the Bridge agent cap and offer to open Settings so the user can raise it.</summary>
     private void ShowBridgeAgentLimitReached()
     {
-        var count = _vm.BridgePanes.Count;
+        var count = BridgeRosterForWindow.Count;
         var limit = AppSettings.Current.BridgeAgentLimit;
         var open = MessageBox.Show(this,
             $"This Bridge already has {count} agent{(count == 1 ? "" : "s")} — that's the maximum set in Settings ({limit}).\n\n" +
@@ -3955,7 +5142,7 @@ public partial class MainWindow : Window
     {
         if (Ctx<ChatViewModel>(sender) is not { CanFork: true, SessionId: { } sid } pane) return;
         _vm.NoteBridgeActivity();
-            NewChatForWindow(pane.Cwd, sid, fork: true, title: pane.Title + " (fork)", provider: pane.Provider);
+        NewChatForWindow(pane.Cwd, sid, fork: true, title: pane.Title + " (fork)", provider: pane.Provider);
     }
 
     // Crown this pane as the bridge MANAGER (the brain that dispatches its peers), or step it down again.
@@ -3997,6 +5184,16 @@ public partial class MainWindow : Window
     private void OnRestoreBridgePane(object sender, RoutedEventArgs e)
     {
         if (Ctx<ChatViewModel>(sender) is { } vm) _vm.RestoreBridgePane(vm);
+    }
+
+    /// <summary>Model / thinking / permission mode for ONE pane. A Demon worker has no composer, so this menu row is
+    /// the only place those controls exist for it — the "change them one by one afterwards" half of Demon setup.
+    /// Applied live rather than at spawn, so it costs a set_model round trip instead of a restart.</summary>
+    private void OnPaneMenuSessionSetup(object sender, RoutedEventArgs e)
+    {
+        ClosePaneMoreMenu(sender);
+        if (Ctx<ChatViewModel>(sender) is not { } vm) return;
+        if (SessionSetupWindow.AskForPane(this, vm) is { } setup) setup.ApplyToLive(vm);
     }
 
     private void OnPaneMenuTodos(object sender, RoutedEventArgs e)
@@ -4064,6 +5261,9 @@ public partial class MainWindow : Window
             return;
         }
         // Ctrl+V with an image on the clipboard stages it on this pane (text paste still works normally).
+        // A read-only TextBox still raises PreviewKeyDown, so Enter/paste/history would all still reach a locked
+        // worker's session. Esc (interrupt) stays available above: stopping a runaway agent is not "input".
+        if (vm.InputLocked) return;
         if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control && TryPasteImage(vm))
         {
             e.Handled = true;
@@ -4083,17 +5283,28 @@ public partial class MainWindow : Window
 
     private void SendBridgePane(ChatViewModel vm)
     {
+        // The one choke point every typed path funnels through (Enter, the send button, dictation), so it is where a
+        // Demon Mode worker's read-only guarantee is actually enforced - the hidden buttons upstream are only a hint.
+        if (vm.InputLocked) return;
         var text = vm.Draft.Trim();
         var atts = vm.Attachments.ToList();
         if (text.Length == 0 && atts.Count == 0) return;
-        if (vm.Send(text, atts)) { vm.Draft = ""; vm.Attachments.Clear(); _vm.NoteBridgeActivity(); }   // sending resets the bridge idle timeout
+        if (vm.Send(text, atts))
+        {
+            // In Demon Mode this IS the objective: it is the only text the user can put into the team, so the
+            // supervisor keeps it to check the finished work against at the end.
+            if (_vm.IsDemonMode && vm.IsDemonOrchestrator) _vm.NoteSupervisionObjective(text);
+            vm.Draft = "";
+            vm.Attachments.Clear();
+            _vm.NoteBridgeActivity();   // sending resets the bridge idle timeout
+        }
     }
 
     // Bridge panes reuse the shared attachment helpers, targeting the pane's own ChatViewModel
     // (resolved from the sender's DataContext) instead of the active chat.
     private void OnBridgeAttachClick(object sender, RoutedEventArgs e)
     {
-        if (Ctx<ChatViewModel>(sender) is not { } vm) return;
+        if (Ctx<ChatViewModel>(sender) is not { } vm || vm.InputLocked) return;
         _vm.SelectBridgePane(vm);
         var dlg = MakeAttachDialog();
         if (dlg.ShowDialog(this) == true)
@@ -4111,7 +5322,8 @@ public partial class MainWindow : Window
 
     private void OnBridgeComposerDrop(object sender, DragEventArgs e)
     {
-        if (Ctx<ChatViewModel>(sender) is not { } vm || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        if (Ctx<ChatViewModel>(sender) is not { } vm || vm.InputLocked
+            || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         _vm.SelectBridgePane(vm);
         e.Handled = true;
         if (e.Data.GetData(DataFormats.FileDrop) is string[] files)
@@ -4413,7 +5625,9 @@ public partial class MainWindow : Window
     {
         var text = AnnounceInput.Text;
         if (string.IsNullOrWhiteSpace(text)) { AnnounceInput.Focus(); return; }
-        _vm.AnnounceToBridge(text);
+        // Broadcast reaches the agents in THIS window's bridge; the other display's roster is a different team.
+        if (OwnsSecondaryBridge) _vm.AnnounceToSecondaryBridge(text);
+        else _vm.AnnounceToBridge(text);
         AnnounceInput.Clear();
         BridgeAnnouncePopup.IsOpen = false;
     }
@@ -4848,7 +6062,7 @@ public partial class MainWindow : Window
 
     private void OnModePick(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.Tag is string mode) ActiveChatForWindow?.SetMode(mode);
+        if ((sender as FrameworkElement)?.Tag is string mode) ActiveChatForWindow?.SetMode(mode, remember: true);
         ModePopup.IsOpen = false;
     }
 
@@ -4870,7 +6084,7 @@ public partial class MainWindow : Window
     private void OnPaneModePick(object sender, RoutedEventArgs e)
     {
         if (Ctx<ChatViewModel>(sender) is { } pane && (sender as FrameworkElement)?.Tag is string mode)
-            pane.SetMode(mode);
+            pane.SetMode(mode, remember: true);
         CloseAncestorPopup(sender as DependencyObject);
     }
 
@@ -4941,12 +6155,23 @@ public partial class MainWindow : Window
         ThinkPopup.IsOpen = false;
     }
 
-    // Fast-mode toggle in the effort dropdown. Keep the popup open so the check flips in place; it's a global
-    // setting applied to a chat's next start (a session --settings flag), so no per-turn effect on the current chat.
-    private void OnFastModePick(object sender, RoutedEventArgs e)
-    {
-        if (ActiveChatForWindow is { } chat) chat.SetFastMode(!chat.FastMode);
-    }
+    // Fast-mode toggle in the effort dropdown. Keep the popup open so the check flips in place.
+    private void OnFastModePick(object sender, RoutedEventArgs e) =>
+        ToggleFastMode(Ctx<ChatViewModel>(sender) ?? ActiveChatForWindow);
+
+    // Same row in a Bridge pane's effort popup. The pane owns the popup's DataContext, so read the chat from there
+    // rather than from ActiveChatForWindow - in Bridge there is no single active chat to speak of.
+    private void OnPaneFastModePick(object sender, RoutedEventArgs e) =>
+        ToggleFastMode(Ctx<ChatViewModel>(sender));
+
+    /// <summary>
+    /// Flip fast mode on the chat whose row was clicked - and on nothing else. It used to be one global setting
+    /// that every chat read, so this handler had to broadcast a refresh to the siblings; in a four-agent Bridge that
+    /// meant turning fast mode off on one pane turned it off on all four. Each chat now owns the flag (the setting
+    /// only seeds the next new chat), so the neighbours are left exactly as the user left them.
+    /// </summary>
+    private void ToggleFastMode(ChatViewModel? origin) => origin?.SetFastMode(!origin.FastMode);
+
 
     // ---------- permissions ----------
 

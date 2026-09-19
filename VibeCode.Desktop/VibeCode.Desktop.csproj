@@ -8,6 +8,12 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>VibeCode</AssemblyName>
     <RootNamespace>VibeCode</RootNamespace>
+    <!-- THE version number. MSBuild stamps it onto the assembly and Settings > About reads it back through
+         AppVersion.Current. Keep it Major.Minor.Patch - AppVersion parses a leading 'v' and a 4th part, but
+         nothing else. -->
+    <Version>1.1.0</Version>
+    <Deterministic>true</Deterministic>
+    <PathMap>$(MSBuildProjectDirectory)=/src/VibeCode.Desktop</PathMap>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\assets\logo.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
@@ -20,12 +26,29 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Desktop embeds the MCP assembly and owns the self-contained single-file host. The standalone MCP
+         executable intentionally has UseAppHost=false; forwarding Desktop's publish flags makes it fail NETSDK1067. -->
+    <ProjectReference Include="..\VibeCode.AgentStatus.Mcp\VibeCode.AgentStatus.Mcp.csproj"
+                      GlobalPropertiesToRemove="SelfContained;PublishSingleFile">
+      <!-- The embedded helper uses Desktop's runtime/dependency metadata. Its own standalone metadata would
+           otherwise be copied beside VibeCode.exe and break the installer's single-file contract. -->
+      <AdditionalProperties Condition="'$(PublishSingleFile)' == 'true'">GenerateDependencyFile=false;GenerateRuntimeConfigurationFiles=false</AdditionalProperties>
+    </ProjectReference>
     <PackageReference Include="MdXaml" Version="1.27.0" />
+    <!-- Already arrives with MdXaml, which renders every fenced code block as an AvalonEdit editor. Named here
+         because UI/MarkdownView.cs matches on that type by name to swap those editors back into plain text. -->
+    <PackageReference Include="AvalonEdit" Version="6.3.0.90" />
+    <!-- Drives the user's real Chrome over CDP for the agent browser. WebView2 cannot be the agent's browser:
+         it rejects Browser.setDownloadBehavior, blanks screenshots when hidden, and reads as an automated
+         surface to ordinary bot checks. See Services/ChromeAgentBrowser.cs. -->
+    <PackageReference Include="PuppeteerSharp" Version="25.3.4" />
     <PackageReference Include="WpfAnimatedGif" Version="2.0.2" />
-    <!-- offline speech-to-text (mic dictation): Whisper.net (whisper.cpp, CPU runtime) + NAudio capture. All MIT. -->
+    <!-- offline speech-to-text (mic dictation): Whisper.net (whisper.cpp) + NAudio capture. All MIT. -->
     <PackageReference Include='Microsoft.Web.WebView2' Version='1.0.4022.49' />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <!-- Optional Vulkan acceleration with a CPU fallback. -->
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <!-- DPAPI for API-key accounts: keys are sealed to the current Windows user, never stored in the clear. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
@@ -33,6 +56,8 @@
 
   <ItemGroup>
     <Resource Include="Assets\background.gif" />
+    <EmbeddedResource Include="Assets\bridge-peer-chats\**\*"
+                      LogicalName="VibeCode.Assets.BridgePeerChats.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
     <Resource Include="..\assets\logo.png" Link="Assets\logo.png" />
     <!-- Short free Mixkit notification chime played when a desktop toast appears (see Assets/notification.LICENSE.txt). -->
     <EmbeddedResource Include="Assets\notification.mp3"
@@ -44,6 +69,12 @@
                       LogicalName="VibeCode.Assets.Sounds.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Assets\Grok45NormalPrompt.txt"
                       LogicalName="VibeCode.Assets.Grok45NormalPrompt.txt" />
+    <!-- The phone app, shipped so "turn on phone access" can hand the user a personalised, signed APK without
+         needing an Android toolchain on their machine. Conditional because a clone that has never built
+         mobile/VibeCodeMobile should still compile - PhoneApkBuilder.TemplateAvailable reports the absence. -->
+    <EmbeddedResource Include="Assets\vibecode-mobile.apk"
+                      LogicalName="VibeCode.Assets.vibecode-mobile.apk"
+                      Condition="Exists('Assets\vibecode-mobile.apk')" />
     <EmbeddedResource Include="Assets\Games\SurviveTheShapes.html"
                       LogicalName="VibeCode.Assets.Games.SurviveTheShapes.html" />
     <!-- Tower Defense is a multi-file game: every file is embedded under a logical name that mirrors its
@@ -58,6 +89,19 @@
     <EmbeddedResource Include="Assets\Games\FishingTycoon\**\*.*"
                       LogicalName="VibeCode.Assets.Games.FishingTycoon.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
   </ItemGroup>
+
+  <!-- Whisper.net.Runtime.Vulkan copies its Linux .so payload unconditionally - its win-x64 item group is guarded by
+       a TFM check, its linux-x64 one is not. That is 59 MB of natives this app can never load: it is a net8.0-windows
+       WPF app, and the Linux story is Wine, which runs the WINDOWS DLLs. Drop them before they reach bin/ or the
+       bundle. Matched on TargetPath (items without one yield '' and are never removed), so only the vulkan payload
+       for foreign platforms is affected - runtimes/vulkan/win-x64 stays. -->
+  <Target Name="DropNonWindowsVulkanNatives" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <None Remove="@(None)"
+            Condition="$([System.String]::Copy('%(None.TargetPath)').Replace('\','/').StartsWith('runtimes/vulkan/')) And
+                       !$([System.String]::Copy('%(None.TargetPath)').Replace('\','/').StartsWith('runtimes/vulkan/win-x64/'))" />
+    </ItemGroup>
+  </Target>
 
   <!-- WebView2's NuGet package ships IntelliSense doc XMLs that ride into the publish folder and trip the
        installer's single-file check. They are documentation only - drop them from publish output. -->

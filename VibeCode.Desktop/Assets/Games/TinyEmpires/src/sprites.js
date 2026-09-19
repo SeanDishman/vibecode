@@ -71,11 +71,12 @@ export const SPR_BLD = {
     '.kSSSSSSSSSSSSk.', '.kSqqSSqqSSqqSk.', '.kSqqSSqqSSqqSk.', '.kSSSSSSSSSSSSk.',
     '.kSuuSSuuSSuuSk.', '.kSSSSSdddSSSSk.', '.kSSSSSdddSSSSk.', '.xxxxxxxxxxxxxx.'],
 
+  // Tilled field — soil border, crop rows, dark furrows. No gold crown / thatch roof.
   farm: [
-    '................', '..y..y..y..y..y.', '.yYyyYyyYyyYyyY.', '.GGGGGGGGGGGGGG.',
-    '.gggggggggggggg.', '.GGGGGGGGGGGGGG.', '.wwwwwwwwwwwwww.', '.GGGGGGGGGGGGGG.',
-    '.gggggggggggggg.', '.GGGGGGGGGGGGGG.', '.wwwwwwwwwwwwww.', '.GGGGGGGGGGGGGG.',
-    '.gggggggggggggg.', '.GGGGGGGGGGGGGG.', '.wwwwwwwwwwwwww.', '.xxxxxxxxxxxxxx.'],
+    '................', '................', '.dddddddddddddd.', '.dwGGwGGwGGwGGd.',
+    '.dwwwwwwwwwwwwd.', '.dGGGGGGGGGGGGd.', '.dggggggggggggd.', '.dwwwwwwwwwwwwd.',
+    '.dGLGLGLGLGLGLd.', '.dGGGGGGGGGGGGd.', '.dwwwwwwwwwwwwd.', '.dwGgGgGgGgGgwd.',
+    '.dGGGGGGGGGGGGd.', '.dwwwwwwwwwwwwd.', '.dddddddddddddd.', '.xxxxxxxxxxxxxx.'],
   fishery: [
     '................', '.....tttt.......', '....tTTTTt......', '...tTTYYTTt.....',
     '..tttttttttt....', '..kwwwwwwwwk....', '..kwqqwwddwk....', '..kwwwwwddwk....',

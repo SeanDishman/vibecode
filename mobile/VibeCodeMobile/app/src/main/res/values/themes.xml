@@ -1,0 +1,10 @@
+<resources>
+    <!-- Compose owns every pixel; this exists so the window background matches Bg0 before the first frame and
+         the app never flashes white on launch. -->
+    <style name="Theme.VibeCode" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg0</item>
+        <item name="android:statusBarColor">@color/bg1</item>
+        <item name="android:navigationBarColor">@color/bg0</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

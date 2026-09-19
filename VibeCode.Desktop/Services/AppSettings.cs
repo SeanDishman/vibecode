@@ -17,8 +17,19 @@ public sealed class OpenChatState
     public bool SecondaryActive { get; set; }
     public bool Pinned { get; set; }
     public string? AccountId { get; set; }   // which Claude account this chat runs under (for per-session auth on restore)
+    /// <summary>This chat's permission mode - ask (<c>default</c>) / auto / plan / bypassPermissions. Persisted per
+    /// chat because it is a per-conversation decision: one chat parked in plan mode while another runs on bypass is
+    /// normal, and a restart that quietly put both back on "ask" meant re-picking the mode on every launch. Null in
+    /// snapshots written before this was remembered; those fall back to <see cref="AppSettings.DefaultMode"/>.
+    /// <para>Restored through <c>ChatViewModel.SetMode</c>, never by assigning the property: a provider's
+    /// <c>init</c> event reports the CLI's own mode and would overwrite anything the pane had not registered as a
+    /// deliberate choice.</para></summary>
+    public string? Mode { get; set; }
     /// <summary>Unsent composer text. A force quit must not throw away a prompt the user was still writing.</summary>
     public string? Draft { get; set; }
+    /// <summary>Chat is held back from the Second Brain. Persisted so a restart cannot quietly start recording a
+    /// chat the user deliberately muted.</summary>
+    public bool ExcludeFromMemory { get; set; }
 }
 
 /// <summary>One project folder remembered by the new-chat picker, ordered by actual use rather than transcript scan time.</summary>
@@ -40,8 +51,13 @@ public sealed class SavedBridgePane
     public string? Mode { get; set; }
     public string? Model { get; set; }
     public string? Effort { get; set; }
+    /// <summary>This pane's own fast-mode choice. Null in snapshots written before fast mode became per-chat, which
+    /// is why it is nullable: those fall back to the host's, not to a hard false.</summary>
+    public bool? FastMode { get; set; }
     /// <summary>Unsent composer text for this pane.</summary>
     public string? Draft { get; set; }
+    /// <summary>Peer is held back from the Second Brain, normally inherited from the host chat it was started from.</summary>
+    public bool ExcludeFromMemory { get; set; }
     /// <summary>True when this pane was the bridge's designated manager (the "brain" that dispatches the others).</summary>
     public bool IsManager { get; set; }
 }
@@ -59,6 +75,10 @@ public sealed class SavedBridgeState
     /// <summary>True when the HOST pane was the bridge's designated manager (peers store their own flag).</summary>
     public bool HostIsManager { get; set; }
     public string? Mode { get; set; }                 // permission mode to reapply to resumed peers
+    /// <summary>This roster's coordination board file name. Null in snapshots written before bridges could be forked;
+    /// those all shared the project's single ".vibecode-bridge.md". A forked bridge owns a numbered one instead, and
+    /// resuming it has to land on the same file or it starts claiming areas on the original roster's board.</summary>
+    public string? Board { get; set; }
     public List<SavedBridgePane> Peers { get; set; } = new();
     public DateTime SavedAt { get; set; }
 }
@@ -69,8 +89,18 @@ public sealed class AppSettings
     public HashSet<string> HiddenProjects { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Session ids created or opened inside VibeCode - the only ones shown when ShowOnlyOwnedSessions is on.</summary>
     public HashSet<string> OwnedSessions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Sessions the user deleted. Closing a chat only takes its sidebar row away; the transcript stays in the
+    /// provider's own store and the id stays in <see cref="OwnedSessions"/>, so a "deleted" chat used to walk straight
+    /// back into the project browser and the recent list. A tombstone is what keeps it gone - and it must outlive the
+    /// file, because the transcript belongs to the CLI, not to VibeCode.</summary>
+    public HashSet<string> DeletedSessions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>When true, the sidebar/home show only VibeCode's own chats, not the whole Claude Code history.</summary>
     public bool ShowOnlyOwnedSessions { get; set; } = true;
+    /// <summary>Opt back in to per-account workspaces, where the sidebar lists only the active login's chats.
+    /// Default false: switching Claude/Codex/Grok accounts must never make a conversation disappear - that reads as
+    /// data loss even though nothing was deleted. Off-account rows stay put, carry a chip naming their login, and keep
+    /// spawning under their own account (ChatViewModel passes its own AccountId to the provider's config dir).</summary>
+    public bool IsolateChatsByAccount { get; set; }
     public List<string> Backgrounds { get; set; } = new();
     public string? ActiveBackground { get; set; }       // null → built-in gif
     public bool RandomBackground { get; set; }
@@ -81,18 +111,73 @@ public sealed class AppSettings
     public string UiMode { get; set; } = "background";
     /// <summary>True when the terminal-style theme is active for this process.</summary>
     public static bool IsCliMode => string.Equals(Current.UiMode, "cli", StringComparison.OrdinalIgnoreCase);
-    public string? DefaultEffort { get; set; }          // null = auto | low | medium | high | xhigh | max
+    /// <summary>Borderless look: the app's own chrome - titlebar, sidebar, right panel, chat header and the Bridge
+    /// panes - stops painting its grey surfaces and keeps only a thin black outline, and the background art is
+    /// stretched behind the whole window instead of the chat column alone. So the wallpaper IS the background.
+    /// Cards *inside* a transcript (your prompts, tool cards, code blocks) keep their fill - text has to stay
+    /// readable over the art. Applied by merging Themes/Borderless.xaml over the base theme, through the same
+    /// in-place shell reload <see cref="UiMode"/> uses; nothing restarts.</summary>
+    public bool Borderless { get; set; }
+    /// <summary>True when this process loaded the borderless surfaces. CLI mode wins: a flat terminal canvas has
+    /// no art to reveal, so there is nothing for borderless to do there.</summary>
+    public static bool IsBorderless => Current.Borderless && !IsCliMode;
+    // null = auto | low | medium | high | xhigh | max | ultracode (Claude only: xhigh + dynamic workflows)
+    public string? DefaultEffort { get; set; }
     public string? DefaultModel { get; set; }           // null = CLI default; else a model alias/value key (opus, sonnet, …)
     /// <summary>Provider used when the home screen starts a new chat.</summary>
     public string DefaultProvider { get; set; } = "claude"; // claude | codex | kimi | grok
+
+    private string _defaultMode = DefaultPermissionMode;
+    /// <summary>The permission mode a NEW chat starts in, rewritten every time the user deliberately picks one -
+    /// exactly like <see cref="DefaultModel"/> and <see cref="DefaultEffort"/> follow the model and thinking pickers.
+    /// Without it, picking bypass (or plan) was a per-chat choice that had to be made again for every conversation and
+    /// every launch. Chats that are still open carry their OWN mode in <see cref="OpenChatState.Mode"/>; this is only
+    /// the seed for one that has no remembered mode of its own.
+    /// <para>Inherit paths - a bridge peer taking the host's mode, a supervised restart, a chat moved to another
+    /// provider - deliberately do NOT write here: they are the app copying a mode across, not the user choosing one.</para>
+    /// <para>The setter clamps, so a hand-edited settings.json cannot seed a chat with a mode no provider accepts.</para></summary>
+    public string DefaultMode
+    {
+        get => _defaultMode;
+        set => _defaultMode = NormalizePermissionMode(value);
+    }
+
+    /// <summary>What a fresh install starts on: VibeCode's client-side Auto policy (edits and commands run, dangerous
+    /// ones still ask), which is the mode every new chat used before any of this was remembered.</summary>
+    public const string DefaultPermissionMode = "auto";
+
+    /// <summary>Every mode a chat can actually be in. "auto" is VibeCode's own client-side policy, "dontAsk" is Kimi's;
+    /// the rest are CLI modes. Anything else is a hand-edited or future value that no provider would accept.</summary>
+    public static bool IsKnownPermissionMode(string? mode) => mode?.Trim() is
+        "default" or "auto" or "plan" or "acceptEdits" or "bypassPermissions" or "dontAsk";
+
+    /// <summary>The mode as given, or <see cref="DefaultPermissionMode"/> when it is not one a provider has heard of.</summary>
+    public static string NormalizePermissionMode(string? mode) =>
+        IsKnownPermissionMode(mode) ? mode!.Trim() : DefaultPermissionMode;
     public string? DefaultCodexEffort { get; set; }     // null = model default
     public string? DefaultCodexModel { get; set; }      // null = Codex CLI default
     public string? DefaultKimiEffort { get; set; }      // null = CLI default; on/off or K3 low/high/max when advertised
     public string? DefaultKimiModel { get; set; }       // null = Kimi CLI default
     public string? DefaultGrokEffort { get; set; }      // null = Grok model default
     public string? DefaultGrokModel { get; set; } = Protocol.Grok45Preset.NormalModelId;
-    /// <summary>Claude Code "fast mode" (faster output on supported models). Applied per-session via the CLI's
-    /// <c>--settings {"fastMode":true}</c>; takes effect on a chat's next start. Toggled from the effort dropdown.</summary>
+    /// <summary>GLM's own model/effort seeds. They exist for the same reason every other provider has a pair:
+    /// without them GLM falls through to <see cref="DefaultModel"/>/<see cref="DefaultEffort"/> — Claude's slots —
+    /// and the two providers write over each other. Picking a GLM model would put a <c>zai-org/…</c> id in Claude's
+    /// picker, where Claude Code accepts it, caches it in its own <c>.claude.json</c> and lists it back as a
+    /// "custom model" on every launch afterwards. The effort slot is kept even though GLM ignores effort on the
+    /// wire, so that a shared slot can never become the path by which Claude's <c>ultracode</c> level leaks into
+    /// another provider's request.</summary>
+    public string? DefaultGlmModel { get; set; }        // null = GlmPreset.DefaultModelId
+    public string? DefaultGlmEffort { get; set; }       // null = no effort sent (GLM has no effort knob)
+    /// <summary>Optional proxy for the account manager's "Delete all chats" action. grok.com's chat REST API sits
+    /// behind Cloudflare, which challenges most home IPs (a plain request gets a 403 "Just a moment" page); routing
+    /// through a clean-IP proxy is what lets the stored CLI token reach and delete conversations. Format
+    /// <c>host:port</c> or <c>host:port@user:pass</c>. Never a credential to a VibeCode service - it's the user's own proxy.</summary>
+    public string? GrokDeleteProxy { get; set; }
+    /// <summary>Claude Code "fast mode" (faster output on supported models), applied per session via the CLI's
+    /// <c>--settings {"fastMode":true}</c>. This is only the SEED for the next chat created - the live flag belongs
+    /// to each chat (<see cref="UI.ChatViewModel.FastMode"/>), so toggling one Bridge pane cannot drag its siblings
+    /// along. Written by whichever chat toggled it last, exactly like DefaultModel / DefaultEffort.</summary>
     public bool FastMode { get; set; }
     /// <summary>Which saved Claude account new chats run under. Each chat spawns with THIS account's OAuth token in
     /// its env, so switching accounts (changing this) never touches a running chat's login. Null = the live ~/.claude login.</summary>
@@ -137,6 +222,13 @@ public sealed class AppSettings
     /// Off = classic high-level coordination only.</summary>
     public bool BridgeRealtimeSharing { get; set; }
 
+    /// <summary>Let bridge agents send prompts straight to each other with <c>@@MSG agent=N</c>, instead of only the
+    /// manager being able to reach anyone. Off means the status board is the only sideways channel again — an agent
+    /// that hits something outside its lane can then only do the work in someone else's area or drop it.
+    /// Loop-bounded either way (see <see cref="PeerMessageLimits"/>); the switch exists for rosters where the extra
+    /// turns are not wanted.</summary>
+    public bool BridgePeerMessaging { get; set; } = true;
+
     /// <summary>Expose provider-native child-agent swarms in Claude, Codex, and Grok chats. Kimi is excluded.</summary>
     public bool AgentSwarmsEnabled { get; set; } = true;
     /// <summary>Bridge peers are already parallel root CLIs, so child swarms inside each pane require a separate opt-in.</summary>
@@ -144,9 +236,62 @@ public sealed class AppSettings
     /// <summary>Maximum child workers one explicitly requested swarm turn may create.</summary>
     public int SwarmMaxWorkers { get; set; } = SwarmPolicy.DefaultMaxWorkers;
 
+    // ---- agent supervision: the orchestrator actively watches every delegated agent and escalates on a bounded
+    // ladder (intervene -> restart on the same task -> take the task over itself). Off means a delegated agent can
+    // stall forever with nobody noticing, which is exactly the failure these thresholds exist to end.
+
+    /// <summary>Watch delegated agents and intervene when one stalls. Applies to any managed Bridge, and is always on
+    /// in Demon Mode (a locked read-only worker has no other way to be rescued).</summary>
+    public bool AgentSupervisionEnabled { get; set; } = true;
+    /// <summary>Seconds of mid-turn silence before a working agent counts as stale.</summary>
+    public int SupervisionStaleSeconds { get; set; } = 300;
+    /// <summary>Seconds an agent may hold an assignment while not running before it counts as stuck.</summary>
+    public int SupervisionIdleSeconds { get; set; } = 90;
+    /// <summary>Seconds an intervention has to be answered before the supervisor escalates past it.</summary>
+    public int SupervisionInterventionGraceSeconds { get; set; } = 120;
+    /// <summary>Hard ceiling on one assignment however healthy it looks. 0 disables the cap.</summary>
+    public int SupervisionMaxTaskSeconds { get; set; } = 3600;
+    /// <summary>Interventions per assignment before the supervisor stops asking and restarts the agent.</summary>
+    public int SupervisionMaxInterventions { get; set; } = 1;
+    /// <summary>Restarts per assignment before the orchestrator completes the task itself.</summary>
+    public int SupervisionMaxRestarts { get; set; } = 1;
+    /// <summary>Identical consecutive turn outputs that count as a loop.</summary>
+    public int SupervisionLoopRepeatThreshold { get; set; } = 3;
+
+    // ---- Demon Mode: a preset Bridge of 4-17 sessions with one locked orchestrator and the rest read-only workers.
+
+    // There is deliberately no "Demon Mode enabled" preference. The Settings switch starts and stops a team directly,
+    // and a team is never resumed across restarts — so a persisted "on" could only ever describe a team that no longer
+    // exists. (An older build stored one; unknown keys in settings.json are ignored, so it simply falls away.)
+
+    /// <summary>Demon Mode's orchestrator plans and dispatches only. Turn this on to also have it review, correct and
+    /// validate worker output — the one behaviour the mode otherwise deliberately withholds.</summary>
+    public bool DemonOrchestratorReviewsWork { get; set; }
+
+    private int _demonSessionCount = DemonModePolicy.SessionCount;
+    /// <summary>How many sessions the next Demon team stands up, orchestrator included. Unlike the switch itself this
+    /// IS remembered: the size is a standing preference about how much of the machine and the account's quota a team
+    /// may take, and re-picking it on every start would be the dialog asking a question it already knows the answer
+    /// to. The setter clamps, so a hand-edited settings.json cannot ask for a roster the wall cannot lay out.</summary>
+    public int DemonSessionCount
+    {
+        get => _demonSessionCount;
+        set => _demonSessionCount = DemonModePolicy.ClampSessionCount(value);
+    }
+
     /// <summary>VibeCode's provider-neutral MCP catalog. Definitions are projected at launch instead of overwriting
     /// Claude, Codex, Kimi, or Grok's own configuration files.</summary>
     public List<McpServerDefinition> McpServers { get; set; } = new();
+
+    // Second Brain (agentmemory). The daemon is a native Windows sidecar; VibeCode talks to its REST API directly
+    // so capture/recall works the same way for Claude, Codex, Kimi, Grok, and Bridge agents. Authentication remains
+    // in AGENTMEMORY_SECRET - never serialize bearer tokens into settings.json.
+    public bool AgentMemoryEnabled { get; set; } = true;
+    public bool AgentMemoryAutoRecall { get; set; } = true;
+    // Promote corrections, decisions and stated habits without being asked. Waiting for an explicit "remember this"
+    // leaves the durable store empty through exactly the turns worth keeping.
+    public bool AgentMemoryAutoRemember { get; set; } = true;
+    public string AgentMemoryEndpoint { get; set; } = "http://127.0.0.1:3111";
 
     // Spotify extension (optional; off by default). The Client ID is the user's own registered Spotify app id
     // (public, PKCE - no secret). OAuth tokens live in a separate spotify-auth.json, never here.
@@ -170,6 +315,12 @@ public sealed class AppSettings
     // default that shows off the extension surface - but it can still be turned off in Settings > Extensions.
     public bool GamesEnabled { get; set; } = true;
 
+    /// <summary>Route mic dictation through Groq's hosted Whisper large-v3 instead of the offline medium.en model.
+    /// Off by default, and deliberately so: the offline path never sends audio anywhere, and this one uploads the
+    /// clip. Only the flag lives here - the Groq API key is DPAPI-sealed in its own groq-speech.json, because a
+    /// credential is never serialized into settings.json (see <see cref="GroqSpeechService"/>).</summary>
+    public bool GroqSpeechEnabled { get; set; }
+
     // Telemetry HUD and wall. Both ship ON: this is a window whose entire purpose is to be parked on a spare
     // screen and watched, so landing there and reading as live is the behaviour that should need no discovery.
     /// <summary>Open the telemetry windows on the display VibeCode is NOT on, when there is more than one.
@@ -178,10 +329,16 @@ public sealed class AppSettings
     /// <summary>Travel the charts to each new reading instead of snapping, and keep a slow ripple on the
     /// sparklines. Presentation only - every figure still settles on the real one.</summary>
     public bool TelemetryLiveAnimation { get; set; } = true;
+    /// <summary>Enable agent status reporting and event logging independently of the monitor window.</summary>
+    public bool MitreMonitorEnabled { get; set; } = true;
     /// <summary>How far back the telemetry wall looks, in hours - 1 to 720. Remembered because the wall is a
     /// window you set up once and leave running for weeks; re-picking the range at every launch would be a
-    /// chore. An unrecognised value falls back to the 24 h default rather than failing the window.</summary>
-    public double TelemetryWallRangeHours { get; set; } = 24;
+    /// chore. An unrecognised value falls back to the same 1 h default rather than failing the window.
+    ///
+    /// This value IS the wall's default, not merely its memory: the window restores whatever is here and only
+    /// falls back to its own constant when nothing matches, so leaving this at 24 while the window defaulted to
+    /// 1 h would have shipped a "default" no fresh install ever saw.</summary>
+    public double TelemetryWallRangeHours { get; set; } = 1;
 
     // session restore: reopen the chats (and window) from last time
     /// <summary>Provider-neutral MRU folders for the five new-chat suggestions. This is updated immediately when a
@@ -208,13 +365,51 @@ public sealed class AppSettings
     /// <summary>The second full-shell window was showing its assigned Bridge panes instead of its selected chat.</summary>
     public bool SecondaryBridgeVisible { get; set; }
 
+    // ---- run in background: closing the window is not the same thing as quitting ----
+
+    /// <summary>Closing the shell leaves VibeCode running in the notification area instead of ending the process,
+    /// so every chat, Bridge peer and Demon worker keeps coding while the window is gone. ON by default: the app's
+    /// whole point is agents that work on their own, and a close button that killed a nine-agent Bridge mid-task
+    /// was destroying real work on a click people make absent-mindedly. Off restores the literal reading - the
+    /// close button ends the process, and every running agent with it.
+    /// <para>
+    /// Ignored while <c>VIBECODE_HIDDEN=1</c>: an automated run closes the window to end the app, and a harness
+    /// that instead left a trayed process behind would hang and then pile up.
+    /// </para></summary>
+    public bool RunInBackground { get; set; } = true;
+
+    /// <summary>The "it is still running down here" balloon has been shown once. A window that vanishes into an icon
+    /// has to explain itself the first time or it reads as a crash - and has to stop explaining itself after that.</summary>
+    public bool BackgroundNoticeShown { get; set; }
+
+    // Phone extension (optional; off by default, like Spotify and Weather). Until this is switched on in
+    // Settings > Extensions the titlebar has no phone button at all and the bridge never auto-starts. This is a
+    // separate flag from PhoneBridgeEnabled on purpose: this one is "does the feature exist in the UI", that one
+    // is "was the listening socket left on". Hiding the door must also close it, so switching this off stops the
+    // bridge - but switching it back on only restores the button, not the socket.
+    public bool PhoneEnabled { get; set; }
+
+    /// <summary>Serve chats to paired phones on the local network (Settings ▸ the phone button in the titlebar).
+    /// Off unless the user has switched it on - a chat app should not open a listening socket by default.</summary>
+    public bool PhoneBridgeEnabled { get; set; }
+    /// <summary>TCP port the phone bridge binds. 0 means "use the default".</summary>
+    public int PhoneBridgePort { get; set; }
+
     public static string Dir => Environment.GetEnvironmentVariable("VIBECODE_DATA_DIR") is { Length: > 0 } overrideDirectory
         ? Path.GetFullPath(overrideDirectory.Trim('"'))
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VibeCode");
     public static string BackgroundsDir => Path.Combine(Dir, "backgrounds");
     private static string FilePath => Path.Combine(Dir, "settings.json");
 
-    public static AppSettings Current { get; } = Load();
+    // Load uses SupportedProviders and the other static helpers below. A property initializer runs before
+    // those fields, causing every non-Claude settings file to be misclassified as corrupt on a fresh process.
+    // Lazy evaluates only after ALL field initializers have finished. Reading Dir for the single-instance gate
+    // must also remain independent of loading/recovering settings in a second process.
+    private static readonly Lazy<AppSettings> CurrentSettings = new(Load);
+    public static AppSettings Current => CurrentSettings.Value;
+
+    /// <summary>One-time recovery of valid files quarantined by the old startup initialization bug.</summary>
+    public int SettingsStartupRecoveryVersion { get; set; }
     public static event Action? Changed;
     /// <summary>Raised when a save adopted another VibeCode window's newer <see cref="ActiveAccountId"/> instead of
     /// reverting it. The account UI listens so it can re-render under the account that actually won.</summary>
@@ -242,12 +437,10 @@ public sealed class AppSettings
 
     /// <summary>How the current settings were obtained. Anything other than <c>Loaded</c> means the user is one save
     /// away from losing real state, so the UI can say so instead of silently presenting a blank app.</summary>
-    public enum LoadOutcome { Loaded, FirstRun, RecoveredFromBackup, Quarantined }
+    public enum LoadOutcome { Loaded, FirstRun, RecoveredFromBackup, RecoveredHistory, Quarantined }
 
     /// <summary>Set once at startup. Read by the shell to warn when settings had to be recovered or quarantined.
-    /// Deliberately has NO initializer: static field initializers run in declaration order, and <see cref="Current"/>
-    /// (declared above) calls Load() during that same pass - an initializer here would run afterwards and overwrite
-    /// whatever Load() just recorded. <c>Loaded</c> is the zero value, so the default is already correct.</summary>
+    /// <c>Loaded</c> is the zero value.</summary>
     public static LoadOutcome StartupOutcome { get; private set; }
 
     /// <summary>Where an unreadable settings.json was moved, if it was. Never deleted - it may be hand-recoverable.</summary>
@@ -259,13 +452,19 @@ public sealed class AppSettings
 
         // The main file first, then the rotated backup. A single bad read used to mean "start fresh", and because the
         // very next save rewrites the whole document, that silently destroyed every chat, bridge and preference.
-        if (TryLoadFrom(FilePath, out var loaded)) { StartupOutcome = LoadOutcome.Loaded; return loaded!; }
+        if (TryLoadFrom(FilePath, out var loaded))
+        {
+            StartupOutcome = LoadOutcome.Loaded;
+            RecoverMisclassifiedHistory(loaded!);
+            return loaded!;
+        }
 
         var mainFileExisted = File.Exists(FilePath);
         if (TryLoadFrom(BackupPath, out var recovered))
         {
             StartupOutcome = LoadOutcome.RecoveredFromBackup;
             if (mainFileExisted) QuarantinedPath = Quarantine();
+            RecoverMisclassifiedHistory(recovered!);
             return recovered!;
         }
 
@@ -282,30 +481,98 @@ public sealed class AppSettings
         // it while we were starting up".
         var fresh = new AppSettings();
         fresh._baseline = fresh.Clone();
+        RecoverMisclassifiedHistory(fresh);
         return fresh;
     }
 
     private static bool TryLoadFrom(string path, out AppSettings? settings)
     {
         settings = null;
+        AppSettings? loaded;
         try
         {
             if (!File.Exists(path)) return false;
-            if (JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path)) is not { } loaded) return false;
-            loaded.HiddenProjects = new HashSet<string>(loaded.HiddenProjects, StringComparer.OrdinalIgnoreCase);
-            loaded.OwnedSessions = new HashSet<string>(loaded.OwnedSessions, StringComparer.OrdinalIgnoreCase);
-            loaded.NormalizeBridgeState();
-            loaded.NormalizeRecentDirectories();
-            // Folders still in the MRU must not stay on the hide list — that combo made heavily-used projects
-            // (e.g. WpfApp3) vanish from the five new-chat chips even though RecentDirectories still listed them.
-            loaded.UnhideRecentlyUsedProjects();
-            loaded.NormalizeSwarmSettings();
-            loaded.NormalizeMcpServers();
-            loaded._baseline = loaded.Clone();
-            settings = loaded;
-            return true;
+            loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path));
         }
-        catch { return false; }   // unreadable or malformed - the caller falls through to the next source
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
+        }
+        if (loaded is null) return false;
+        // A programming error in a migration is not evidence that the user's file is corrupt. Keep migrations
+        // outside the parse-error catch so such an error can never quarantine valid data and replace it with defaults.
+        loaded.HiddenProjects = new HashSet<string>(loaded.HiddenProjects ?? [], StringComparer.OrdinalIgnoreCase);
+        loaded.OwnedSessions = new HashSet<string>(loaded.OwnedSessions ?? [], StringComparer.OrdinalIgnoreCase);
+        loaded.DeletedSessions = new HashSet<string>(loaded.DeletedSessions ?? [], StringComparer.OrdinalIgnoreCase);
+        loaded.OpenChats ??= new();
+        loaded.OpenChats.RemoveAll(chat => chat is null);
+        loaded.Backgrounds ??= new();
+        loaded.NormalizeBridgeState();
+        loaded.NormalizeRecentDirectories();
+        // Folders still in the MRU must not stay on the hide list — that combo made heavily-used projects
+        // (e.g. WpfApp3) vanish from the five new-chat chips even though RecentDirectories still listed them.
+        loaded.UnhideRecentlyUsedProjects();
+        loaded.NormalizeSwarmSettings();
+        loaded.NormalizeProviderModelSlots();
+        loaded.NormalizeMcpServers();
+        loaded._baseline = loaded.Clone();
+        settings = loaded;
+        return true;
+    }
+
+    private static void RecoverMisclassifiedHistory(AppSettings settings)
+    {
+        if (settings.SettingsStartupRecoveryVersion >= 1 || !Directory.Exists(Dir)) return;
+        List<AppSettings> snapshots = new();
+        try
+        {
+            foreach (var path in Directory.GetFiles(Dir, "settings.corrupt-*.json").OrderByDescending(Path.GetFileName, StringComparer.Ordinal))
+            {
+                if (TryLoadFrom(path, out var snapshot)
+                    && !string.Equals(snapshot!.DefaultProvider, "claude", StringComparison.OrdinalIgnoreCase))
+                    snapshots.Add(snapshot);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
+        if (snapshots.Count == 0) return;
+
+        // Preserve current preferences and current tabs. Only the newest lost layout is reopened; older copies
+        // restore history/ownership and dormant bridges without spawning every old conversation at startup.
+        foreach (var snapshot in snapshots)
+        {
+            settings.DeletedSessions.UnionWith(snapshot.DeletedSessions);
+            settings.OwnedSessions.UnionWith(snapshot.OwnedSessions);
+        }
+        settings.OwnedSessions.ExceptWith(settings.DeletedSessions);
+        settings.RecentDirectories = RecentDirectoryHistory.NormalizeRemembered(settings.RecentDirectories.Concat(
+            snapshots.SelectMany(snapshot => snapshot.RecentDirectories)
+                .Where(entry => !settings.HiddenProjects.Contains(entry.Cwd))));
+
+        static string ChatKey(OpenChatState chat) => $"{chat.Provider}\n{chat.SessionId ?? chat.Cwd}";
+        var keys = settings.OpenChats.Select(ChatKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var hadTabs = settings.OpenChats.Count > 0;
+        foreach (var chat in snapshots[0].OpenChats)
+        {
+            if (chat.SessionId is { } id && settings.DeletedSessions.Contains(id)) continue;
+            if (!keys.Add(ChatKey(chat))) continue;
+            if (hadTabs) { chat.Active = false; chat.SecondaryActive = false; }
+            settings.OpenChats.Add(chat);
+        }
+        var bridgeKeys = settings.SavedBridges.Select(bridge => BridgeKey(bridge.HostSessionId, bridge.Provider))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var bridge in snapshots.SelectMany(snapshot => snapshot.SavedBridges))
+        {
+            if (settings.DeletedSessions.Contains(bridge.HostSessionId)
+                || !bridgeKeys.Add(BridgeKey(bridge.HostSessionId, bridge.Provider))) continue;
+            bridge.Peers.RemoveAll(peer => peer.SessionId is { } id && settings.DeletedSessions.Contains(id));
+            if (bridge.Peers.Count > 0) settings.SavedBridges.Add(bridge);
+        }
+        settings.TrimSavedBridges();
+        // Keep the original baseline: these recovered entries are local changes that must survive MergeWithDisk.
+        // Persist the migration marker with the same atomic write as the recovered history, so later closes/deletes
+        // are never undone by re-importing these files on every launch. The source files remain untouched.
+        settings.SettingsStartupRecoveryVersion = 1;
+        StartupOutcome = LoadOutcome.RecoveredHistory;
     }
 
     private static string? Quarantine()
@@ -332,6 +599,7 @@ public sealed class AppSettings
         {
             if (string.IsNullOrWhiteSpace(bridge.Provider)) bridge.Provider = "claude";
             bridge.Peers ??= new List<SavedBridgePane>();
+            bridge.Peers.RemoveAll(peer => peer is null);
             foreach (var peer in bridge.Peers.Where(peer => string.IsNullOrWhiteSpace(peer.Provider)))
             {
                 // Before mixed-provider bridges, every peer implicitly used the host provider. Materialize that old
@@ -357,6 +625,74 @@ public sealed class AppSettings
         return changed;
     }
 
+    /// <summary>
+    /// Retire settings left behind by the removed in-app provider.
+    ///
+    /// Two things outlive it in a settings.json written by an older build. Its provider id can still be sitting in
+    /// <see cref="DefaultProvider"/>, which would have every new chat ask for a provider this build no longer has;
+    /// and one of its model ids can still be in <see cref="DefaultModel"/> — Claude's slot, which it used to write
+    /// into before it had seeds of its own. That second one is not inert: Claude Code accepts an unknown id, caches
+    /// it in its own <c>.claude.json</c>, and lists it back as a "custom model" on every launch afterwards.
+    /// </summary>
+    public bool NormalizeProviderModelSlots()
+    {
+        var changed = false;
+        if (!string.Equals(DefaultProvider, "claude", StringComparison.OrdinalIgnoreCase)
+            && !SupportedProviders.Contains(DefaultProvider))
+        {
+            DefaultProvider = "claude";
+            changed = true;
+        }
+        if (IsRetiredModelId(DefaultModel) || Protocol.CodexSession.IsRetiredModel(DefaultModel))
+        {
+            DefaultModel = null;   // back to "whatever the Claude CLI recommends"
+            changed = true;
+        }
+        if (Protocol.CodexSession.IsRetiredModel(DefaultCodexModel))
+        {
+            DefaultCodexModel = null;   // let Codex's live catalog choose its current recommended model
+            changed = true;
+        }
+        // Bridge peers remember their own model. Clear a retired id here as well as at the launch boundary so the
+        // repaired snapshot stays repaired after the next save instead of requesting GPT-5.5 on every restart.
+        if (SavedBridges is null)
+        {
+            SavedBridges = new List<SavedBridgeState>();
+            changed = true;
+        }
+        foreach (var bridge in SavedBridges)
+        {
+            if (bridge.Peers is null)
+            {
+                bridge.Peers = new List<SavedBridgePane>();
+                changed = true;
+            }
+            foreach (var peer in bridge.Peers)
+            {
+                if (!Protocol.CodexSession.IsRetiredModel(peer.Model)) continue;
+                peer.Model = null;
+                changed = true;
+            }
+        }
+        // A GLM id in Claude's slot is the same failure with a live provider instead of a retired one, so it is
+        // carried across rather than dropped: the GLM model the user picked stays their GLM default.
+        if (Protocol.GlmPreset.IsGlmModelId(DefaultModel))
+        {
+            DefaultGlmModel ??= DefaultModel;
+            DefaultModel = null;
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static readonly HashSet<string> SupportedProviders =
+        new(["claude", "codex", "kimi", "grok", Protocol.GlmPreset.ProviderId], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>No Claude, Codex, Kimi or Grok model id contains "deepseek", so the substring safely catches the
+    /// retired provider's ids — including preset ids this build has never heard of.</summary>
+    private static bool IsRetiredModelId(string? id) =>
+        !string.IsNullOrWhiteSpace(id) && id.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Clamp hand-edited or older settings before they reach provider launch arguments.</summary>
     public bool NormalizeSwarmSettings()
     {
@@ -374,8 +710,18 @@ public sealed class AppSettings
             McpServers = new List<McpServerDefinition>();
             return true;
         }
-        return McpCatalog.NormalizeDefinitions(McpServers);
+        var dropped = DropRetiredCodeGraphServers();
+        return McpCatalog.NormalizeDefinitions(McpServers) || dropped;
     }
+
+    /// <summary>
+    /// Drop the code-graph server every earlier build registered here. The feature is gone, but its definition was
+    /// written into settings.json - and nothing left in the app strips it at launch, so without this every chat
+    /// would still start a graphify-mcp process pointed at no graph. A graphify server the user added by hand
+    /// carries a different id and is deliberately left alone.
+    /// </summary>
+    private bool DropRetiredCodeGraphServers() => McpServers.RemoveAll(server =>
+        server?.Id?.StartsWith("vibecode-second-brain-graphify", StringComparison.OrdinalIgnoreCase) == true) > 0;
 
     /// <summary>Move a valid folder to the front of the persistent MRU list.
     /// Also un-hides the folder: deliberately opening/using a project means the user wants it again,
@@ -500,17 +846,22 @@ public sealed class AppSettings
     /// <summary>Writes settings atomically (temp file + move) and reports why it failed instead of swallowing it.
     /// Returns null on success. A half-written settings.json would fail Load()'s parse and get silently replaced by
     /// defaults - wiping ActiveAccountId, OpenChats and the window bounds - so the write is never done in place.</summary>
-    public Exception? TrySave(bool activeAccountIsDeliberate = false)
+    public Exception? TrySave(bool activeAccountIsDeliberate = false, bool defaultModeIsDeliberate = false)
     {
-        lock (SaveLock) return TrySaveCore(activeAccountIsDeliberate);
+        lock (SaveLock) return TrySaveCore(activeAccountIsDeliberate, defaultModeIsDeliberate);
     }
 
-    private Exception? TrySaveCore(bool activeAccountIsDeliberate)
+    private Exception? TrySaveCore(bool activeAccountIsDeliberate, bool defaultModeIsDeliberate)
     {
         NormalizeSwarmSettings();
+        NormalizeProviderModelSlots();
         NormalizeMcpServers();
         NormalizeRecentDirectories();
-        var adopted = MergeWithDisk(activeAccountIsDeliberate);
+        var adopted = MergeWithDisk(activeAccountIsDeliberate, defaultModeIsDeliberate);
+        // Again after the merge: the three-way merge can adopt a retired model or server still sitting in a settings
+        // file written by another running instance. Do not publish that stale value back to disk.
+        NormalizeProviderModelSlots();
+        DropRetiredCodeGraphServers();
         Exception? verifyError = null;
         var moved = false;   // once the Move lands the save HAS succeeded - nothing after it may report a failure
         try
@@ -521,7 +872,11 @@ public sealed class AppSettings
             var tmp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                File.WriteAllText(tmp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+                using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    JsonSerializer.Serialize(stream, this, new JsonSerializerOptions { WriteIndented = true });
+                    stream.Flush(flushToDisk: true);
+                }
                 // File.Replace publishes the new file AND rotates the old one into settings.bak.json in a single
                 // operation, so there is always a previous good copy to recover from and never a moment with neither.
                 if (File.Exists(FilePath))
@@ -589,6 +944,17 @@ public sealed class AppSettings
         return TrySave(activeAccountIsDeliberate: true);
     }
 
+    /// <summary>Deliberately choose what mode new chats start in, and persist it as this instance's own newest intent.
+    /// Two VibeCode builds share one settings.json with nothing stopping them from running at once, so a plain Save
+    /// is not enough on either count: the write has to happen even when this process's copy already reads as the
+    /// picked mode (the file may not), and the pre-write merge must not adopt the other window's older value on the
+    /// way past. Skipping either one loses the click silently - the pill moves, and the next launch is back on Ask.</summary>
+    public void SetDefaultMode(string mode)
+    {
+        DefaultMode = mode;
+        TrySave(defaultModeIsDeliberate: true);
+    }
+
     private AppSettings Clone() =>
         JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this))!;
 
@@ -614,7 +980,7 @@ public sealed class AppSettings
     /// window's own, when a second instance loaded the file first). The rule per field: if THIS instance changed it away
     /// from the baseline we keep ours; otherwise, if disk changed it, we adopt disk's. Returns true when the adopted
     /// field was <see cref="ActiveAccountId"/>, which the UI has to announce.</summary>
-    private bool MergeWithDisk(bool activeAccountIsDeliberate)
+    private bool MergeWithDisk(bool activeAccountIsDeliberate, bool defaultModeIsDeliberate)
     {
         AppSettings? disk = null;
         try
@@ -638,6 +1004,11 @@ public sealed class AppSettings
 
             // A deliberate account switch is by definition the newest intent, so it never yields to disk.
             if (activeAccountIsDeliberate && property.Name == nameof(ActiveAccountId)) continue;
+            // Same rule for the mode the user just picked from a pill. The generic test below cannot see it: a window
+            // that launched while the file already said "bypassPermissions" holds it as BOTH its value and its
+            // baseline, so re-picking bypass after another window wrote "auto" reads as "unchanged here, changed on
+            // disk" and would adopt the other window's older answer over the click that just happened.
+            if (defaultModeIsDeliberate && property.Name == nameof(DefaultMode)) continue;
 
             var wasMineChanged = baseline is not null && !Equals(mine, property.GetValue(baseline));
             if (wasMineChanged) continue;   // this instance owns the newer value
@@ -648,6 +1019,9 @@ public sealed class AppSettings
 
         // Ownership marks are purely additive - a union can never be wrong, and losing one hides a real chat.
         foreach (var id in disk.OwnedSessions) OwnedSessions.Add(id);
+        // Tombstones are additive for the mirror-image reason: dropping one resurrects a chat the user deleted.
+        foreach (var id in disk.DeletedSessions ?? []) DeletedSessions.Add(id);
+        OwnedSessions.ExceptWith(DeletedSessions);   // deleted wins; the union above must not undo a deletion
 
         HiddenProjects = MergeCollection(HiddenProjects, disk.HiddenProjects, baseline?.HiddenProjects);
         Backgrounds = MergeCollection(Backgrounds, disk.Backgrounds, baseline?.Backgrounds);

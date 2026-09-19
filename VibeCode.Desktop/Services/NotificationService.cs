@@ -21,12 +21,11 @@ namespace VibeCode.Services;
 /// </summary>
 public static class NotificationService
 {
-    /// <summary>Called after every terminal result envelope. Bridge panes announce under their agent label.</summary>
-    public static void NotifyTurnFinished(ChatViewModel chat, bool isError)
+    /// <summary>Called after every terminal result envelope. Bridge panes announce under their agent label.
+    /// A user-initiated Stop is already an acknowledged outcome, so it must never toast or play a chime.</summary>
+    public static void NotifyTurnFinished(ChatViewModel chat, bool isError, bool userInterrupted = false)
     {
-        if (!AppSettings.Current.NotifyOnTurnEnd) return;
-        if (chat.HasQueued) return;   // queued prompts auto-send right now - the agent never stopped for the user
-        if (IsChatVisibleToUser(chat)) return;
+        if (!ShouldNotifyTurnFinished(chat, userInterrupted)) return;
 
         // Bridge panes announce as their agent ("Claude 2"); a plain chat announces by its own title so the
         // user knows WHICH chat finished when several are running.
@@ -38,6 +37,15 @@ public static class NotificationService
             ? "The turn stopped with an error."
             : Snippet(chat.LastTurnReplyText()) is { Length: > 0 } reply ? reply : "The turn is done.";
         Show(chat, ToastKind.Finished, title, body, isError);
+    }
+
+    /// <summary>Decision seam kept independent from toast construction so interrupt behavior is regression-testable.</summary>
+    internal static bool ShouldNotifyTurnFinished(ChatViewModel chat, bool userInterrupted)
+    {
+        if (userInterrupted) return false;
+        if (!AppSettings.Current.NotifyOnTurnEnd) return false;
+        if (chat.HasQueued) return false;   // queued prompts auto-send right now - the agent never stopped for the user
+        return !IsChatVisibleToUser(chat);
     }
 
     /// <summary>Called when a question / plan-review / permission card lands and the provider is now blocked on the user.</summary>

@@ -1,0 +1,33 @@
+name: Build and verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            8.0.x
+      - name: Build
+        run: dotnet build tests/VibeCode.PublicTests/VibeCode.PublicTests.csproj -c Release
+      - name: Test
+        run: dotnet run --project tests/VibeCode.PublicTests/VibeCode.PublicTests.csproj -c Release --no-build
+      - name: Verify mobile enrollment templates
+        shell: pwsh
+        run: ./tests/Test-MobileTemplate.ps1
+      - name: Publish
+        shell: pwsh
+        run: ./scripts/Publish.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VibeCode-windows-x64
+          path: artifacts/windows-x64/

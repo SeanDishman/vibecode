@@ -7,7 +7,7 @@ using VibeCode.Services;
 namespace VibeCode.UI;
 
 /// <summary>
-/// A Sublime-style read-only code viewer. Opens the file a tool card edited, syntax-highlights it, and overlays a
+/// A code viewer with opt-in editing. Opens the file a tool card edited, syntax-highlights it, and overlays a
 /// full-file unified diff: lines the edit(s) added glow green, lines they removed show red - accumulated across a run
 /// of consecutive edits to the same file. Falls back to a changes-only hunk view when the file isn't on disk.
 /// </summary>
@@ -25,9 +25,14 @@ public partial class CodeViewerWindow : Window
         w.Show();
     }
 
-    public CodeViewerWindow(ToolItem tool)
+    private CodeViewerWindow()
     {
         InitializeComponent();
+        InitializeEditing();
+    }
+
+    public CodeViewerWindow(ToolItem tool) : this()
+    {
         try { Build(tool); }
         catch (Exception ex)
         {
@@ -36,9 +41,48 @@ public partial class CodeViewerWindow : Window
         }
     }
 
+    /// <summary>Open a linked text file without depending on a Windows file association or inventing an edit.</summary>
+    public static CodeViewerWindow OpenFile(string path, Window? owner, int? line = null)
+    {
+        if (new FileInfo(path).Length > 4_000_000)
+            throw new IOException("This file is too large for the text preview (4 MB maximum).");
+        var text = File.ReadAllText(path);
+        if (text.Contains('\0')) throw new IOException("This file is not a supported text document.");
+        var rows = CodeDiff.Plain(text, path);
+        var window = new CodeViewerWindow { Owner = owner, Title = Path.GetFileName(path), _copyText = text };
+        window.SetEditableFile(path);
+        window.TitleFile.Text = Path.GetFileName(path);
+        window.TitleDir.Text = Path.GetDirectoryName(path) ?? "";
+        window.TitleLang.Text = SyntaxHighlighter.LanguageName(path);
+        window.FootMode.Text = rows.Count > MaxRows ? $"File preview (first {MaxRows} lines)" : "File preview";
+        window.FootInfo.Text = $"{Math.Min(rows.Count, MaxRows)} lines · {SyntaxHighlighter.LanguageName(path)}";
+        window.Render(rows);
+        if (line is > 0 && rows.Count > 0)
+        {
+            var shownLine = Math.Min(line.Value, Math.Min(rows.Count, MaxRows));
+            window.FootInfo.Text += $" · line {shownLine}";
+            window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle,
+                new Action(() =>
+                {
+                    if (window.Code.Document.Blocks.ElementAtOrDefault(shownLine - 1) is not { } block) return;
+                    window.Code.Selection.Select(block.ContentStart, block.ContentEnd);
+                    block.BringIntoView();
+                }));
+        }
+        if (Environment.GetEnvironmentVariable("VIBECODE_HIDDEN") == "1")
+        {
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = 6200; window.Top = 220;
+            window.ShowActivated = false; window.ShowInTaskbar = false;
+        }
+        window.Show();
+        return window;
+    }
+
     private void Build(ToolItem tool)
     {
         var path = tool.FilePath;
+        SetEditableFile(path);
         Title = path is { } ? Path.GetFileName(path) : "Code";
         TitleFile.Text = path is { } ? Path.GetFileName(path) : (tool.Name + " output");
         TitleDir.Text = path is { } ? (Path.GetDirectoryName(path) ?? "") : "";
@@ -161,7 +205,9 @@ public partial class CodeViewerWindow : Window
     private static readonly SolidColorBrush AddBg = Brush("#2E7ED0A6");   // soft green wash (theme GreenSoft, a touch stronger)
     private static readonly SolidColorBrush DelBg = Brush("#22E86A78");   // soft red wash (theme RedSoft)
 
-    private static SolidColorBrush BrushFor(TokKind k) => k switch
+    /// <summary>The token palette. Internal, not private: markdown code blocks in the transcript colour
+    /// themselves from the same map (UI/MarkdownView.cs) so a fence and this viewer read identically.</summary>
+    internal static SolidColorBrush BrushFor(TokKind k) => k switch
     {
         TokKind.Keyword => Brush("#569CD6"),
         TokKind.Control => Brush("#C586C0"),
@@ -183,6 +229,7 @@ public partial class CodeViewerWindow : Window
 
     private void OnCopy(object sender, RoutedEventArgs e)
     {
-        try { if (!string.IsNullOrEmpty(_copyText)) Clipboard.SetText(_copyText); } catch { /* clipboard busy */ }
+        var text = _editFile is null ? _copyText : Editor.Text;
+        try { if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text); } catch { /* clipboard busy */ }
     }
 }

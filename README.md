@@ -5,9 +5,9 @@ already use - Claude Code, OpenAI Codex, Kimi Code, and Grok - in a native WPF i
 terminal can't give you: **multiple agents working the same codebase with shared memory, a manager that assigns
 them lanes, a broadcast channel that interrupts all of them at once, and per-agent sub-agent swarms.**
 
-It is not a re-implementation of those agents and it never calls model APIs directly. Every chat launches the
-official CLI as a child process and speaks its streaming JSON protocol, so your existing logins, sessions, MCP
-servers, and permissions keep working exactly as they do in the terminal.
+For Claude, Codex, Kimi, and Grok, each chat launches an installed CLI as a child process and speaks its streaming
+protocol. VibeCode adds account switching, session history, MCP configuration, and permission controls around
+those runtimes. A separate **GLM provider** connects through an API account you configure in the app.
 
 > [!WARNING]
 > **VibeCode is a work in progress.** It is under active development - expect rough edges, changing behavior, and
@@ -22,12 +22,16 @@ servers, and permissions keep working exactly as they do in the terminal.
 ## Table of contents
 
 - [What it is](#what-it-is)
-- [Bridges - many agents, one shared memory](#bridges--many-agents-one-shared-memory)
-- [Announce - interrupt every agent at once](#announce--interrupt-every-agent-at-once)
-- [Bridge manager - one agent assigns the work](#bridge-manager--one-agent-assigns-the-work)
-- [Agent swarms - provider-native sub-agents](#agent-swarms--provider-native-sub-agents)
-- [MCP servers - one catalog, every CLI](#mcp-servers--one-catalog-every-cli)
+- [Bridges - many agents, one shared memory](#bridges---many-agents-one-shared-memory)
+- [Announce - interrupt every agent at once](#announce---interrupt-every-agent-at-once)
+- [Bridge manager - one agent assigns the work](#bridge-manager---one-agent-assigns-the-work)
+- [Agent swarms - provider-native sub-agents](#agent-swarms---provider-native-sub-agents)
+- [Queues and the orchestrator wall](#queues-and-the-orchestrator-wall)
+- [Second Brain - memory across chats](#second-brain---memory-across-chats)
+- [MCP servers - one catalog, every CLI](#mcp-servers---one-catalog-every-cli)
+- [Agent activity monitor](#agent-activity-monitor)
 - [Usage and cost tracking](#usage-and-cost-tracking)
+- [Android companion](#android-companion)
 - [Everything else](#everything-else)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
@@ -47,16 +51,17 @@ agents on one project means juggling windows, and switching accounts means loggi
 
 VibeCode keeps the CLI as the engine and replaces only the surface:
 
-- **The CLI is the engine.** Every chat is a real `claude` / `codex` / `kimi` / `grok` process started in your
-  project folder. VibeCode translates its stream to UI and your input back to the protocol.
-- **Your setup is reused.** Existing logins, `~/.claude`, `CODEX_HOME`, MCP servers, permission modes, and session
-  history are the same ones the terminal uses. Nothing is proxied through a third-party server.
-- **Nothing is faked.** Tool calls, diffs, token usage, and rate limits are rendered from what the CLI actually
-  reports.
+- **The CLI is the engine.** Claude, Codex, Kimi, and Grok chats run their respective CLI in your project folder.
+  VibeCode translates its stream to UI and your input back to the protocol. GLM uses its own API adapter.
+- **Your setup is supported.** Provider configuration, MCP servers, permission modes, and session history stay
+  part of the workflow. Managed accounts use separate credential storage so you can switch accounts in the app.
+- **Activity comes from the provider.** Tool calls, diffs, usage, and rate limits reflect provider reports.
+  Live token estimates are marked with `~` and reconciled when reported totals arrive.
 
-Closing VibeCode stops the agents it started. Every child process is bound to a Win32 Job Object with
-`KILL_ON_JOB_CLOSE`, so a clean exit *or* a crash tears down the whole process tree - and only the processes
-VibeCode itself spawned. CLIs you launched yourself in a terminal are never touched.
+With **Run in background** enabled, closing the window keeps ongoing work running in the system tray. Use
+**Quit** to end the app, or disable background running in Settings. The app binds its CLI children to Win32 Job
+Objects so exiting or crashing cleans up the processes it owns. Independently launched terminal sessions keep
+their own lifetime.
 
 ## Bridges - many agents, one shared memory
 
@@ -79,9 +84,10 @@ work, and overwrite each other. Bridges solve that with **one shared memory file
 - **Real-time sharing off** falls back to high-level coordination: agents stay out of each other's areas without
   tracking line-by-line activity.
 
-The file is the *only* channel - agents never message each other directly, so coordination survives restarts.
+Agents can also send **peer messages** and look up **peer conversations** to hand off work or ask for context.
+The shared file remains the durable coordination board; messaging and conversation lookup complement it.
 
-Bridges hold **up to 16 agents** (default limit 9), and you can mix providers freely - add another agent from the
+Bridges hold **up to 17 agents** (default limit 9), and you can mix providers freely - add another agent from the
 bridge header and pick whichever CLI suits the lane:
 
 <img src="assets/screenshots/add-agent.png" alt="Adding a Claude, Codex, Kimi, or Grok agent to a bridge" width="280">
@@ -162,6 +168,27 @@ single chat can fan a task out across several workers and integrate the results 
 
 Supported for Claude, Codex, and Grok.
 
+## Queues and the orchestrator wall
+
+Queue follow-up prompts while an agent is working, or use a longer task queue to keep a sequence of work visible
+in the chat. Bridge supervision tracks ongoing work and worker updates alongside the manager's plan.
+
+**Demon Mode** opens an orchestrator wall with a selectable team of **4-17 root sessions**: one orchestrator and
+up to 16 workers. You direct the orchestrator from its main pane and follow worker progress in the surrounding
+grid. It uses the bridge's session and dispatch machinery, with the orchestrator responsible for planning and
+assigning lanes.
+
+## Second Brain - memory across chats
+
+Second Brain connects chats and bridge agents to an **agentmemory** service for durable memory, automatic recall,
+and remembering useful decisions and corrections. Search memories or explore their connections in the memory
+graph. Per-chat controls let you exclude a conversation from capture and recall.
+
+The default endpoint is a local service at `http://127.0.0.1:3111`. Capture and recall require a running compatible
+service. The memory map has an on/off control; connection and automatic recall/remembering options are stored as
+`AgentMemoryEndpoint`, `AgentMemoryAutoRecall`, and `AgentMemoryAutoRemember` in `settings.json`. Set
+`AGENTMEMORY_SECRET` when your service requires authentication.
+
 ## MCP servers - one catalog, every CLI
 
 <!-- ![The MCP server catalog and config assistant](assets/screenshots/mcp.png) -->
@@ -177,6 +204,16 @@ or ACP for Kimi and Grok.
   until it passes validation and you approve it.
 - **Not a proxy.** Each CLI remains the MCP client and owns its own tool approvals; VibeCode only configures.
 
+## Agent activity monitor
+
+Enable **Agent activity monitor** in Settings to collect status reports from Codex sessions. The dashboard shows
+task, stage, activity, and working/waiting/completed state, with separate root and child activity. Closing the
+dashboard stops its display refreshes while configured reporting continues.
+
+The included status MCP server validates reports and returns receipts. Reports are display metadata; they do not
+execute commands or change permissions. See the [status-server guide](VibeCode.AgentStatus.Mcp/README.md) for the
+message format and standalone use.
+
 ## Usage and cost tracking
 
 VibeCode tracks what you spend across every provider and model in one dashboard: estimated spend, tokens in and
@@ -188,25 +225,51 @@ breakdown.
 Spend is estimated from each model's public pricing, and the cache-served percentage shows how much of your token
 volume came back from prompt caching rather than being billed fresh. It is a rough guide, not an invoice.
 
+Chat headers also show elapsed time, token totals, and rolling **tok/s** and **tok/min**. When a provider reports
+usage in a large batch, the rate spreads those tokens over the reporting interval and averages over up to the
+last 60 seconds. A delayed batch therefore reflects the time spent producing it instead of appearing as a
+one-second spike. Rates count input, cached input, and output tokens. A `~` marks provisional streaming estimates
+until reported usage arrives.
+
+## Android companion
+
+The Android companion connects to your running desktop to follow chats, send prompts, and handle supported
+approvals and session controls. Enable **Phone** in Settings, start the desktop connection, and pair the device.
+Connections use authentication and pinned TLS certificates; the desktop must remain running and reachable.
+
+The desktop can generate a paired installer from an **unconfigured Android template**. Build that template from
+source with `scripts/Build-Mobile.ps1`, or include it when publishing with `scripts/Publish.ps1 -IncludeMobile`.
+Pairing credentials and the signing identity are generated on the desktop. See the
+[Android guide](mobile/README.md) for build, signing, and enrollment details.
+
 ## Everything else
 
 **Chat**
+
 - Markdown rendering with selectable text, code blocks, and a full-file syntax-highlighted diff viewer
+- Editable code viewer, file navigation, compact edit cards, and workspace checkpoints for undoing a turn
 - Collapsible tool-call cards with per-call status (running / done / error)
 - Thinking blocks, an artifacts panel, and a live task list that updates as the agent works:
 
   <img src="assets/screenshots/todos.png" alt="Live task list showing an agent's progress through its plan" width="520">
 - Permission-mode, model, and reasoning-effort pickers in the composer; all persist across restarts
+- Provider-supported speed tiers and model catalogs, with fallback choices while a runtime is starting
 - Session catalog: resume or fork any previous session; prompt and recent-directory history
 
 **Accounts**
+
 - Switch between multiple logins per provider from the sidebar without logging out and back in
-- Snapshots live under the provider's own config directory; credential files are copied atomically, never parsed
+- Managed provider accounts keep their own credential records; Codex accounts use separate account homes
+- API-key accounts for supported providers, with keys protected for the current Windows user using DPAPI
 
 **Extras**
+
 - Rate-limit and usage display (session / week) with cost estimates
-- Offline speech-to-text dictation (Whisper.net, CPU - no audio leaves the machine)
-- Embedded browser panel, animated backgrounds with an adjustable scrim, light/dark theming
+- Local Whisper speech-to-text dictation with optional Vulkan acceleration and CPU fallback
+- Optional Groq-hosted dictation using your own API key; enabling it uploads the recorded clip to Groq
+- Embedded browser panel and browser tools, animated backgrounds with an adjustable scrim, and theme choices
+- Optional Spotify playback controls, weather and radar, and built-in games
+- Completion notifications and continued work in the system tray
 - Dual-monitor support: run the bridge on a second display
 
 ## Requirements
@@ -214,8 +277,11 @@ volume came back from prompt caching rather than being billed fresh. It is a rou
 | | |
 |---|---|
 | OS | Windows 10 or 11 (WPF; Windows-only by design) |
-| SDK | [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) - target framework `net8.0-windows` |
-| Agents | At least one supported CLI installed and signed in (see below) |
+| SDK | [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) to build; target framework `net8.0-windows` |
+| Runtime | .NET 8 Desktop Runtime for a framework-dependent run; a self-contained release includes it |
+| Agents | A supported CLI installed and signed in, or your own GLM API account (see below) |
+| Browser | Microsoft Edge WebView2 Runtime for embedded web surfaces; installed Chrome for Chrome-based tools |
+| Android builds | A compatible JDK, Android SDK platform 36, and the build tools selected by Gradle; optional for desktop-only builds |
 
 ## Quick start
 
@@ -245,9 +311,12 @@ tool's own instructions, then confirm it runs from a terminal before using it he
 | OpenAI Codex | `codex.exe` | `codex login` |
 | Kimi Code | `kimi.exe` / `kimi.cmd` | Kimi Code sign-in |
 | Grok | `grok.exe` / `grok.cmd` | Grok CLI sign-in |
+| GLM | Built-in API adapter | Add your own API-key account in VibeCode |
 
-If a CLI is installed somewhere unusual, point VibeCode straight at it with `VIBECODE_CODEX_PATH`,
-`VIBECODE_KIMI_PATH`, or `VIBECODE_GROK_PATH`.
+If a CLI is installed somewhere unusual, point VibeCode straight at it with `VIBECODE_CLAUDE_PATH`,
+`VIBECODE_CODEX_PATH`, `VIBECODE_KIMI_PATH`, or `VIBECODE_GROK_PATH`. Install the CLI for every CLI-backed provider
+you want to use; those runtimes are not bundled. Available models, effort choices, speed tiers, and usage limits
+depend on the installed runtime and your account.
 
 ## Configuration
 
@@ -257,8 +326,10 @@ Settings persist to:
 %APPDATA%\VibeCode\settings.json
 ```
 
-That file holds your window placement, chosen model and effort, hidden projects, imported backgrounds, and
-provider preferences. Deleting it resets the app to defaults; it never contains credentials.
+That file holds your window placement, chosen model and effort, hidden projects, imported backgrounds, extension
+options, and provider preferences. Provider authentication and encrypted API-key records are stored separately.
+Settings and MCP definitions can still contain details you entered, so keep runtime data, account files, signing
+keys, and generated enrollment files out of source control. Set `VIBECODE_DATA_DIR` to use an isolated app folder.
 
 ## Environment variables
 
@@ -267,7 +338,10 @@ All are optional.
 | Variable | Purpose |
 |---|---|
 | `VIBECODE_DATA_DIR` | Redirect all VibeCode state to an isolated folder (useful for testing) |
-| `VIBECODE_CODEX_PATH` / `VIBECODE_KIMI_PATH` / `VIBECODE_GROK_PATH` | Absolute path to a provider CLI |
+| `VIBECODE_CLAUDE_PATH` / `VIBECODE_CODEX_PATH` / `VIBECODE_KIMI_PATH` / `VIBECODE_GROK_PATH` | Absolute path to a provider CLI |
+| `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `KIMI_CODE_HOME` / `GROK_HOME` | Provider configuration locations; managed accounts may select their own account home |
+| `AGENTMEMORY_SECRET` | Authentication secret for your configured Second Brain service |
+| `JAVA_HOME` / `ANDROID_HOME` | JDK and Android SDK locations when building the mobile companion |
 | `VIBECODE_BRIDGE_TIMEOUT_SECONDS` | Idle timeout before a background bridge disposes its peers |
 | `VIBECODE_DISABLE_BROWSER_BRIDGE` | Disable the embedded browser bridge |
 | `VIBECODE_OPEN_SETTINGS` | Open the settings window at startup |
@@ -276,46 +350,79 @@ All are optional.
 ## Project layout
 
 ```
-assets/                     App icon and logo (referenced by the .csproj)
+assets/                     App icon, logo, and README screenshots
 VibeCode.Desktop/
-  Protocol/                 One session driver per CLI, behind ICodingSession
+  Protocol/                 Provider session drivers behind ICodingSession
     ClaudeSession.cs          Claude Code stream-json protocol + process/job lifecycle
     CodexSession.cs           Codex app-server protocol
     KimiSession.cs            ACP protocol (shared by Kimi and Grok)
     GrokSession.cs            Grok facade over the ACP session
-  Services/                 Accounts, settings, usage, MCP, speech, sessions, pricing
+    GlmSession.cs             GLM API session
+  Services/                 Accounts, memory, phone, usage, MCP, speech, sessions, pricing
   UI/                       ViewModels, converters, diff/syntax rendering, extra windows
   Themes/                   Dark.xaml (design tokens) and Cli.xaml
-  Assets/                   Background art and embedded prompt resources
+  Assets/                   Background art and bundled application resources
   MainWindow.xaml(.cs)      Shell: sidebar, chat, composer, bridge overlay
+VibeCode.AgentStatus.Mcp/    Status-reporting MCP host and message contracts
+mobile/VibeCodeMobile/      Android companion source and Gradle wrapper
+tests/VibeCode.PublicTests/ Provider, token-rate, and WPF layout regression checks
+scripts/                   Build, mobile-template validation, and publish helpers
 ```
 
 Adding a provider means implementing `ICodingSession` and registering it - the UI is protocol-agnostic.
 
 ## Building a release
 
-Self-contained single-file executable:
+Build a self-contained single-file Windows executable from the repository root:
 
-```bash
-dotnet publish VibeCode.Desktop/VibeCode.Desktop.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```powershell
+powershell -NoProfile -File scripts/Publish.ps1
 ```
 
-The output lands in `VibeCode.Desktop/bin/Release/net8.0-windows/win-x64/publish/`. Native Whisper libraries are
-extracted at runtime (`IncludeNativeLibrariesForSelfExtract`), so the dictation feature works from the single file.
+The output lands in `artifacts/windows-x64/`. Native Whisper libraries are extracted at runtime so dictation
+works from the single file. Add `-IncludeMobile` to compile and embed the Android template:
+
+```powershell
+powershell -NoProfile -File scripts/Publish.ps1 -IncludeMobile
+```
+
+The publish script validates any included mobile template before embedding it. Templates contain no configured
+desktop, pairing secret, or signing identity. Android build prerequisites are only required when building one.
+
+### Verification
+
+Run the local regression checks without provider accounts or live coding requests:
+
+```powershell
+dotnet run --project tests/VibeCode.PublicTests/VibeCode.PublicTests.csproj -c Release
+powershell -NoProfile -File tests/Test-MobileTemplate.ps1
+```
+
+They cover provider catalogs, reasoning and speed options, a **50,000-token burst simulation**, delayed usage
+reports, estimate reconciliation, independent chat panes, idle timers, header layouts, and enrollment validation.
+Building the mobile template first also enables the APK personalization check. The GitHub Actions workflow builds,
+runs these checks, and publishes a Windows artifact for each push and pull request.
 
 ## Troubleshooting
 
 **"Could not find the … CLI"** - the executable is not on `PATH`. Verify it runs in a terminal, then set the
 matching `VIBECODE_*_PATH` variable.
 
-**A sign-in banner appears even though the terminal works** - VibeCode reads the CLI's real auth state. Run the
-provider's login command again in a terminal; the banner clears on the next chat.
+**A sign-in banner appears even though the terminal works** - check which account is selected in VibeCode and
+sign in again through its account controls. Managed accounts can have a different login from your terminal.
 
-**Build fails with a file-in-use error** - VibeCode is still running and holding its own `.exe`. Close it (or end
-the `VibeCode` process) and rebuild.
+**Build fails with a file-in-use error** - VibeCode is still running and holding its own `.exe`. Choose **Quit**
+from the tray menu (closing the window can leave it running), then rebuild.
 
 **Bridge peers keep running after you navigate away** - that is intentional; they run in the background. Close the
 bridge explicitly, or let the idle timeout dispose it.
+
+**The token counter updates in large bursts** - some providers report usage only at checkpoints or at the end of
+a request. The rate display averages those reports over elapsed time. `~` values are live estimates that are
+reconciled with reported totals when available.
+
+**Phone installer is unavailable** - build the Android template, then publish with `-IncludeMobile`. Enable Phone
+and configure pairing on the desktop; the source template itself is deliberately unconfigured.
 
 **Something else broken?** That's expected at this stage - [open an issue](../../issues) and it gets looked at.
 
@@ -326,4 +433,4 @@ bridge explicitly, or let the idle timeout dispose it.
 [MIT](LICENSE) - do what you want with it, just keep the copyright notice.
 
 VibeCode bundles no provider CLI. Claude Code, OpenAI Codex, Kimi Code, and Grok remain under their own licenses
-and terms; you install and sign into them yourself.
+and terms; you install and sign into them yourself. Third-party assets retain their accompanying notices.

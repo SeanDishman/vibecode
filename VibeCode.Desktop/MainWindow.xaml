@@ -3,7 +3,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="clr-namespace:VibeCode.UI"
         xmlns:svc="clr-namespace:VibeCode.Services"
-        xmlns:md="clr-namespace:MdXaml;assembly=MdXaml"
         xmlns:gif="clr-namespace:WpfAnimatedGif;assembly=WpfAnimatedGif"
         Title="VibeCode" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
         Width="1400" Height="880" MinWidth="960" MinHeight="600"
@@ -35,8 +34,13 @@
         <BooleanToVisibilityConverter x:Key="BoolVis" />
 
         <!-- Bridge pane header actions use compact, fast hover labels. The between-delay window makes each next
-             title appear immediately as the pointer moves across the adjacent icon buttons. -->
+             title appear immediately as the pointer moves across the adjacent icon buttons.
+             26px rather than the app-wide 30: four of these sit opposite the pane's name in a header that is a fifth
+             of the Bridge wide on a Demon wall, and the 16px they give back is the difference between that name
+             fitting and being ellipsised. Still a comfortable pointer target, and used nowhere else. -->
         <Style x:Key="BridgeActionButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
             <Setter Property="ToolTipService.InitialShowDelay" Value="150" />
             <Setter Property="ToolTipService.BetweenShowDelay" Value="500" />
             <Setter Property="ToolTipService.ShowDuration" Value="4000" />
@@ -44,6 +48,8 @@
             <Setter Property="ToolTipService.VerticalOffset" Value="4" />
         </Style>
         <Style x:Key="BridgeActionToggle" TargetType="ToggleButton" BasedOn="{StaticResource IconToggle}">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
             <Setter Property="ToolTipService.InitialShowDelay" Value="150" />
             <Setter Property="ToolTipService.BetweenShowDelay" Value="500" />
             <Setter Property="ToolTipService.ShowDuration" Value="4000" />
@@ -360,7 +366,9 @@
                             Visibility="{Binding HasSubagents, Converter={StaticResource BoolVis}}">
                         <ScrollViewer MaxHeight="240" Padding="5,1" VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly">
-                            <ItemsControl ItemsSource="{Binding Subagents}"
+                            <!-- VisibleSubagents, not Subagents: children a stopped turn killed are left out, so a
+                                 relaunched fan-out lists eleven live workers rather than eleven plus eleven corpses. -->
+                            <ItemsControl ItemsSource="{Binding VisibleSubagents}"
                                           ItemTemplate="{StaticResource SubagentCompactRow}" />
                         </ScrollViewer>
                     </Border>
@@ -435,7 +443,9 @@
             </Grid>
         </DataTemplate>
 
-        <Style x:Key="MdViewer" TargetType="md:MarkdownScrollViewer">
+        <!-- ui:MarkdownView, not md:MarkdownScrollViewer: same viewer with its fenced code blocks rewritten from
+             AvalonEdit editors into text, so a selection can cross them and a copy actually contains them. -->
+        <Style x:Key="MdViewer" TargetType="ui:MarkdownView">
             <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
             <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
             <Setter Property="Background" Value="Transparent" />
@@ -451,42 +461,13 @@
             <Setter Property="ui:WheelForward.ToParent" Value="True" />
         </Style>
 
-        <!-- dark right-click menu for message/tool "Copy" actions (WPF ships a white one) -->
-        <Style x:Key="DarkMenuItem" TargetType="MenuItem">
-            <Setter Property="Foreground" Value="{StaticResource Text}" />
-            <Setter Property="FontSize" Value="12.5" />
-            <Setter Property="Padding" Value="11,6" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="MenuItem">
-                        <Border x:Name="bd" Background="Transparent" CornerRadius="{StaticResource Rad7}" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="{StaticResource Bg3}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="DarkContextMenu" TargetType="ContextMenu">
-            <Setter Property="Foreground" Value="{StaticResource Text}" />
-            <Setter Property="ItemContainerStyle" Value="{StaticResource DarkMenuItem}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ContextMenu">
-                        <Border Background="{StaticResource Overlay}" BorderBrush="{StaticResource Border}"
-                                BorderThickness="1" CornerRadius="{StaticResource Rad10}" Padding="4">
-                            <ItemsPresenter />
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <!-- "Copy whole conversation" is the way to grab text that spans a tool card: WPF can't
-             drag-select across the separate message/card controls, so we copy the transcript wholesale. -->
+        <!-- DarkMenuItem / DarkContextMenu / DarkSeparator now live in Themes/Dark.xaml (and Cli.xaml): the
+             menus built in code - UI/TextEditMenu.cs, UI/TranscriptSelection.cs - look their style up through
+             Application.Resources and cannot see a key declared inside this window. -->
+
+        <!-- Right-click a message. "Copy" takes this one block; drag across two or more messages first and the
+             transcript's own range menu offers to copy all of them (UI/TranscriptSelection.cs). "Copy whole
+             conversation" stays as the one-shot way to grab everything including the tool cards. -->
         <ContextMenu x:Key="BlockMenu" Style="{StaticResource DarkContextMenu}">
             <MenuItem Header="Copy" Click="OnCopyBlock" />
             <MenuItem Header="Copy whole conversation" Click="OnCopyConversation" />
@@ -496,17 +477,6 @@
         <ContextMenu x:Key="ImageMenu" Style="{StaticResource DarkContextMenu}">
             <MenuItem Header="Copy image" Click="OnCopyImage" />
         </ContextMenu>
-
-        <!-- thin dark separator for the dark context menus (WPF's default is a white line) -->
-        <Style x:Key="DarkSeparator" TargetType="Separator">
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Separator">
-                        <Border Height="1" Background="{StaticResource BorderSoft}" Margin="6,4" />
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
 
         <!-- right-click menu for a sidebar chat row: pin / fork / rename / copy / delete -->
         <ContextMenu x:Key="ChatMenu" Style="{StaticResource DarkContextMenu}">
@@ -543,6 +513,16 @@
                         <TextBlock Text="&#xE8C8;" FontFamily="{StaticResource Icons}" FontSize="12" Width="20"
                                    Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
                         <TextBlock Text="Copy transcript" VerticalAlignment="Center" />
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+            <!-- Header binds MemoryGlyph / MemoryLabel, so the row reads as the action it will perform. -->
+            <MenuItem Click="OnToggleChatMemory">
+                <MenuItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding MemoryGlyph}" FontFamily="{StaticResource Icons}" FontSize="12" Width="20"
+                                   Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding MemoryLabel}" VerticalAlignment="Center" />
                     </StackPanel>
                 </MenuItem.Header>
             </MenuItem>
@@ -608,6 +588,7 @@
             <MenuItem Header="Test account" Click="OnTestGrokAccount" />
             <MenuItem Header="Sign out" Click="OnLogoutGrokAccount" />
             <Separator Style="{StaticResource DarkSeparator}" />
+            <MenuItem Header="Delete all chats" Click="OnDeleteAllGrokChats" Foreground="{StaticResource Red}" />
             <MenuItem Header="Remove account" Click="OnRemoveGrokAccount" Foreground="{StaticResource Red}" />
         </ContextMenu>
 
@@ -824,10 +805,10 @@
             <Setter Property="Height" Value="30" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="Background" Value="{StaticResource Accent}" />
-            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Background" Value="{StaticResource SendButtonFill}" />
+            <Setter Property="BorderBrush" Value="{StaticResource SendButtonRing}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Foreground" Value="{StaticResource OnAccent}" />
+            <Setter Property="Foreground" Value="{StaticResource SendButtonGlyph}" />
             <Setter Property="ToolTip" Value="Send (Enter)" />
             <Setter Property="AutomationProperties.Name" Value="Send message" />
             <Setter Property="Template">
@@ -858,7 +839,7 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource AccentHover}" />
+                    <Setter Property="Background" Value="{StaticResource SendButtonFillHover}" />
                 </Trigger>
                 <!-- a turn is running → become the stop / interrupt button (declared after the send-hover triggers so it wins).
                      Uses CanInterrupt (running only), NOT IsWorking, so it stays a Send button during "starting session…". -->
@@ -885,9 +866,36 @@
 
         <!-- ============ message item templates ============ -->
 
-        <DataTemplate DataType="{x:Type ui:UserItem}">
-            <Grid Style="{StaticResource Appear}" Margin="0,16,0,0" ContextMenu="{StaticResource BlockMenu}">
-                <Grid HorizontalAlignment="Right" MaxWidth="600" Background="Transparent">
+        <!-- A message from ANOTHER AGENT — a peer message or a manager work order. It reaches the pane as a user
+             turn because that is the only way into a session, but it is not the user's words: an agent wrote it, so
+             the body is markdown and gets rendered as such, and the app's framing around it (who sent it, and the
+             reply-protocol addressed to the receiving model) becomes card chrome instead of more grey text. Full
+             width on its own surface, so it never reads as something you typed. Every brush is a theme key, so CLI
+             mode restyles this along with the rest of the app. -->
+        <DataTemplate x:Key="AgentMessageRow" DataType="{x:Type ui:UserItem}">
+            <Border HorizontalAlignment="Stretch" Background="{StaticResource AgentMsgBg}"
+                    BorderBrush="{StaticResource AgentMsgBorder}" BorderThickness="1"
+                    CornerRadius="{StaticResource RadBubble}" Padding="14,10,14,11">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="{Binding AgentGlyph}" FontSize="12.5" Margin="0,0,8,0"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding AgentSender}" FontSize="12.5" FontWeight="SemiBold"
+                                   Foreground="{StaticResource AgentMsgHeader}" VerticalAlignment="Center" />
+                        <TextBlock Text="·" Margin="7,0" Foreground="{StaticResource Faint}"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding AgentKind}" FontSize="11.5"
+                                   Foreground="{StaticResource Faint}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <ui:MarkdownView Style="{StaticResource MdViewer}" Markdown="{Binding AgentBody}" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <!-- What the HUMAN typed. Deliberately not markdown: a prompt that mentions `backticks` or **bold** must
+             show what was actually sent, not a prettied-up version of it. -->
+        <DataTemplate x:Key="UserPromptRow" DataType="{x:Type ui:UserItem}">
+            <Grid HorizontalAlignment="Right" MaxWidth="600" Background="Transparent">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="22" />
@@ -906,9 +914,15 @@
                                         <Border Margin="4,3,0,3" CornerRadius="{StaticResource Rad9}" Background="{StaticResource Bg3}"
                                                 BorderBrush="{StaticResource BorderHairline}" BorderThickness="1" ClipToBounds="True">
                                             <Grid>
-                                                <Image Source="{Binding Preview}" MaxHeight="128" MaxWidth="220" Stretch="Uniform"
+                                                <!-- DynamicResource, for the same reason as the AttachmentChip template above: this
+                                                     Image lives inside a nested deferred template, and a StaticResource lookup
+                                                     from there cannot see a key declared in the enclosing dictionary. It threw
+                                                     "Cannot find resource named 'ImageMenu'" out of the WrapPanel measure pass -
+                                                     80 times in the crash log - and every one of those took a chunk of startup
+                                                     with it, because App handles the exception and flushes state mid-launch. -->
+                                        <Image Source="{Binding Preview}" MaxHeight="128" MaxWidth="220" Stretch="Uniform"
                                                        Cursor="Hand" MouseLeftButtonDown="OnImageDblClick"
-                                                       ContextMenu="{StaticResource ImageMenu}"
+                                                       ContextMenu="{DynamicResource ImageMenu}"
                                                        ToolTip="Double-click to expand · right-click to copy"
                                                        Visibility="{Binding HasPreview, Converter={StaticResource ShowIf}}" />
                                                 <StackPanel Orientation="Horizontal" Margin="9,7"
@@ -983,7 +997,27 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                </Grid>
+            </Grid>
+        </DataTemplate>
+
+        <!-- One row, two shapes. A ContentControl that SWAPS the template rather than two branches with their
+             Visibility toggled: a collapsed branch is still built, so the toggle version handed every human prompt
+             a hidden MarkdownView that parsed it as markdown anyway, and left the full un-carded wire text sitting
+             in the tree under every agent message. -->
+        <DataTemplate DataType="{x:Type ui:UserItem}">
+            <Grid Style="{StaticResource Appear}" Margin="0,16,0,0" ContextMenu="{StaticResource BlockMenu}">
+                <ContentControl Content="{Binding}" Focusable="False">
+                    <ContentControl.Style>
+                        <Style TargetType="ContentControl">
+                            <Setter Property="ContentTemplate" Value="{StaticResource UserPromptRow}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsAgentMessage}" Value="True">
+                                    <Setter Property="ContentTemplate" Value="{StaticResource AgentMessageRow}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ContentControl.Style>
+                </ContentControl>
             </Grid>
         </DataTemplate>
 
@@ -1054,6 +1088,60 @@
             </Border>
         </DataTemplate>
 
+        <!-- One task row: status glyph + text, struck through once it is done. Shared by the live task list and
+             by the TodoWrite card in the transcript — the transcript's own copy of this markup had lost the
+             strikethrough trigger, so a finished item read as unfinished there and as finished everywhere else. -->
+        <DataTemplate x:Key="TodoRow">
+            <DockPanel Margin="0,4">
+                <TextBlock DockPanel.Dock="Left" Text="{Binding Mark}" FontFamily="{StaticResource Icons}"
+                           FontSize="13" Foreground="{Binding Status, Converter={StaticResource TodoFg}}"
+                           Margin="0,1,10,0" VerticalAlignment="Top" TextWrapping="NoWrap" />
+                <TextBlock Text="{Binding Text}" FontSize="12.5"
+                           Foreground="{Binding Status, Converter={StaticResource TodoFg}}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="TextWrapping" Value="Wrap" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Done}" Value="True">
+                                    <Setter Property="TextDecorations" Value="Strikethrough" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </DockPanel>
+        </DataTemplate>
+
+        <!-- The agent's live task list. ONE copy, shared by the Bridge pane's ⋮ popup and the ordinary chat's
+             header popup — it used to be hand-copied per surface, and the copies had already drifted apart in
+             margins and empty-state treatment. Only the BODY lives here: each host supplies its own card chrome,
+             because the pane's Border sizes itself off PaneHeader by ElementName and that binding would break the
+             moment it left the pane's namescope. -->
+        <DataTemplate x:Key="TodoListBody" DataType="{x:Type ui:ChatViewModel}">
+            <DockPanel Margin="14,12">
+                <StackPanel DockPanel.Dock="Top"
+                            Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}}">
+                    <DockPanel Margin="0,0,0,6">
+                        <TextBlock DockPanel.Dock="Right" Foreground="{StaticResource Faint}" FontSize="11"
+                                   FontFamily="{StaticResource Mono}">
+                            <Run Text="{Binding TodoDone, Mode=OneWay}" /><Run Text=" of " /><Run Text="{Binding TodoTotal, Mode=OneWay}" /><Run Text=" done" />
+                        </TextBlock>
+                        <TextBlock Text="Task list" FontSize="12.5" FontWeight="SemiBold"
+                                   Foreground="{StaticResource Muted}" />
+                    </DockPanel>
+                    <ProgressBar Style="{StaticResource SlimProgress}" Value="{Binding TodoDone, Mode=OneWay}"
+                                 Maximum="{Binding TodoTotal, Mode=OneWay}" Margin="0,0,0,8" />
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Top" Text="{Binding TodosEmptyText}"
+                           Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontSize="12.5" Margin="2,4"
+                           Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}, ConverterParameter=invert}" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}}">
+                    <ItemsControl ItemsSource="{Binding Todos}" ItemTemplate="{StaticResource TodoRow}" />
+                </ScrollViewer>
+            </DockPanel>
+        </DataTemplate>
+
         <!-- A pending prompt shared by normal chats and every Bridge pane. The queue-head action is outside the
              faded card so it stays legible and clickable in both the standard and CLI themes. -->
         <DataTemplate DataType="{x:Type ui:QueuedItem}">
@@ -1097,7 +1185,7 @@
                 <!-- Bind RenderText, not Text: it is the finished markdown once the block stops and a throttled
                      snapshot (trailing block cursor, unterminated code fence closed) while the message streams, so
                      a long turn reads as markdown live instead of showing its source until the turn ends. -->
-                <md:MarkdownScrollViewer Style="{StaticResource MdViewer}" Markdown="{Binding RenderText}" />
+                <ui:MarkdownView Style="{StaticResource MdViewer}" Markdown="{Binding RenderText}" />
             </Grid>
         </DataTemplate>
 
@@ -1162,6 +1250,39 @@
                                 <DoubleAnimation Storyboard.TargetName="chev"
                                                  Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
                                                  To="0" Duration="0:0:0.15" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.ExitActions>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- The turn is open but nothing is being written: dots flowing round a ring, parked at the end of the
+             transcript. The row keeps its height whether or not the orb is showing and the orb FADES rather than
+             collapsing, so a burst of text starting and stopping never shunts the transcript under the reader.
+             Spin follows the same flag as the fade: a hidden orb costs nothing because its clock is stopped. -->
+        <DataTemplate DataType="{x:Type ui:PendingItem}">
+            <Grid Height="24" Margin="1,4,0,2" HorizontalAlignment="Left" IsHitTestVisible="False">
+                <ui:OrbitSpinner x:Name="orb" Width="22" Height="22" Opacity="0"
+                                 VerticalAlignment="Center" HorizontalAlignment="Left"
+                                 Ink="{DynamicResource Accent}" Spin="{Binding Quiet}"
+                                 AutomationProperties.Name="Working" />
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Quiet}" Value="True">
+                    <DataTrigger.EnterActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="orb" Storyboard.TargetProperty="Opacity"
+                                                 To="1" Duration="0:0:0.18" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.EnterActions>
+                    <DataTrigger.ExitActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="orb" Storyboard.TargetProperty="Opacity"
+                                                 To="0" Duration="0:0:0.18" />
                             </Storyboard>
                         </BeginStoryboard>
                     </DataTrigger.ExitActions>
@@ -1445,6 +1566,58 @@
                                    FontFamily="{StaticResource Mono}" FontSize="10.5" Margin="30,0,12,8"
                                    Visibility="{Binding ProgressText, Converter={StaticResource ShowIf}}" />
 
+                        <!-- A Workflow fans out a fleet of subagents, and the CLI streams the whole phase/agent
+                             tree with every progress event. This is shown WITHOUT waiting for the card to be
+                             expanded: the entire point of the card is watching the fleet work, and a token
+                             counter over a collapsed row said nothing about what any of them were doing. -->
+                        <ItemsControl ItemsSource="{Binding Workflow.Phases}" Margin="30,0,12,8"
+                                      Visibility="{Binding HasWorkflow, Converter={StaticResource BoolVis}}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,6">
+                                        <DockPanel Margin="0,0,0,3" Visibility="{Binding HasAgents, Converter={StaticResource BoolVis}}">
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Caption}" FontSize="9.5"
+                                                       FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding Title}" FontSize="10" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Muted}" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
+                                        <ItemsControl ItemsSource="{Binding Agents}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <DockPanel Margin="8,1.5,0,1.5">
+                                                        <TextBlock DockPanel.Dock="Left" Text="{Binding Mark}"
+                                                                   FontFamily="{StaticResource Icons}" FontSize="10"
+                                                                   Foreground="{Binding StatusKey, Converter={StaticResource StatusBrush}}"
+                                                                   Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding Stats}" FontSize="9.5"
+                                                                   FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}"
+                                                                   Margin="10,0,0,0" VerticalAlignment="Center"
+                                                                   Visibility="{Binding Stats, Converter={StaticResource ShowIf}}" />
+                                                        <TextBlock Text="{Binding Label}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                                                   TextWrapping="NoWrap" VerticalAlignment="Center"
+                                                                   ToolTip="{Binding PromptPreview}">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{StaticResource Muted}" />
+                                                                    <Style.Triggers>
+                                                                        <!-- the one you are waiting on reads as live -->
+                                                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{StaticResource Text}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </DockPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
                         <!-- subagent transcript -->
                         <Border BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,1,0,0" Padding="14,6,12,10"
                                 Visibility="{Binding Children.Count, Converter={StaticResource ShowIf}}">
@@ -1481,25 +1654,16 @@
                                         Visibility="{Binding DiffLines.Count, Converter={StaticResource ShowIf}}">
                                     <ItemsControl ItemsSource="{Binding DiffLines}" ItemTemplate="{StaticResource DiffRow}" />
                                 </Border>
-                                <ItemsControl ItemsSource="{Binding Todos}"
-                                              Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <DockPanel Margin="0,2.5">
-                                                <TextBlock DockPanel.Dock="Left" Text="{Binding Mark}" Style="{StaticResource Icon}"
-                                                           FontSize="12" Foreground="{Binding Status, Converter={StaticResource TodoFg}}"
-                                                           Margin="0,1,9,0" VerticalAlignment="Top" />
-                                                <TextBlock Text="{Binding Text}" FontSize="12.5"
-                                                           Foreground="{Binding Status, Converter={StaticResource TodoFg}}" />
-                                            </DockPanel>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                <!-- Shares TodoRow with the live list. Its own copy of this markup was missing the
+                                     strikethrough trigger and the wrapping, so a done item in a TodoWrite card read
+                                     as still outstanding while the same item read as done in the task list. -->
+                                <ItemsControl ItemsSource="{Binding Todos}" ItemTemplate="{StaticResource TodoRow}"
+                                              Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}}" />
                                 <TextBox Style="{StaticResource CodeBox}" Text="{Binding WriteContent, Mode=OneWay}" FontSize="11.5"
                                          MaxHeight="320"
                                          Visibility="{Binding WriteContent, Converter={StaticResource ShowIf}}" />
-                                <md:MarkdownScrollViewer Style="{StaticResource MdViewer}" Markdown="{Binding PlanMarkdown}"
-                                                         Visibility="{Binding PlanMarkdown, Converter={StaticResource ShowIf}}" />
+                                <ui:MarkdownView Style="{StaticResource MdViewer}" Markdown="{Binding PlanMarkdown}"
+                                                 Visibility="{Binding PlanMarkdown, Converter={StaticResource ShowIf}}" />
                                 <StackPanel Visibility="{Binding ResultCapped, Converter={StaticResource ShowIf}}">
                                     <TextBlock Text="OUTPUT" Style="{StaticResource Caption}" FontSize="9.5" Margin="1,8,0,4" />
                                     <TextBox Style="{StaticResource CodeBox}" Text="{Binding ResultCapped, Mode=OneWay}" FontSize="11.5"
@@ -1679,7 +1843,7 @@
                             <Border Background="{StaticResource Bg2}" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
                                     CornerRadius="{StaticResource Rad10}" Padding="14,6" Margin="0,10" MaxHeight="380">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <md:MarkdownScrollViewer Style="{StaticResource MdViewer}" Markdown="{Binding PlanMarkdown}" />
+                                    <ui:MarkdownView Style="{StaticResource MdViewer}" Markdown="{Binding PlanMarkdown}" />
                                 </ScrollViewer>
                             </Border>
                             <WrapPanel Visibility="{Binding IsPending, Converter={StaticResource BoolVis}}">
@@ -1697,17 +1861,21 @@
             </Grid>
         </DataTemplate>
 
+        <!-- One full-width rule with the pill centred ON TOP of it, rather than a star/Auto/star grid with the rule
+             split either side of an Auto column. An Auto column is sized from the label's own unwrapped width, and a
+             Grid hands that column its full desired width even when the Grid is narrower: on a Demon Mode worker pane
+             (a fifth of the wall) the pill outgrew the pane, both star columns collapsed to nothing, and the label
+             rendered hard against the left edge with its tail clipped off instead of centred. Centring is a layout
+             property here, so it holds at any pane width, and the label wraps rather than losing its end. The pill's
+             opaque background is what hides the run of rule behind it. -->
         <DataTemplate DataType="{x:Type ui:DividerItem}">
             <Grid Margin="0,16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition /><ColumnDefinition Width="Auto" /><ColumnDefinition />
-                </Grid.ColumnDefinitions>
                 <Rectangle Height="1" Fill="{StaticResource BorderSoft}" VerticalAlignment="Center" />
-                <Border Grid.Column="1" Background="{StaticResource Bg2}" BorderBrush="{StaticResource BorderSoft}"
+                <Border HorizontalAlignment="Center" Background="{StaticResource Bg2}" BorderBrush="{StaticResource BorderSoft}"
                         BorderThickness="1" CornerRadius="{StaticResource Rad99}" Padding="10,2.5" Margin="10,0">
-                    <TextBlock Text="{Binding Label}" Foreground="{StaticResource Faint}" FontSize="10" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Label}" Foreground="{StaticResource Faint}" FontSize="10" FontWeight="SemiBold"
+                               TextWrapping="Wrap" TextAlignment="Center" />
                 </Border>
-                <Rectangle Grid.Column="2" Height="1" Fill="{StaticResource BorderSoft}" VerticalAlignment="Center" />
             </Grid>
         </DataTemplate>
 
@@ -1744,8 +1912,52 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
+            <!-- ============ animated backdrop (chat + home canvas) ============
+                 First child of the shell, so it is behind every other surface. Normally row 1 only: the
+                 titlebar, sidebar and right panel paint themselves opaque, so art up there would never be
+                 seen anyway, and confining it keeps the vignette anchored to the chat area exactly as before.
+                 Borderless mode spans it across BOTH rows instead - with the chrome's surfaces emptied out
+                 there is nothing left painting those strips, and the art is what belongs behind them.
+                 Row/RowSpan live in the style, not as local values: a local Grid.Row would outrank the
+                 trigger and the art would stay pinned below the titlebar. -->
+            <Grid>
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Grid.Row" Value="1" />
+                        <Setter Property="Grid.RowSpan" Value="1" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding BorderlessMode, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                <Setter Property="Grid.Row" Value="0" />
+                                <Setter Property="Grid.RowSpan" Value="2" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <Image x:Name="BgImage" gif:ImageBehavior.AutoStart="True" Stretch="UniformToFill"
+                       RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                <!-- unify overlay: pulls the scene's stray hues toward the neutral UI base -->
+                <Rectangle Fill="#141A1A1D" />
+                <!-- gradient vignette scrim: dark at header/composer edges, lighter mid-scroll -->
+                <Rectangle>
+                    <Rectangle.Style>
+                        <Style TargetType="Rectangle">
+                            <Setter Property="Fill" Value="{DynamicResource ScrimChat}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SurfaceShowHome, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                    <Setter Property="Fill" Value="{DynamicResource ScrimHome}" />
+                                </DataTrigger>
+                                <!-- bridge: lighter scrim so the custom background reads through the glass panes -->
+                                <DataTrigger Binding="{Binding SurfaceShowBridge, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                    <Setter Property="Fill" Value="{DynamicResource ScrimBridge}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Rectangle.Style>
+                </Rectangle>
+            </Grid>
+
             <!-- ============ titlebar ============ -->
-            <Border x:Name="TitleBar" Grid.Row="0" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+            <Border x:Name="TitleBar" Grid.Row="0" Background="{StaticResource SurfaceChrome}" BorderBrush="{StaticResource SurfaceOutline}"
                     BorderThickness="0,0,0,1">
                 <DockPanel LastChildFill="False">
                     <!-- Companion windows use a plain session label; app-wide extensions stay in the primary shell. -->
@@ -1993,6 +2205,14 @@
                         </Button>
                         <!-- No telemetry button here. The HUD is opened from Settings > Usage, next to the same
                              numbers it plots; a second door onto one window is a titlebar slot spent twice. -->
+                        <!-- Phone gets its own slot rather than a Settings page: the pairing code is only live while
+                             its window is open, so the door to it has to be one click and obvious. It is a
+                             toggleable extension (Settings > Extensions) and ships OFF, so the slot is empty until
+                             it is switched on - same visibility rule as the Games controller and the Weather chip. -->
+                        <Button x:Name="PhoneButton" Style="{StaticResource TitlebarButton}" Content="&#xE8EA;" FontSize="12"
+                                Click="OnOpenPhone" ToolTip="Phone · read and reply to your chats from your phone"
+                                AutomationProperties.Name="Phone"
+                                Visibility="{Binding Source={x:Static svc:PhoneBridgeService.Instance}, Path=Enabled, Converter={StaticResource BoolVis}}" />
                         <Button x:Name="SettingsButton" Style="{StaticResource TitlebarButton}" Content="&#xE713;" FontSize="12" Click="OnOpenSettings"
                                 ToolTip="Settings" AutomationProperties.Name="Settings" />
                         <Button Style="{StaticResource TitlebarButton}" Content="&#xE921;" Click="OnMinimizeClick"
@@ -2010,7 +2230,9 @@
                                 </Style>
                             </Button.Style>
                         </Button>
-                        <Button Style="{StaticResource TitlebarClose}" Content="&#xE8BB;" Click="OnCloseClick"
+                        <!-- Tooltip is set in code, not here: with "run in background" on this button hides the
+                             window and leaves the agents running, and it has to say so before it is pressed. -->
+                        <Button x:Name="CloseButton" Style="{StaticResource TitlebarClose}" Content="&#xE8BB;" Click="OnCloseClick"
                                 AutomationProperties.Name="Close" />
                     </StackPanel>
                 </DockPanel>
@@ -2026,7 +2248,7 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- ============ sidebar (collapsible — full-screen chat hides chats + projects) ============ -->
-                <Border x:Name="SidebarSurface" Grid.Column="0" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                <Border x:Name="SidebarSurface" Grid.Column="0" Background="{StaticResource SurfaceChrome}" BorderBrush="{StaticResource SurfaceOutline}"
                         BorderThickness="0,0,1,0">
                     <!-- Width lives in the Style (not a local value) so the collapse trigger can override it -->
                     <Border.Style>
@@ -2042,7 +2264,7 @@
                     </Border.Style>
                     <DockPanel>
                         <!-- footer: account switcher (above) + settings / hidden count -->
-                        <Border x:Name="AccountFooter" DockPanel.Dock="Bottom" BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,1,0,0"
+                        <Border x:Name="AccountFooter" DockPanel.Dock="Bottom" BorderBrush="{StaticResource SurfaceOutline}" BorderThickness="0,1,0,0"
                                 Padding="8,8">
                             <StackPanel>
                                 <!-- account switcher: a full-width sidebar-footer row (not a floating pill) -->
@@ -2061,10 +2283,6 @@
                                                             <TextBlock Text="{Binding AccountInitial}" Foreground="White" FontSize="13"
                                                                        FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                                         </Border>
-                                                        <!-- signed-in presence dot (green), ringed to read as a badge -->
-                                                        <Ellipse Width="10" Height="10" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                                                 Margin="0,0,-1,-1" Fill="{StaticResource Green}" Stroke="{StaticResource Bg1}"
-                                                                 StrokeThickness="2" Visibility="{Binding IsSignedIn, Converter={StaticResource BoolVis}}" />
                                                     </Grid>
                                                     <TextBlock DockPanel.Dock="Right" Text="&#xE70E;" FontFamily="{StaticResource Icons}"
                                                                FontSize="10" Foreground="{StaticResource Faint}" VerticalAlignment="Center"
@@ -2099,6 +2317,12 @@
                                             <TextBlock Text="Settings" FontSize="11.5" Foreground="{StaticResource Muted}"
                                                        Margin="8,0,0,0" />
                                         </StackPanel>
+                                    </Button>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Width="32" Height="29"
+                                            Padding="0" Click="OnOpenBrain" ToolTip="Second Brain · open memory map"
+                                            AutomationProperties.Name="Open second brain memory map">
+                                        <TextBlock Text="&#x1F9E0;" FontFamily="Segoe UI Emoji" FontSize="15"
+                                                   VerticalAlignment="Center" TextWrapping="NoWrap" />
                                     </Button>
                                     <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="8,5"
                                             Click="OnOpenSettings" ToolTip="Find and restore hidden projects in Settings"
@@ -2189,6 +2413,38 @@
                                                                Foreground="{StaticResource Accent}" VerticalAlignment="Center" Margin="6,0,4,0"
                                                                ToolTip="Bridge — click to open (resumes it if it was closed)"
                                                                Visibility="{Binding IsBridgeHost, Converter={StaticResource BoolVis}}" />
+                                                    <!-- which login this row runs under: chats are no longer hidden on an
+                                                         account switch, so the row itself has to say. Initial only - the
+                                                         sidebar has no width for a name; the tooltip carries it. -->
+                                                    <Border DockPanel.Dock="Right" Width="17" Height="17" CornerRadius="9"
+                                                            Margin="6,0,4,0" VerticalAlignment="Center"
+                                                            ToolTip="{Binding AccountLabel, StringFormat=Runs as {0}. New chats use the account picked in the account menu.}"
+                                                            Visibility="{Binding ShowSidebarAccountBadge, Converter={StaticResource BoolVis}}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+                                                                <Style.Triggers>
+                                                                    <!-- off-account rows read as secondary, not as the login you are on -->
+                                                                    <DataTrigger Binding="{Binding IsOnActiveAccount}" Value="False">
+                                                                        <Setter Property="Background" Value="{StaticResource Bg3}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <TextBlock Text="{Binding AccountInitial}" FontSize="9" FontWeight="SemiBold"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsOnActiveAccount}" Value="False">
+                                                                            <Setter Property="Foreground" Value="{StaticResource Muted}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </Border>
                                                     <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                                                                Foreground="{StaticResource Text}" FontSize="12.5" VerticalAlignment="Center" />
                                                 </DockPanel>
@@ -2348,31 +2604,6 @@
                     </Button.Template>
                 </Button>
 
-                <!-- ============ animated backdrop (chat + home canvas) ============ -->
-                <Grid Grid.Column="1">
-                    <Image x:Name="BgImage" gif:ImageBehavior.AutoStart="True" Stretch="UniformToFill"
-                           RenderOptions.BitmapScalingMode="NearestNeighbor" />
-                    <!-- unify overlay: pulls the scene's stray hues toward the neutral UI base -->
-                    <Rectangle Fill="#141A1A1D" />
-                    <!-- gradient vignette scrim: dark at header/composer edges, lighter mid-scroll -->
-                    <Rectangle>
-                        <Rectangle.Style>
-                            <Style TargetType="Rectangle">
-                                <Setter Property="Fill" Value="{DynamicResource ScrimChat}" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SurfaceShowHome, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
-                                        <Setter Property="Fill" Value="{DynamicResource ScrimHome}" />
-                                    </DataTrigger>
-                                    <!-- bridge: lighter scrim so the custom background reads through the glass panes -->
-                                    <DataTrigger Binding="{Binding SurfaceShowBridge, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
-                                        <Setter Property="Fill" Value="{DynamicResource ScrimBridge}" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Rectangle.Style>
-                    </Rectangle>
-                </Grid>
-
                 <!-- ============ home ============ -->
                 <ScrollViewer x:Name="HomeSurface" Grid.Column="1" VerticalScrollBarVisibility="Auto"
                               Visibility="{Binding SurfaceShowHome, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolVis}}">
@@ -2384,7 +2615,7 @@
 
                         <TextBlock Text="What are we vibing on?" FontFamily="{StaticResource Display}" FontSize="28"
                                    FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,20,0,6" />
-                        <TextBlock Text="Choose Claude Code, OpenAI Codex, Kimi Code, or Grok, then work with its connected account and your project tools."
+                        <TextBlock Text="Choose Claude Code, OpenAI Codex, Kimi Code, Grok, or GLM, then work with its connected account and your project tools."
                                    Foreground="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center"
                                    Margin="0,0,0,28" />
 
@@ -2419,6 +2650,18 @@
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="G" FontSize="11" FontWeight="SemiBold" Margin="0,0,6,0" />
                                                 <TextBlock Text="Grok" />
+                                            </StackPanel>
+                                        </ToggleButton>
+                                        <!-- GLM. Tag is the provider id the rest of the app already speaks
+                                             (GlmPreset.ProviderId), so it travels the same OnProviderPick path as
+                                             the other four. Unlike them it is spoken in-process against Baseten
+                                             rather than through a CLI - which is what the hint under the folder
+                                             box explains. -->
+                                        <ToggleButton x:Name="GlmProviderToggle" Style="{StaticResource PillTab}"
+                                                      Tag="glm" Click="OnProviderPick" AutomationProperties.Name="Use GLM">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Z" FontSize="11" FontWeight="SemiBold" Margin="0,0,6,0" />
+                                                <TextBlock Text="GLM" />
                                             </StackPanel>
                                         </ToggleButton>
                                     </StackPanel>
@@ -2586,7 +2829,7 @@
                     </Grid.RowDefinitions>
 
                     <!-- header -->
-                    <Border Grid.Row="0" Background="{StaticResource Bg0}" BorderBrush="{StaticResource BorderSoft}"
+                    <Border Grid.Row="0" Background="{StaticResource SurfaceCanvas}" BorderBrush="{StaticResource SurfaceOutline}"
                             BorderThickness="0,0,0,1" Padding="20,9">
                         <DockPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
@@ -2668,6 +2911,41 @@
                                                   AutomationProperties.Name="Chat menu"
                                                   AutomationProperties.HelpText="Fork session" />
                                 </Grid>
+                                <!-- Task list, one click, with the count on the button. A Bridge pane has had this
+                                     since it shipped; an ordinary chat only had the todos buried behind the panel
+                                     below — which starts closed and opens on Artifacts — so nothing on screen ever
+                                     said a task list existed at all. Same badge idiom as the subagent count above. -->
+                                <Grid Width="30" Height="30" Margin="4,0,0,0"
+                                      Visibility="{Binding HasTodos, Converter={StaticResource BoolVis}}">
+                                    <ToggleButton x:Name="ChatTodosToggle" Style="{StaticResource IconToggle}"
+                                                  ToolTip="Task list" AutomationProperties.Name="Todos for this chat"
+                                                  AutomationProperties.HelpText="What this agent is working through">
+                                        <Grid Width="20" Height="18">
+                                            <TextBlock Text="&#xE73A;" FontFamily="{StaticResource Icons}" FontSize="13"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" />
+                                            <!-- Outstanding, not total: a finished list should go quiet rather than
+                                                 keep advertising "5". Matches the pane badge. -->
+                                            <Border MinWidth="12" Height="12" Padding="2,0" CornerRadius="{StaticResource Rad6}"
+                                                    Background="{StaticResource Accent}" BorderBrush="{StaticResource Bg1}"
+                                                    BorderThickness="1" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                    Margin="0,-3,-4,0"
+                                                    Visibility="{Binding TodoRemaining, Converter={StaticResource ShowIf}}">
+                                                <TextBlock Text="{Binding TodoRemaining}" FontFamily="{StaticResource Ui}"
+                                                           FontSize="7.5" FontWeight="Bold" Foreground="White"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                        </Grid>
+                                    </ToggleButton>
+                                    <Popup PlacementTarget="{Binding ElementName=ChatTodosToggle}" Placement="Bottom"
+                                           StaysOpen="False" AllowsTransparency="True" VerticalOffset="5"
+                                           IsOpen="{Binding IsChecked, ElementName=ChatTodosToggle, Mode=TwoWay}">
+                                        <Border Style="{StaticResource PopupCard}" MinWidth="280" MaxWidth="560" MaxHeight="360">
+                                            <ContentControl Content="{Binding}"
+                                                            ContentTemplate="{StaticResource TodoListBody}" />
+                                        </Border>
+                                    </Popup>
+                                </Grid>
                                 <ToggleButton x:Name="PanelToggle" Style="{StaticResource IconToggle}" Content="&#xE8A0;"
                                               ToolTip="Artifacts &amp; todos" AutomationProperties.Name="Artifacts and todos"
                                               IsChecked="False" Margin="4,0,0,0" />
@@ -2708,6 +2986,7 @@
                         <ListBox x:Name="MsgList"
                                  ItemsSource="{Binding Items}"
                                  ui:NavHost.IsEnabled="True"
+                                 ui:TranscriptSelection.IsEnabled="True"
                                  Background="Transparent" BorderThickness="0" Padding="0"
                                  HorizontalContentAlignment="Stretch"
                                  ScrollViewer.CanContentScroll="True"
@@ -2853,7 +3132,9 @@
                                 </StackPanel>
                             </Border>
 
-                            <Border Background="{StaticResource Bg2}" BorderThickness="1" CornerRadius="{StaticResource Rad16}"
+                            <!-- SurfaceComposer, not Bg2: borderless empties this bubble so a single chat shows as much
+                                 wallpaper as a Bridge pane's composer strip does. Outline (and its focus ring) stay. -->
+                            <Border Background="{StaticResource SurfaceComposer}" BorderThickness="1" CornerRadius="{StaticResource Rad16}"
                                     AllowDrop="True" PreviewDragOver="OnComposerDragOver" PreviewDrop="OnComposerDrop">
                                 <Border.Style>
                                     <Style TargetType="Border">
@@ -2920,6 +3201,7 @@
                                         <!-- dictate: push-to-talk mic (offline speech-to-text). Click to record, click again to insert. -->
                                         <Button x:Name="MicButton" Style="{StaticResource GhostButton}" DockPanel.Dock="Left"
                                                 Padding="7,5" Margin="0,0,2,0" Click="OnMicClick"
+                                                PreviewMouseLeftButtonDown="OnMicArm"
                                                 ToolTip="Dictate (speech to text)" AutomationProperties.Name="Dictate">
                                             <TextBlock Text="&#xE720;" FontFamily="{StaticResource Icons}" FontSize="13"
                                                        VerticalAlignment="Center" TextWrapping="NoWrap" />
@@ -3066,6 +3348,11 @@
                                            FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center"
                                            Margin="0,0,14,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                                            Visibility="{Binding HasTokens, Converter={StaticResource BoolVis}}" />
+                                <TextBlock Text="{Binding TokenRatesText}" Foreground="{StaticResource Muted}" FontSize="11"
+                                           FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center"
+                                           Margin="0,0,14,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding TokenRatesToolTip}"
+                                           Visibility="{Binding HasTokenRates, Converter={StaticResource BoolVis}}" />
                                 <ToggleButton x:Name="GrokAccountUsageToggle" DockPanel.Dock="Left"
                                               Padding="7,1" Margin="0,0,10,0"
                                               Checked="OnGrokUsageChecked" Unchecked="OnGrokUsageUnchecked"
@@ -3172,8 +3459,13 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <!-- bridge header -->
-                    <Border Grid.Row="0" Background="{StaticResource GlassBar}" BorderBrush="{StaticResource BorderSoft}"
+                    <!-- bridge header. Its DataContext is the MainViewModel in the primary window, and a
+                         BridgeSurfaceContext in the second working shell so that every roster figure in here (agent
+                         count, project path, Add agent, Fork, Announce, the provider pills) describes the bridge THAT
+                         window is showing rather than the other display's. Bindings below are deliberately written
+                         against the shared names so one DataContext swap covers all of them. -->
+                    <Border x:Name="BridgeHeaderBar"
+                            Grid.Row="0" Background="{StaticResource SurfaceBar}" BorderBrush="{StaticResource SurfaceOutline}"
                             BorderThickness="0,0,0,1" Padding="20,9">
                         <DockPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
@@ -3200,8 +3492,8 @@
                                                     AutomationProperties.Name="{Binding BridgeLabel, StringFormat=Restore {0}}">
                                                 <Button.Template>
                                                     <ControlTemplate TargetType="Button">
-                                                        <Border x:Name="chip" Background="{StaticResource Bg2}"
-                                                                BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                                        <Border x:Name="chip" Background="{StaticResource ChipFill}"
+                                                                BorderBrush="{StaticResource ChipOutline}" BorderThickness="1"
                                                                 CornerRadius="{StaticResource Rad99}" Padding="{TemplateBinding Padding}">
                                                             <StackPanel Orientation="Horizontal">
                                                                 <TextBlock Text="&#xE922;" FontFamily="{StaticResource Icons}" FontSize="10"
@@ -3243,7 +3535,7 @@
                                               Visibility="{Binding BridgeUsesClaude, Converter={StaticResource BoolVis}}">
                                     <ToggleButton.Template>
                                         <ControlTemplate TargetType="ToggleButton">
-                                            <Border x:Name="pill" Background="{StaticResource Bg2}" BorderBrush="{StaticResource BorderSoft}"
+                                            <Border x:Name="pill" Background="{StaticResource ChipFill}" BorderBrush="{StaticResource ChipOutline}"
                                                     BorderThickness="1" CornerRadius="{StaticResource Rad99}" Padding="7,2">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="Claude" FontSize="9" FontWeight="SemiBold"
@@ -3290,8 +3582,8 @@
                                     </ToggleButton.Style>
                                     <ToggleButton.Template>
                                         <ControlTemplate TargetType="ToggleButton">
-                                            <Border x:Name="codexPill" Background="{StaticResource Bg2}"
-                                                    BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                            <Border x:Name="codexPill" Background="{StaticResource ChipFill}"
+                                                    BorderBrush="{StaticResource ChipOutline}" BorderThickness="1"
                                                     CornerRadius="{StaticResource Rad99}" Padding="7,2">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="Codex" FontSize="9" FontWeight="SemiBold"
@@ -3349,8 +3641,8 @@
                                     </ToggleButton.Style>
                                     <ToggleButton.Template>
                                         <ControlTemplate TargetType="ToggleButton">
-                                            <Border x:Name="kimiPill" Background="{StaticResource Bg2}"
-                                                    BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                            <Border x:Name="kimiPill" Background="{StaticResource ChipFill}"
+                                                    BorderBrush="{StaticResource ChipOutline}" BorderThickness="1"
                                                     CornerRadius="{StaticResource Rad99}" Padding="7,2">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="Kimi" FontSize="9" FontWeight="SemiBold"
@@ -3394,8 +3686,8 @@
                                               AutomationProperties.Name="Grok Bridge usage">
                                     <ToggleButton.Template>
                                         <ControlTemplate TargetType="ToggleButton">
-                                            <Border x:Name="grokPill" Background="{StaticResource Bg2}"
-                                                    BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                            <Border x:Name="grokPill" Background="{StaticResource ChipFill}"
+                                                    BorderBrush="{StaticResource ChipOutline}" BorderThickness="1"
                                                     CornerRadius="{StaticResource Rad99}" Padding="7,2">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="Grok" FontSize="9" FontWeight="SemiBold"
@@ -3430,6 +3722,56 @@
                                     <TextBlock Text="&#xE789;" FontFamily="{StaticResource Icons}" FontSize="12"
                                                VerticalAlignment="Center" HorizontalAlignment="Center" />
                                 </ToggleButton>
+                                <!-- ⋮ bridge overflow. Fork used to be a bare header button that forked the WHOLE
+                                     roster and nothing else, which left no way in to a single agent and no
+                                     explanation when the roster was not forkable yet. Both forks are named here:
+                                     the whole roster from this menu, one agent from that agent's own ⋮. -->
+                                <Grid Margin="0,0,7,0" VerticalAlignment="Center">
+                                    <ToggleButton x:Name="BridgeMoreToggle" Style="{StaticResource GhostToggle}"
+                                                  Padding="7,5" MinWidth="30"
+                                                  Checked="OnBridgeMoreChecked" Unchecked="OnBridgeMoreUnchecked"
+                                                  ToolTip="More"
+                                                  AutomationProperties.Name="Bridge menu"
+                                                  AutomationProperties.HelpText="Fork this bridge">
+                                        <TextBlock Text="&#xE712;" FontFamily="{StaticResource Icons}" FontSize="12"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Center" />
+                                    </ToggleButton>
+                                    <Popup x:Name="BridgeMorePopup" PlacementTarget="{Binding ElementName=BridgeMoreToggle}"
+                                           Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="5"
+                                           Closed="OnBridgeMorePopupClosed">
+                                        <Border Style="{StaticResource PopupCard}" MinWidth="288" MaxWidth="360">
+                                            <StackPanel Margin="5">
+                                                <!-- Branch the WHOLE roster into a second bridge that starts with
+                                                     everything these agents know. The original keeps running. -->
+                                                <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
+                                                        HorizontalAlignment="Stretch" Padding="9,8" Click="OnMenuForkBridge"
+                                                        IsEnabled="{Binding CanForkBridge}"
+                                                        ToolTip="{Binding ForkBridgeToolTip}"
+                                                        AutomationProperties.Name="Fork bridge"
+                                                        AutomationProperties.HelpText="{Binding ForkBridgeToolTip}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE8C8;" FontFamily="{StaticResource Icons}" FontSize="13"
+                                                                   Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                                                                   Width="16" TextAlignment="Center" />
+                                                        <StackPanel Margin="11,0,0,0">
+                                                            <TextBlock Text="Fork whole bridge" FontSize="12.5"
+                                                                       Foreground="{StaticResource Text}" />
+                                                            <TextBlock Text="{Binding ForkBridgeToolTip}" FontSize="10.5"
+                                                                       Foreground="{StaticResource Faint}" TextWrapping="Wrap"
+                                                                       MaxWidth="270" />
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="6,4" />
+                                                <!-- Points at the per-agent fork rather than duplicating it: this menu
+                                                     has no idea which agent you meant, that agent's ⋮ does. -->
+                                                <TextBlock Text="To fork one agent on its own, open that agent's ⋮ menu and choose Fork this agent."
+                                                           FontSize="10.5" Foreground="{StaticResource Faint}"
+                                                           TextWrapping="Wrap" MaxWidth="270" Margin="10,2,10,6" />
+                                            </StackPanel>
+                                        </Border>
+                                    </Popup>
+                                </Grid>
                                 <!-- Stays enabled at the agent cap so a click can explain the limit (was silently
                                      disabled with no feedback). OnAddBridgeAgent opens the provider menu when room
                                      remains, otherwise a dialog that points at Settings → Bridge. -->
@@ -3511,8 +3853,31 @@
                                 <StackPanel Margin="9,0,0,0" VerticalAlignment="Center">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="Bridge" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
+                                        <!-- Demon Mode badge. The surface otherwise looks like any other Bridge, and the
+                                             one thing that is NOT like any other Bridge - fifteen panes you cannot type
+                                             into - deserves to be named where the roster is described. -->
+                                        <Border Margin="10,0,0,0" VerticalAlignment="Center" Padding="7,1.5"
+                                                CornerRadius="{StaticResource Rad99}" Background="{StaticResource RedSoft}"
+                                                ToolTip="Demon Mode — one orchestrator plans and dispatches; the workers are read-only"
+                                                Visibility="{Binding IsDemonSurface, Converter={StaticResource BoolVis}}">
+                                            <TextBlock Text="{Binding DemonSummary}" FontSize="10.5" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Red}" VerticalAlignment="Center"
+                                                       TextWrapping="NoWrap" />
+                                        </Border>
+                                        <!-- The Demon badge already says how many sessions there are and what they are,
+                                             so the ordinary roster line would only repeat it at twice the length. -->
                                         <TextBlock Text="{Binding BridgeSummary}" Foreground="{StaticResource Faint}" FontSize="11.5"
-                                                   Margin="10,1,0,0" VerticalAlignment="Center" />
+                                                   Margin="10,1,0,0" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsDemonSurface}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
                                     <TextBlock Foreground="{StaticResource Muted}" FontSize="10.5"
                                                FontFamily="{StaticResource Mono}" Margin="0,2,0,0" MaxWidth="620"
@@ -3538,15 +3903,36 @@
                     </Border>
                     <!-- panes -->
                     <ItemsControl x:Name="BridgePaneList" Grid.Row="1" ItemsSource="{Binding BridgePanes}" Margin="4">
-                        <ItemsControl.ItemsPanel>
-                            <!-- Explicit rows prevent UniformGrid's square auto-layout from reserving a 2x2 area for
-                                 only two agents. Columns remain automatic, so every visible pane spans the full height.
-                                 Rows are set from code (ScheduleBridgeGridRows), NOT bound: each window shows only the
-                                 agents on its own display, so the density is per-window and a shared VM binding would
-                                 be wrong for the split - and the code assignment would silently clobber it anyway. -->
-                            <ItemsPanelTemplate><UniformGrid /></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <!-- Collapse a pane's container when a PEER is expanded: UniformGrid ignores Collapsed children when
+                        <ItemsControl.Style>
+                            <Style TargetType="ItemsControl">
+                                <!-- Explicit rows prevent UniformGrid's square auto-layout from reserving a 2x2 area for
+                                     only two agents. Columns remain automatic, so every visible pane spans the full height.
+                                     Rows are set from code (ScheduleBridgeGridRows), NOT bound: each window shows only the
+                                     agents on its own display, so the density is per-window and a shared VM binding would
+                                     be wrong for the split - and the code assignment would silently clobber it anyway. -->
+                                <Setter Property="ItemsPanel">
+                                    <Setter.Value>
+                                        <ItemsPanelTemplate><UniformGrid /></ItemsPanelTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                                <Style.Triggers>
+                                    <!-- Demon Mode swaps in a wall that gives the orchestrator a 2x2 block in the
+                                         top-left and flows the workers around it. The panel is the ONLY difference:
+                                         same collection, same pane template, so a Demon pane cannot drift from an
+                                         ordinary one. Gated on IsDemonSurface, not IsDemonMode - a Demon team that has
+                                         been parked behind another chat's Bridge is still live, and its orchestrator
+                                         must not be drawn over a roster it has nothing to do with. -->
+                                    <DataTrigger Binding="{Binding IsDemonSurface}" Value="True">
+                                        <Setter Property="ItemsPanel">
+                                            <Setter.Value>
+                                                <ItemsPanelTemplate><ui:DemonWallPanel /></ItemsPanelTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ItemsControl.Style>
+                        <!-- Collapse a pane's container when a PEER is expanded: both panels ignore Collapsed children when
                              counting cells, so the one visible (focused) pane fills the whole area. Visibility must live on
                              the CONTAINER (ContentPresenter), not the inner Border, or the empty cell would still be reserved. -->
                         <ItemsControl.ItemContainerStyle>
@@ -3557,7 +3943,7 @@
                         </ItemsControl.ItemContainerStyle>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type ui:ChatViewModel}">
-                                <Border Margin="5" Background="{StaticResource GlassPane}" CornerRadius="{StaticResource Rad12}"
+                                <Border Margin="5" Background="{StaticResource SurfacePane}" CornerRadius="{StaticResource RadPane}"
                                         BorderThickness="1"
                                         PreviewMouseLeftButtonDown="OnBridgePanePointerDown"
                                         PreviewMouseWheel="OnBridgePaneMouseWheel">
@@ -3565,7 +3951,7 @@
                                          brush lives in <Border.Style>, not an attribute, so the trigger can win) -->
                                     <Border.Style>
                                         <Style TargetType="Border">
-                                            <Setter Property="BorderBrush" Value="{StaticResource BorderSoft}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource SurfaceOutline}" />
                                             <Style.Triggers>
                                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource PaneFocusBorder}" />
@@ -3580,8 +3966,12 @@
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
                                         <!-- pane header -->
-                                        <Border x:Name="PaneHeader" Grid.Row="0" Background="{StaticResource GlassBar}" CornerRadius="{StaticResource RadTop12}"
-                                                BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,0,0,1" Padding="12,7">
+                                        <!-- The horizontal padding is tighter than the rest of the app's bars on
+                                             purpose: a Demon worker's pane is a fifth of the surface wide, and at
+                                             12px a side the "Worker" chip was rendering as "Work" - clipped
+                                             mid-word by the four action buttons opposite it. -->
+                                        <Border x:Name="PaneHeader" Grid.Row="0" Background="{StaticResource SurfaceBar}" CornerRadius="{StaticResource RadPaneTop}"
+                                                BorderBrush="{StaticResource SurfaceOutline}" BorderThickness="0,0,0,1" Padding="10,7,8,7">
                                             <DockPanel LastChildFill="False">
                                                 <!-- Window controls (Close / Expand / Minimize) are all standalone header
                                                      buttons: Minimize used to hide in ⋮, which is not where anyone
@@ -3609,6 +3999,20 @@
                                                             </Style.Triggers>
                                                         </Style>
                                                     </Button.Style>
+                                                </Button>
+                                                <!-- A Demon worker has no composer, and the composer is where the Send/Stop
+                                                     button lives — so without this there is no way to stop a runaway
+                                                     worker short of closing it. Shown only while a locked pane is
+                                                     actually interruptible; OnBridgePaneSend interrupts first and
+                                                     SendBridgePane refuses locked panes, so it can only ever stop. -->
+                                                <Button DockPanel.Dock="Right" Style="{StaticResource BridgeActionButton}"
+                                                        Margin="0,0,2,0" ToolTip="Interrupt this worker" Click="OnBridgePaneSend"
+                                                        AutomationProperties.Name="Interrupt this worker"
+                                                        Visibility="{Binding ShowWorkerStop, Converter={StaticResource BoolVis}}">
+                                                    <!-- The same rounded square the composer's send button morphs into
+                                                         while a turn runs — the app's stop mark is a shape, not a glyph. -->
+                                                    <Rectangle Width="9" Height="9" RadiusX="2" RadiusY="2"
+                                                               Fill="{StaticResource Red}" />
                                                 </Button>
                                                 <!-- Hide this pane without closing it; a chip in the bridge header brings it back. -->
                                                 <Button DockPanel.Dock="Right" Style="{StaticResource BridgeActionButton}" Content="&#xE921;"
@@ -3669,11 +4073,15 @@
                                                            IsOpen="{Binding IsChecked, ElementName=PaneMoreToggle, Mode=TwoWay}">
                                                         <Border Style="{StaticResource PopupCard}" MinWidth="268" MaxWidth="340">
                                                             <StackPanel Margin="5">
-                                                                <!-- Crown / step-down manager -->
+                                                                <!-- Crown / step-down manager. Hidden on Demon Mode panes:
+                                                                     there the role is structural, and one click here
+                                                                     would leave fifteen read-only workers with nobody
+                                                                     able to dispatch to them. -->
                                                                 <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
                                                                         HorizontalAlignment="Stretch" Padding="9,8" Click="OnPaneMenuManager"
                                                                         AutomationProperties.Name="Toggle bridge manager"
                                                                         AutomationProperties.HelpText="{Binding ManagerToolTip}"
+                                                                        Visibility="{Binding CanToggleManagerRole, Converter={StaticResource BoolVis}}"
                                                                         ToolTip="{Binding ManagerToolTip}">
                                                                     <StackPanel Orientation="Horizontal">
                                                                         <Viewbox Width="14" Height="10" VerticalAlignment="Center" Margin="1,0,0,0">
@@ -3731,25 +4139,50 @@
                                                                         </StackPanel>
                                                                     </StackPanel>
                                                                 </Button>
-                                                                <!-- Fork into a standalone chat -->
+                                                                <!-- Fork THIS agent into a standalone chat. Always listed:
+                                                                     collapsing the row until a session id exists made a
+                                                                     fresh bridge look like it had no per-agent fork at all.
+                                                                     Disabled + ForkReason says why instead. -->
                                                                 <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
                                                                         HorizontalAlignment="Stretch" Padding="9,8" Click="OnPaneMenuFork"
-                                                                        Visibility="{Binding CanFork, Converter={StaticResource BoolVis}}"
+                                                                        IsEnabled="{Binding CanFork}" ToolTip="{Binding ForkReason}"
                                                                         AutomationProperties.Name="Fork this bridge conversation"
-                                                                        AutomationProperties.HelpText="Fork this conversation into a separate chat">
+                                                                        AutomationProperties.HelpText="{Binding ForkReason}">
                                                                     <StackPanel Orientation="Horizontal">
                                                                         <TextBlock Text="&#xE8C8;" FontFamily="{StaticResource Icons}" FontSize="13"
                                                                                    Foreground="{StaticResource Muted}" VerticalAlignment="Center"
                                                                                    Width="16" TextAlignment="Center" />
                                                                         <StackPanel Margin="11,0,0,0">
-                                                                            <TextBlock Text="Fork" FontSize="12.5" Foreground="{StaticResource Text}" />
-                                                                            <TextBlock Text="Copy this conversation into a separate chat" FontSize="10.5"
+                                                                            <TextBlock Text="Fork this agent" FontSize="12.5" Foreground="{StaticResource Text}" />
+                                                                            <TextBlock Text="{Binding ForkReason}" FontSize="10.5"
                                                                                        Foreground="{StaticResource Faint}" TextWrapping="Wrap"
                                                                                        MaxWidth="250" />
                                                                         </StackPanel>
                                                                     </StackPanel>
                                                                 </Button>
                                                                 <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="6,4" />
+                                                                <!-- Model / thinking / permission mode for this pane alone.
+                                                                     Only where the composer is gone (a Demon worker):
+                                                                     everywhere else those three pills are right there in
+                                                                     the composer, and a second way in would just be two
+                                                                     places to look. This is what keeps "change them one
+                                                                     by one afterwards" true for a locked worker. -->
+                                                                <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
+                                                                        HorizontalAlignment="Stretch" Padding="9,8" Click="OnPaneMenuSessionSetup"
+                                                                        Visibility="{Binding InputLocked, Converter={StaticResource BoolVis}}"
+                                                                        AutomationProperties.Name="Session setup for this worker"
+                                                                        AutomationProperties.HelpText="Model, thinking level and permission mode for this worker">
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <TextBlock Text="&#xE9D2;" FontFamily="{StaticResource Icons}" FontSize="13"
+                                                                                   Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                                                                                   Width="16" TextAlignment="Center" />
+                                                                        <StackPanel Margin="11,0,0,0">
+                                                                            <TextBlock Text="Session setup" FontSize="12.5" Foreground="{StaticResource Text}" />
+                                                                            <TextBlock Text="{Binding SessionSetupSummary}" FontSize="10.5"
+                                                                                       Foreground="{StaticResource Faint}" />
+                                                                        </StackPanel>
+                                                                    </StackPanel>
+                                                                </Button>
                                                                 <!-- Todos list for this pane -->
                                                                 <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
                                                                         HorizontalAlignment="Stretch" Padding="9,8" Click="OnPaneMenuTodos"
@@ -3799,54 +4232,14 @@
                                                     <!-- Feature panels opened from the ⋮ menu (after the menu dismisses). -->
                                                     <Popup x:Name="PaneTodosPopup" PlacementTarget="{Binding ElementName=PaneHeader}" Placement="Bottom"
                                                            StaysOpen="False" AllowsTransparency="True" VerticalOffset="4">
+                                                        <!-- Chrome stays here (the width tracks PaneHeader by
+                                                             ElementName, which only resolves inside this pane's
+                                                             namescope); the list itself is the shared template. -->
                                                         <Border Style="{StaticResource PopupCard}"
                                                                 Width="{Binding ActualWidth, ElementName=PaneHeader}"
                                                                 MinWidth="240" MaxWidth="560" MaxHeight="360">
-                                                            <DockPanel Margin="14,12">
-                                                                <StackPanel DockPanel.Dock="Top"
-                                                                            Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}}">
-                                                                    <DockPanel Margin="0,0,0,6">
-                                                                        <TextBlock DockPanel.Dock="Right" Foreground="{StaticResource Faint}" FontSize="11"
-                                                                                   FontFamily="{StaticResource Mono}">
-                                                                            <Run Text="{Binding TodoDone, Mode=OneWay}" /><Run Text=" of " /><Run Text="{Binding TodoTotal, Mode=OneWay}" /><Run Text=" done" />
-                                                                        </TextBlock>
-                                                                        <TextBlock Text="Task list" FontSize="12.5" FontWeight="SemiBold"
-                                                                                   Foreground="{StaticResource Muted}" />
-                                                                    </DockPanel>
-                                                                    <ProgressBar Style="{StaticResource SlimProgress}" Value="{Binding TodoDone, Mode=OneWay}"
-                                                                                 Maximum="{Binding TodoTotal, Mode=OneWay}" Margin="0,0,0,8" />
-                                                                </StackPanel>
-                                                                <TextBlock DockPanel.Dock="Top" Text="{Binding TodosEmptyText}"
-                                                                           Foreground="{StaticResource Muted}" TextWrapping="Wrap" FontSize="12.5" Margin="2,4"
-                                                                           Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}, ConverterParameter=invert}" />
-                                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                                                              Visibility="{Binding Todos.Count, Converter={StaticResource ShowIf}}">
-                                                                    <ItemsControl ItemsSource="{Binding Todos}">
-                                                                        <ItemsControl.ItemTemplate>
-                                                                            <DataTemplate>
-                                                                                <DockPanel Margin="0,4">
-                                                                                    <TextBlock DockPanel.Dock="Left" Text="{Binding Mark}" FontFamily="{StaticResource Icons}"
-                                                                                               FontSize="13" Foreground="{Binding Status, Converter={StaticResource TodoFg}}"
-                                                                                               Margin="0,1,10,0" VerticalAlignment="Top" TextWrapping="NoWrap" />
-                                                                                    <TextBlock Text="{Binding Text}" FontSize="12.5"
-                                                                                               Foreground="{Binding Status, Converter={StaticResource TodoFg}}">
-                                                                                        <TextBlock.Style>
-                                                                                            <Style TargetType="TextBlock">
-                                                                                                <Setter Property="TextWrapping" Value="Wrap" />
-                                                                                                <Style.Triggers>
-                                                                                                    <DataTrigger Binding="{Binding Done}" Value="True">
-                                                                                                        <Setter Property="TextDecorations" Value="Strikethrough" />
-                                                                                                    </DataTrigger>
-                                                                                                </Style.Triggers>
-                                                                                            </Style>
-                                                                                        </TextBlock.Style>
-                                                                                    </TextBlock>
-                                                                                </DockPanel>
-                                                                            </DataTemplate>
-                                                                        </ItemsControl.ItemTemplate>
-                                                                    </ItemsControl>
-                                                                </ScrollViewer>
-                                                            </DockPanel>
+                                                            <ContentControl Content="{Binding}"
+                                                                            ContentTemplate="{StaticResource TodoListBody}" />
                                                         </Border>
                                                     </Popup>
                                                     <Popup x:Name="PaneMessagesPopup" PlacementTarget="{Binding ElementName=PaneHeader}" Placement="Bottom"
@@ -3860,7 +4253,7 @@
                                                      <!-- the manager's little gold crown, floating just above the status dot -->
                                                      <Viewbox Width="14" Height="9.6" HorizontalAlignment="Center" VerticalAlignment="Top"
                                                               Margin="-3,-11,-3,0" ToolTip="Bridge manager"
-                                                              Visibility="{Binding IsBridgeManager, Converter={StaticResource BoolVis}}">
+                                                              Visibility="{Binding ShowManagerCrown, Converter={StaticResource BoolVis}}">
                                                          <Canvas Width="24" Height="16">
                                                              <!-- body + three spikes -->
                                                              <Path StrokeLineJoin="Round" Stroke="#8A6414" StrokeThickness="1"
@@ -3896,18 +4289,78 @@
                                                          </Canvas>
                                                      </Viewbox>
                                                  </Grid>
+                                                <!-- Demon Mode role chip. Colour alone is not an accessible signal, so the
+                                                     dot is backed by a literal "Orchestrator" / "Worker" label.
+                                                     BEFORE the pane's name on purpose: a DockPanel hands out width in
+                                                     child order, and on a Demon worker (a fifth of the surface wide,
+                                                     with four action buttons opposite) there is not enough for both.
+                                                     The chip is a fixed short word and the name is elastic, so the
+                                                     name is the one that can afford to trim - the other way round
+                                                     rendered "Worker" as "Work", differently per theme. -->
+                                                <Border Margin="7,0,0,0" VerticalAlignment="Center" Padding="5,1"
+                                                        CornerRadius="{StaticResource Rad99}"
+                                                        ToolTip="{Binding RoleToolTip}"
+                                                        Visibility="{Binding ShowRoleLabel, Converter={StaticResource BoolVis}}">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsDemonOrchestrator}" Value="True">
+                                                                    <Setter Property="Background" Value="{StaticResource RedSoft}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <TextBlock Text="{Binding RoleLabel}" FontSize="9.5" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center" TextWrapping="NoWrap">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsDemonOrchestrator}" Value="True">
+                                                                        <Setter Property="Foreground" Value="{StaticResource Red}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </Border>
                                                 <TextBlock Text="{Binding BridgeLabel}" FontWeight="SemiBold" FontSize="12.5"
-                                                           Margin="9,0,0,0" VerticalAlignment="Center"
+                                                           Margin="7,0,0,0" VerticalAlignment="Center"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                                <!-- What the supervisor currently thinks of this agent ("working · 2m",
+                                                     "nudged · 6m", "restarted", "completed"). Turns amber mid-escalation so
+                                                     a stalled agent cannot look identical to a busy one. -->
+                                                <TextBlock Text="{Binding SupervisionStatus}" FontSize="9.5"
+                                                           Margin="8,1,0,0" VerticalAlignment="Center"
+                                                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                                           Visibility="{Binding ShowSupervisionStatus, Converter={StaticResource BoolVis}}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource Faint}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding SupervisionAlert}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource Amber}" />
+                                                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                                 <TextBlock Text="{Binding WorkingText}" Foreground="{StaticResource Faint}" FontSize="9.5"
                                                            Margin="10,1,0,0" VerticalAlignment="Center"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                                                           Visibility="{Binding IsWorking, Converter={StaticResource BoolVis}}" />
+                                                           Visibility="{Binding ShowWorkingText, Converter={StaticResource BoolVis}}" />
                                                 <!-- Bridge panes: show Grok session tokens next to $ the same way as Claude/Codex/Kimi. -->
                                                 <TextBlock Text="{Binding TokensText}" Foreground="{StaticResource Faint}" FontSize="9.5"
                                                            FontFamily="{StaticResource Mono}" Margin="10,1,0,0" VerticalAlignment="Center"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                                                            Visibility="{Binding HasTokens, Converter={StaticResource BoolVis}}" />
+                                                <TextBlock Text="{Binding TokenRatesText}" Foreground="{StaticResource Faint}" FontSize="9.5"
+                                                           FontFamily="{StaticResource Mono}" Margin="10,1,0,0" VerticalAlignment="Center"
+                                                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding TokenRatesToolTip}"
+                                                           Visibility="{Binding HasTokenRates, Converter={StaticResource BoolVis}}" />
                                                 <TextBlock Text="{Binding CostText}" Foreground="{StaticResource Faint}" FontSize="11"
                                                            FontFamily="{StaticResource Mono}" Margin="10,1,0,0" VerticalAlignment="Center"
                                                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
@@ -3920,6 +4373,7 @@
                                                      HorizontalContentAlignment="Stretch"
                                                      ItemsSource="{Binding Items}"
                                                      ui:NavHost.IsEnabled="True"
+                                                     ui:TranscriptSelection.IsEnabled="True"
                                                      ScrollViewer.CanContentScroll="True"
                                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -3985,9 +4439,14 @@
                                             </StackPanel>
                                         </Grid>
                                         <!-- "Your messages" lives in the pane ⋮ menu (not floating over the transcript). -->
-                                        <!-- composer -->
-                                        <Border Grid.Row="2" Background="{StaticResource GlassBar}" CornerRadius="{StaticResource RadBottom12}"
-                                                BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,1,0,0" Padding="8"
+                                        <!-- composer. A Demon Mode worker has none at all: the user cannot type into it,
+                                             so a disabled input, a dead send button and a row of pickers were ~70px of
+                                             the ~170px pane spent saying "you can't use this". Collapsing the row hands
+                                             that space to the transcript, which is the only thing worth watching in a
+                                             worker. Row 2 is Auto, so the transcript's * row simply absorbs it. -->
+                                        <Border Grid.Row="2" Background="{StaticResource SurfaceBar}" CornerRadius="{StaticResource RadPaneBottom}"
+                                                BorderBrush="{StaticResource SurfaceOutline}" BorderThickness="0,1,0,0" Padding="8"
+                                                Visibility="{Binding CanType, Converter={StaticResource BoolVis}}"
                                                 AllowDrop="True" PreviewDragOver="OnBridgeComposerDragOver" PreviewDrop="OnBridgeComposerDrop">
                                             <DockPanel>
                                                 <!-- per-pane controls: same permission mode / model / effort a normal chat has -->
@@ -4155,6 +4614,31 @@
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>
                                                                 </ItemsControl>
+
+                                                                <!-- Fast mode, same row the main composer's effort popup carries. Without it fast
+                                                                     mode was simply unreachable in Bridge: panes have no shared composer to host it.
+                                                                     Clicking it on a non-fast model switches to Opus 5, same as the composer popup. -->
+                                                                <StackPanel Visibility="{Binding ShowFastMode, Converter={StaticResource BoolVis}}">
+                                                                    <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="6,4,6,3" />
+                                                                    <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch"
+                                                                            HorizontalAlignment="Stretch" Padding="9,6" Click="OnPaneFastModePick"
+                                                                            AutomationProperties.Name="Pane fast mode" IsEnabled="{Binding CanToggleFastMode}">
+                                                                        <DockPanel>
+                                                                            <TextBlock DockPanel.Dock="Right" Text="&#xE73E;" FontFamily="{StaticResource Icons}"
+                                                                                       FontSize="11" Foreground="{StaticResource Amber}" VerticalAlignment="Center"
+                                                                                       Margin="10,0,0,0"
+                                                                                       Visibility="{Binding FastMode, Converter={StaticResource BoolVis}}" />
+                                                                            <TextBlock DockPanel.Dock="Left" Text="&#xE945;" FontFamily="{StaticResource Icons}"
+                                                                                       FontSize="12" Width="18" Foreground="{StaticResource Amber}"
+                                                                                       VerticalAlignment="Center" Margin="0,0,11,0" TextWrapping="NoWrap" />
+                                                                            <StackPanel>
+                                                                                <TextBlock Text="Fast mode" FontSize="12" Foreground="{StaticResource Text}" />
+                                                                                <TextBlock Text="{Binding FastModeHint}" FontSize="10.5"
+                                                                                           Foreground="{StaticResource Faint}" TextWrapping="Wrap" />
+                                                                            </StackPanel>
+                                                                        </DockPanel>
+                                                                    </Button>
+                                                                </StackPanel>
                                                             </StackPanel>
                                                         </Border>
                                                     </Popup>
@@ -4257,26 +4741,40 @@
                                                 </ItemsControl>
                                                 <!-- input row -->
                                                 <DockPanel>
+                                                    <!-- A Demon Mode worker is read-only: send / attach / dictate all
+                                                         disappear rather than sitting there looking clickable. The
+                                                         handlers behind them are gated too - hiding a control is a
+                                                         hint, not an access rule. -->
                                                     <Button DockPanel.Dock="Right" Style="{StaticResource SendButton}" Click="OnBridgePaneSend"
-                                                            VerticalAlignment="Bottom" Margin="6,0,0,0" />
+                                                            VerticalAlignment="Bottom" Margin="6,0,0,0"
+                                                            Visibility="{Binding CanType, Converter={StaticResource BoolVis}}" />
                                                     <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Click="OnBridgeAttachClick"
                                                             VerticalAlignment="Bottom" Padding="6,5" Margin="0,0,4,0"
+                                                            Visibility="{Binding CanType, Converter={StaticResource BoolVis}}"
                                                             ToolTip="Attach image or file (or paste / drag-drop)" AutomationProperties.Name="Attach file">
                                                         <TextBlock Text="&#xE723;" FontFamily="{StaticResource Icons}" FontSize="13"
                                                                    VerticalAlignment="Center" TextWrapping="NoWrap" />
                                                     </Button>
                                                     <!-- dictate into this pane (offline speech-to-text) -->
                                                     <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Click="OnBridgeMicClick"
+                                                            PreviewMouseLeftButtonDown="OnMicArm"
                                                             VerticalAlignment="Bottom" Padding="6,5" Margin="0,0,4,0"
+                                                            Visibility="{Binding CanType, Converter={StaticResource BoolVis}}"
                                                             ToolTip="Dictate (speech to text)" AutomationProperties.Name="Dictate">
                                                         <TextBlock Text="&#xE720;" FontFamily="{StaticResource Icons}" FontSize="13"
                                                                    VerticalAlignment="Center" TextWrapping="NoWrap" />
                                                     </Button>
+                                                    <TextBlock DockPanel.Dock="Left" Text="&#xE72E;" FontFamily="{StaticResource Icons}"
+                                                               FontSize="12" Foreground="{StaticResource Faint}"
+                                                               VerticalAlignment="Center" Margin="4,0,2,0" TextWrapping="NoWrap"
+                                                               ToolTip="{Binding RoleToolTip}"
+                                                               Visibility="{Binding InputLocked, Converter={StaticResource BoolVis}}" />
                                                     <Grid>
                                                         <TextBox x:Name="PaneInput" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" Style="{x:Null}"
                                                                  Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}"
                                                                  CaretBrush="{StaticResource Accent}" FontSize="13" Padding="8,7" AcceptsReturn="True"
                                                                  TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto"
+                                                                 IsReadOnly="{Binding InputLocked}"
                                                                  PreviewKeyDown="OnBridgeInputKeyDown" DataObject.Pasting="OnComposerPasting"
                                                                  AutomationProperties.Name="Bridge message input" />
                                                         <!-- ElementName resolves per-pane inside this DataTemplate's namescope -->
@@ -4301,7 +4799,7 @@
                 </Grid>
 
                 <!-- ============ right panel ============ -->
-                <Border x:Name="RightPanelSurface" Grid.Column="2" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                <Border x:Name="RightPanelSurface" Grid.Column="2" Background="{StaticResource SurfaceChrome}" BorderBrush="{StaticResource SurfaceOutline}"
                         BorderThickness="1,0,0,0"
                         DataContext="{Binding SurfacePanelChat, RelativeSource={RelativeSource AncestorType=Window}}">
                     <Border.Style>
@@ -4467,30 +4965,8 @@
                                            Margin="24,14,24,0" />
                             </StackPanel>
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{Binding Todos}" Margin="4,0">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <DockPanel Margin="0,4">
-                                                <TextBlock DockPanel.Dock="Left" Text="{Binding Mark}" FontFamily="{StaticResource Icons}"
-                                                           FontSize="13" Foreground="{Binding Status, Converter={StaticResource TodoFg}}"
-                                                           Margin="0,1,10,0" VerticalAlignment="Top" TextWrapping="NoWrap" />
-                                                <TextBlock Text="{Binding Text}" FontSize="12.5"
-                                                           Foreground="{Binding Status, Converter={StaticResource TodoFg}}">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="TextWrapping" Value="Wrap" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding Done}" Value="True">
-                                                                    <Setter Property="TextDecorations" Value="Strikethrough" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                            </DockPanel>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                <ItemsControl ItemsSource="{Binding Todos}" ItemTemplate="{StaticResource TodoRow}"
+                                              Margin="4,0" />
                             </ScrollViewer>
                         </DockPanel>
                         </Grid>
@@ -4691,11 +5167,13 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
-                        <!-- Fast mode: faster output on models that support it (Claude Code's fastMode setting) -->
-                        <StackPanel Visibility="{Binding CanFastMode, Converter={StaticResource BoolVis}}">
+                        <!-- Per-chat Fast mode: Claude process flags or Codex's next-turn service tier.
+                             Model availability and any provider-specific switching come from the view model. -->
+                        <StackPanel Visibility="{Binding ShowFastMode, Converter={StaticResource BoolVis}}">
                             <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="6,4,6,3" />
                             <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch"
-                                    Padding="9,7" Click="OnFastModePick" AutomationProperties.Name="Fast mode">
+                                    Padding="9,7" Click="OnFastModePick" AutomationProperties.Name="Fast mode"
+                                    IsEnabled="{Binding CanToggleFastMode}">
                                 <DockPanel>
                                     <TextBlock DockPanel.Dock="Right" Text="&#xE73E;" FontFamily="{StaticResource Icons}" FontSize="11"
                                                Foreground="{StaticResource Amber}" VerticalAlignment="Center" Margin="10,0,0,0"
@@ -4704,7 +5182,8 @@
                                                Foreground="{StaticResource Amber}" VerticalAlignment="Center" Margin="0,0,11,0" TextWrapping="NoWrap" />
                                     <StackPanel>
                                         <TextBlock Text="Fast mode" FontSize="12.5" Foreground="{StaticResource Text}" />
-                                        <TextBlock Text="Faster output · applies to new chats" FontSize="11" Foreground="{StaticResource Faint}" />
+                                        <TextBlock Text="{Binding FastModeHint}" FontSize="11" Foreground="{StaticResource Faint}"
+                                                   TextWrapping="Wrap" />
                                     </StackPanel>
                                 </DockPanel>
                             </Button>
@@ -5391,6 +5870,7 @@
                                         <ComboBoxItem Tag="codex" Content="OpenAI Codex" />
                                         <ComboBoxItem Tag="kimi" Content="Kimi Code" />
                                         <ComboBoxItem Tag="grok" Content="Grok" />
+                                        <ComboBoxItem Tag="glm" Content="GLM" />
                                     </ComboBox>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
@@ -5414,6 +5894,7 @@
                                               Height="38" SelectedIndex="0"
                                               SelectionChanged="OnAccountSortChanged"
                                               AutomationProperties.Name="Account sort order">
+                                        <ComboBoxItem Tag="provider" Content="Provider · grouped" />
                                         <ComboBoxItem Tag="active" Content="Active first" />
                                         <ComboBoxItem Tag="usage-low" Content="Usage · most available" />
                                         <ComboBoxItem Tag="usage-high" Content="Usage · most used" />
@@ -5699,7 +6180,7 @@
                                                                Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
                                                                TextWrapping="NoWrap"
                                                                Visibility="{Binding KimiAccountUsage, Converter={StaticResource ShowIf}}"
-                                                               ToolTip="Kimi Code does not expose account usage to VibeCode." />
+                                                               ToolTip="Live quota read through the Kimi Code CLI's saved login; it refreshes while Kimi agents run." />
                                                 </StackPanel>
                                             </DockPanel>
                                         </Button>
@@ -5802,6 +6283,84 @@
                                                 <TextBlock Text="Paste Grok cookies" />
                                             </Button>
                                         </WrapPanel>
+                                    </Grid>
+
+                                    <!-- GLM. The only provider here with no sign-in of any kind: it is not a CLI
+                                         with an OAuth flow, it is an endpoint that takes a key. So this panel is a
+                                         key list, and several keys is a normal setup rather than an edge one - a
+                                         rate-limited key is fallen through to the next one mid-turn. -->
+                                    <Grid x:Name="GlmAccountsPanel" Visibility="Collapsed">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        <DockPanel Grid.Row="0" Margin="8,4,8,10">
+                                            <TextBlock x:Name="GlmKeyCountText" DockPanel.Dock="Right"
+                                                       Foreground="{StaticResource Faint}" FontSize="10.5"
+                                                       VerticalAlignment="Bottom" />
+                                            <StackPanel>
+                                                <TextBlock Text="GLM keys" Foreground="{StaticResource Text}"
+                                                           FontSize="14" FontWeight="SemiBold" />
+                                                <TextBlock Text="zai-org/GLM-5.3-Flash via Baseten · 1M context. Save more than one key — when one is rate limited VibeCode moves to the next automatically."
+                                                           Foreground="{StaticResource Faint}" FontSize="11"
+                                                           TextWrapping="Wrap" Margin="0,3,0,0" />
+                                            </StackPanel>
+                                        </DockPanel>
+
+                                        <TextBlock x:Name="GlmEmptyText" Grid.Row="1" Panel.ZIndex="2"
+                                                   Text="No GLM keys saved yet. Use &quot;Add API key&quot; below — create one at app.baseten.co under API keys."
+                                                   Foreground="{StaticResource Faint}" FontSize="11.5"
+                                                   TextWrapping="Wrap" Margin="20" HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center" Visibility="Collapsed" />
+
+                                        <ListBox x:Name="GlmKeyList" Grid.Row="1"
+                                                 ItemContainerStyle="{StaticResource AccountManagerListItem}"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type svc:ApiKeyAccount}">
+                                                    <Button Style="{StaticResource GhostButton}"
+                                                            HorizontalContentAlignment="Stretch"
+                                                            HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1"
+                                                            Click="OnSelectGlmKey" Tag="{Binding Id}"
+                                                            ToolTip="Click to make this the key GLM chats use first"
+                                                            AutomationProperties.Name="{Binding Title}">
+                                                        <DockPanel>
+                                                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                                                                    Content="Remove" Foreground="{StaticResource Red}"
+                                                                    FontSize="10.5" Padding="8,4" Margin="10,0,0,0"
+                                                                    Click="OnRemoveGlmKey" Tag="{Binding Id}"
+                                                                    VerticalAlignment="Center"
+                                                                    AutomationProperties.Name="Remove this GLM key" />
+                                                            <TextBlock DockPanel.Dock="Right" Text="&#xE73E;"
+                                                                       FontFamily="{StaticResource Icons}" FontSize="13"
+                                                                       Foreground="{StaticResource Green}"
+                                                                       VerticalAlignment="Center" Margin="12,0,2,0"
+                                                                       ToolTip="Tried first"
+                                                                       Visibility="{Binding IsPreferred, Converter={StaticResource BoolVis}}" />
+                                                            <Border DockPanel.Dock="Left" Width="26" Height="26"
+                                                                    CornerRadius="13" Background="{StaticResource AccentSoft}"
+                                                                    Margin="0,0,10,0">
+                                                                <TextBlock Text="Z" FontSize="10" FontWeight="SemiBold"
+                                                                           Foreground="{StaticResource Accent}"
+                                                                           HorizontalAlignment="Center"
+                                                                           VerticalAlignment="Center" />
+                                                            </Border>
+                                                            <StackPanel VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Title}" FontSize="12.5"
+                                                                           Foreground="{StaticResource Text}"
+                                                                           FontWeight="SemiBold"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Text="{Binding Subtitle}" FontSize="10"
+                                                                           FontFamily="{StaticResource Mono}"
+                                                                           Foreground="{StaticResource Faint}"
+                                                                           Margin="0,2,0,0"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                            </StackPanel>
+                                                        </DockPanel>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
                                     </Grid>
                                 </Grid>
                             </Grid>

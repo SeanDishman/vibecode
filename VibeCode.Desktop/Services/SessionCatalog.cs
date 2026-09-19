@@ -3,8 +3,12 @@ using System.Text.Json.Nodes;
 
 namespace VibeCode.Services;
 
+/// <param name="AccountId">Which saved login's home holds this transcript - <c>""</c> for the shared <c>~/.claude</c>,
+/// null for a provider that isn't Claude. Resuming has to spawn against the SAME home the transcript lives in: the CLI
+/// looks a session up under its own CLAUDE_CONFIG_DIR only, so opening an old account's chat under the currently
+/// selected account made Claude Code answer "No conversation found with session ID" - the chat read as gone.</param>
 public sealed record SessionEntry(string SessionId, string Title, string Cwd, DateTime LastModified, string? GitBranch,
-    string Provider = "claude")
+    string Provider = "claude", string? AccountId = null)
 {
     public string ProviderBadge => Provider switch { "kimi" => "Kimi", "grok" => "Grok", _ => "" };
 }
@@ -26,24 +30,85 @@ public static class SessionCatalog
         Environment.GetEnvironmentVariable("GROK_HOME")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".grok");
 
+    /// <summary>
+    /// Every Claude home whose transcripts belong to this user: the shared <c>~/.claude</c> plus each saved
+    /// account's private home.
+    ///
+    /// Chats started under a saved account run with <c>CLAUDE_CONFIG_DIR</c> pointed at
+    /// <c>~/.claude/vibecode-accounts/&lt;id&gt;/claude-home</c>, so their transcripts have never been anywhere near
+    /// <c>~/.claude/projects</c>. Reading only the shared home meant the project browser - the one surface that can
+    /// find a conversation the sidebar no longer shows - was blind to most of them.
+    /// </summary>
+    public static IEnumerable<string> ClaudeHomes() => ClaudeHomesWithAccounts().Select(h => h.Path);
+
+    /// <summary>Every Claude home paired with the account that owns it (<c>""</c> = the shared <c>~/.claude</c>).
+    /// The pairing is what makes a listed session resumable: see <see cref="SessionEntry.AccountId"/>.</summary>
+    public static IEnumerable<(string Path, string AccountId)> ClaudeHomesWithAccounts()
+    {
+        // Resolve the account store exactly the way AccountService does - off the USER PROFILE, not off ClaudeDir.
+        // CLAUDE_CONFIG_DIR can point at one specific account's home (that is precisely how VibeCode launches a
+        // per-account chat), and hanging the store off it made the whole per-account sweep silently find nothing.
+        var store = Environment.GetEnvironmentVariable("VIBECODE_CLAUDE_ACCOUNT_STORE") is { Length: > 0 } configured
+            ? Path.GetFullPath(configured.Trim('"'))
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "vibecode-accounts");
+        // ...which also means ClaudeDir itself may BE an account home. Tagging that as shared would resume its
+        // sessions with no CLAUDE_CONFIG_DIR at all, i.e. against a home that doesn't hold them.
+        yield return (ClaudeDir, AccountIdForHome(ClaudeDir, store));
+        string[] accounts;
+        try { accounts = Directory.Exists(store) ? Directory.GetDirectories(store) : []; }
+        catch { yield break; }
+        foreach (var account in accounts)
+        {
+            var home = Path.Combine(account, "claude-home");
+            // A removed account keeps its history (see AccountService.ForgetLoginOnly), so this deliberately does
+            // not require the profile to still be usable - unreachable history is the thing being fixed.
+            if (Directory.Exists(home)) yield return (home, Path.GetFileName(account));
+        }
+    }
+
+    /// <summary>The account id owning <paramref name="home"/> when it sits at <c>&lt;store&gt;\&lt;id&gt;\claude-home</c>,
+    /// else <c>""</c> for the shared home.</summary>
+    private static string AccountIdForHome(string home, string store)
+    {
+        try
+        {
+            var parent = Directory.GetParent(Path.GetFullPath(home));
+            if (parent?.Parent is null) return "";
+            return string.Equals(parent.Parent.FullName.TrimEnd('\\', '/'), store.TrimEnd('\\', '/'),
+                StringComparison.OrdinalIgnoreCase) ? parent.Name : "";
+        }
+        catch { return ""; }
+    }
+
     public static List<ProjectEntry> ListProjects(int maxSessionsPerProject = 40)
     {
         var titles = LoadHistoryTitles();
         var byCwd = new Dictionary<string, List<SessionEntry>>(StringComparer.OrdinalIgnoreCase);
-        var projectsDir = Path.Combine(ClaudeDir, "projects");
-        if (Directory.Exists(projectsDir))
-        foreach (var dir in Directory.EnumerateDirectories(projectsDir))
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // one row per session id across homes
+        foreach (var (home, accountId) in ClaudeHomesWithAccounts())
         {
-            foreach (var file in Directory.EnumerateFiles(dir, "*.jsonl"))
+            var projectsDir = Path.Combine(home, "projects");
+            if (!Directory.Exists(projectsDir)) continue;
+            IEnumerable<string> dirs;
+            try { dirs = Directory.GetDirectories(projectsDir); }
+            catch { continue; }
+            foreach (var dir in dirs)
             {
-                try
+                IEnumerable<string> files;
+                try { files = Directory.GetFiles(dir, "*.jsonl"); }
+                catch { continue; }
+                foreach (var file in files)
                 {
-                    var entry = ReadSessionHead(file, titles);
-                    if (entry is null) continue;
-                    if (!byCwd.TryGetValue(entry.Cwd, out var list)) byCwd[entry.Cwd] = list = new();
-                    list.Add(entry);
+                    try
+                    {
+                        if (!seen.Add(Path.GetFileNameWithoutExtension(file))) continue;
+                        var entry = ReadSessionHead(file, titles, accountId);
+                        if (entry is null) continue;
+                        if (!byCwd.TryGetValue(entry.Cwd, out var list)) byCwd[entry.Cwd] = list = new();
+                        list.Add(entry);
+                    }
+                    catch { /* unreadable transcript */ }
                 }
-                catch { /* unreadable transcript */ }
             }
         }
 
@@ -156,29 +221,32 @@ public static class SessionCatalog
     private static Dictionary<string, string> LoadHistoryTitles()
     {
         var map = new Dictionary<string, string>();
-        var path = Path.Combine(ClaudeDir, "history.jsonl");
-        if (!File.Exists(path)) return map;
-        try
+        foreach (var home in ClaudeHomes())
         {
-            foreach (var line in File.ReadLines(path))
+            var path = Path.Combine(home, "history.jsonl");
+            if (!File.Exists(path)) continue;
+            try
             {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
+                foreach (var line in File.ReadLines(path))
                 {
-                    var n = JsonNode.Parse(line);
-                    var id = n?["sessionId"]?.GetValue<string>();
-                    var display = n?["display"]?.GetValue<string>();
-                    if (id is not null && display is not null && !map.ContainsKey(id))
-                        map[id] = display;
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    try
+                    {
+                        var n = JsonNode.Parse(line);
+                        var id = n?["sessionId"]?.GetValue<string>();
+                        var display = n?["display"]?.GetValue<string>();
+                        if (id is not null && display is not null && !map.ContainsKey(id))
+                            map[id] = display;
+                    }
+                    catch { /* skip bad line */ }
                 }
-                catch { /* skip bad line */ }
             }
+            catch { /* locked file */ }
         }
-        catch { /* locked file */ }
         return map;
     }
 
-    private static SessionEntry? ReadSessionHead(string file, Dictionary<string, string> titles)
+    private static SessionEntry? ReadSessionHead(string file, Dictionary<string, string> titles, string accountId)
     {
         var sessionId = Path.GetFileNameWithoutExtension(file);
         string? cwd = null, title = null, branch = null;
@@ -205,18 +273,30 @@ public static class SessionCatalog
         // \r breaks a TextBlock line just like \n does, so flatten both or the session row renders double height.
         var finalTitle = (histTitle ?? title ?? sessionId[..8]).Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
         if (finalTitle.Length > 80) finalTitle = finalTitle[..80] + "…";
-        return new SessionEntry(sessionId, finalTitle, cwd, File.GetLastWriteTime(file), branch);
+        return new SessionEntry(sessionId, finalTitle, cwd, File.GetLastWriteTime(file), branch, "claude", accountId);
     }
 
     /// <summary>Best-effort transcript replay for resumed sessions (main thread only).</summary>
     public static List<TranscriptMessage> LoadTranscript(string cwd, string sessionId, int maxMessages = 400)
     {
         var result = new List<TranscriptMessage>();
-        var projectsDir = Path.Combine(ClaudeDir, "projects");
-        if (!Directory.Exists(projectsDir)) return result;
-        string? file = Directory.EnumerateDirectories(projectsDir)
-            .Select(d => Path.Combine(d, sessionId + ".jsonl"))
-            .FirstOrDefault(File.Exists);
+        // Search every Claude home, not just the shared one: a chat that ran under a saved account wrote its
+        // transcript into that account's private home, and replaying it from the wrong root silently produced an
+        // empty conversation - a chat that opens blank looks exactly like a chat that was deleted.
+        string? file = null;
+        foreach (var home in ClaudeHomes())
+        {
+            var projectsDir = Path.Combine(home, "projects");
+            if (!Directory.Exists(projectsDir)) continue;
+            try
+            {
+                file = Directory.GetDirectories(projectsDir)
+                    .Select(d => Path.Combine(d, sessionId + ".jsonl"))
+                    .FirstOrDefault(File.Exists);
+            }
+            catch { continue; }
+            if (file is not null) break;
+        }
         if (file is null) return result;
 
         foreach (var line in File.ReadLines(file))

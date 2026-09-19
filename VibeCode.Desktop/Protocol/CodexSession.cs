@@ -17,6 +17,7 @@ public sealed class CodexSessionOptions
     public bool ForkSession { get; init; }
     public string? Model { get; init; }
     public string? Effort { get; init; }
+    public bool FastMode { get; init; }
     public string? Title { get; init; }
     public string PermissionMode { get; init; } = "default";
     public string? AppendSystemPrompt { get; init; }
@@ -37,10 +38,10 @@ public sealed class CodexSessionOptions
 /// by ChatViewModel. Keeping the translation at the protocol edge lets every existing
 /// message, tool, diff, permission, queue, interrupt, and artifact view work for both CLIs.
 /// </summary>
-public sealed class CodexSession : ICodingSession
+public sealed partial class CodexSession : ICodingSession
 {
     private static readonly HashSet<string> IgnoredArtifactDirectories = new(StringComparer.OrdinalIgnoreCase)
-        { ".git", ".idea", ".vs", ".agents", ".codex", "bin", "obj", "node_modules" };
+        { ".git", ".idea", ".vs", ".agents", ".codex", ".vibecode", "bin", "obj", "node_modules" };
 
     public event Action<JsonNode>? MessageReceived;
     public event Action<PermissionRequest>? PermissionRequested;
@@ -56,6 +57,31 @@ public sealed class CodexSession : ICodingSession
     public bool HasExited => _disposed || _proc is null || _proc.HasExited;
 
     private readonly CodexSessionOptions _options;
+    private readonly SemaphoreSlim _reportingReloadGate = new(1, 1);
+    private int _reportingVersion, _loadedReportingVersion;
+
+    private void OnReportingChanged()
+    {
+        Interlocked.Increment(ref _reportingVersion);
+        if (SessionId is not null && !_disposed) _ = RefreshReportingAsync();
+    }
+
+    private async Task RefreshReportingAsync()
+    {
+        await _reportingReloadGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var version = Volatile.Read(ref _reportingVersion);
+            if (_disposed || SessionId is null || version == _loadedReportingVersion) return;
+            AgentStatusReporting.RegisterHome(_options.HomeDirectory ?? CodexEnvironment.HomeDirectory);
+            // Codex queues this until its next turn; never restart a running conversation to change reporting.
+            await RequestAsync("config/mcpServer/reload", new JsonObject()).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            _loadedReportingVersion = version;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or OperationCanceledException)
+        { CrashLog.Note("AgentStatusReportingReload", ex.GetType().Name); }
+        finally { _reportingReloadGate.Release(); }
+    }
     private Process? _proc;
     private StreamWriter? _stdin;
     // Stdin writes go through a single-consumer queue drained by a background task. Writing the pipe directly on
@@ -93,6 +119,7 @@ public sealed class CodexSession : ICodingSession
     private JsonObject? _pendingRootCompletion;
     private string? _model;
     private string? _effort;
+    private bool _fastMode;
     private string _permissionMode;
     private string? _lastError;
     private JsonObject? _lastUsage;
@@ -159,10 +186,14 @@ public sealed class CodexSession : ICodingSession
     public CodexSession(CodexSessionOptions options)
     {
         _options = options;
-        _model = options.Model;
+        // A saved chat can outlive a model generation. Retired ids are deliberately collapsed to the live
+        // catalog's recommended model before any thread/start or thread/resume request reaches app-server.
+        _model = NormalizeModelSelection(options.Model);
         _effort = options.Effort;
+        _fastMode = options.FastMode;
         _permissionMode = options.PermissionMode;
-        _effectiveAppendPrompt = JoinPrompts(options.AppendSystemPrompt);
+        _effectiveAppendPrompt = JoinPrompts(
+            options.AppendSystemPrompt);
         _appendPromptPending = !string.IsNullOrWhiteSpace(_effectiveAppendPrompt);
     }
 
@@ -172,7 +203,6 @@ public sealed class CodexSession : ICodingSession
         return parts.Length == 0 ? null : string.Join("\n\n", parts);
     }
 
-    /// <summary>VibeCode exposes app-server's real model ids directly, so no alias mapping is needed.</summary>
     private string? ApiModel(string? model) => model;
 
     public static string ResolveCliPath()
@@ -218,8 +248,11 @@ public sealed class CodexSession : ICodingSession
 
     public void Start()
     {
+        AgentStatusReporting.Changed += OnReportingChanged;
         var psi = CodexEnvironment.CreateAppServerStartInfo(_options.Cwd, _options.HomeDirectory,
             _options.SwarmsEnabled, _options.SwarmMaxWorkers, _options.McpServers);
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("features.fast_mode=true");
         var integrity = CodexEnvironment.VerifyRuntimeIntegrity(psi.FileName);
         _runtimeIntegrityVerified = integrity.Trusted;
         _runtimeIntegrityReason = integrity.Reason;
@@ -266,10 +299,12 @@ public sealed class CodexSession : ICodingSession
             if (accountResult?["requiresOpenaiAuth"]?.GetValue<bool>() == true && accountResult["account"] is null)
                 throw new InvalidOperationException("VibeCode is not signed in to OpenAI. Open the account menu, choose Add account, then OpenAI for VibeCode.");
 
+            // Request the full catalog so known models retain the runtime's reasoning and speed metadata.
+            // BuildModels filters hidden rows against the normal model definitions.
             var modelResponse = await RequestAsync("model/list", new JsonObject
             {
                 ["limit"] = 100,
-                ["includeHidden"] = false,
+                ["includeHidden"] = true,
             });
             BuildModels(modelResponse?["result"]?["data"] as JsonArray);
             BuildCommands();
@@ -282,11 +317,13 @@ public sealed class CodexSession : ICodingSession
             p["cwd"] = _options.Cwd;
             var startModel = ApiModel(_model);
             if (!string.IsNullOrWhiteSpace(startModel) && startModel != "default") p["model"] = startModel;
+            ApplyServiceTier(p, startModel);
             ApplySecurity(p, legacyThreadShape: true);
             var threadResponse = await RequestAsync(method, p);
             SessionId = threadResponse?["result"]?["thread"]?["id"]?.GetValue<string>()
                         ?? threadResponse?["result"]?["thread"]?["sessionId"]?.GetValue<string>();
             if (SessionId is null) throw new InvalidOperationException("Codex app-server did not return a thread id.");
+            await RefreshReportingAsync();
 
             // Naming a fresh thread creates durable user-facing metadata without spending a model turn. It also
             // keeps an empty host chat resumable if the user activates a Bridge before sending its first message.
@@ -331,7 +368,7 @@ public sealed class CodexSession : ICodingSession
                     // Older app-server builds can reject injected developer items. Keep the original first-turn
                     // prepend as a compatibility fallback; the visible warning explains why an untouched peer may
                     // not survive an app restart yet.
-                    const string label = "Codex Bridge";
+                    var label = "Codex Bridge";
                     Emit(new JsonObject
                     {
                         ["type"] = "system", ["subtype"] = "permission_denied", ["tool_name"] = label,
@@ -348,6 +385,7 @@ public sealed class CodexSession : ICodingSession
                 ["model"] = _model ?? DefaultModelId(),
                 ["permissionMode"] = _permissionMode,
             });
+            ObserveMonitorAccess(threadResponse?["result"]);
             if (_options.Resume is not null)
             {
                 _hydratingHistory = true;
@@ -441,79 +479,109 @@ public sealed class CodexSession : ICodingSession
 
     private void BuildModels(JsonArray? data)
     {
+        _reserveModel = CodexReserveFallback.FindModel(data);
         Models = new JsonArray();
-        var seenBackends = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (data is not null)
+        foreach (var entry in data.OfType<JsonObject>())
         {
-            foreach (var entry in data.OfType<JsonObject>())
+            var id = entry["id"]?.GetValue<string>() ?? entry["model"]?.GetValue<string>() ?? "";
+            if (id.Length == 0 || IsRetiredModel(id)
+                || entry["hidden"]?.GetValue<bool>() == true && !CodexModelPreset.IsKnown(id)) continue;
+            var levels = new JsonArray();
+            if (entry["supportedReasoningEfforts"] is JsonArray efforts)
+                foreach (var effort in efforts.OfType<JsonObject>())
+                    if (effort["reasoningEffort"]?.GetValue<string>() is { } level) levels.Add(level);
+            var display = entry["displayName"]?.GetValue<string>() ?? id;
+            var description = entry["description"]?.GetValue<string>();
+            if (string.Equals(id, SparkModelId, StringComparison.OrdinalIgnoreCase))
             {
-                var levels = new JsonArray();
-                if (entry["supportedReasoningEfforts"] is JsonArray efforts)
-                    foreach (var e in efforts.OfType<JsonObject>())
-                        if (e["reasoningEffort"]?.GetValue<string>() is { } level) levels.Add(level);
-                var id = entry["id"]?.GetValue<string>() ?? entry["model"]?.GetValue<string>() ?? "";
-                var displayName = entry["displayName"]?.GetValue<string>() ?? id;
-                var description = entry["description"]?.GetValue<string>();
-                // Keep the versioned catalog id for app-server calls, but use the product name for the
-                // flagship Sol model. The catalog description remains separate picker text; it must not
-                // replace the model name in the compact composer pill.
-                if (id.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase)
-                    && id.EndsWith("-sol", StringComparison.OrdinalIgnoreCase))
-                {
-                    displayName = "GPT Sol 5.6";
-                    if (string.IsNullOrWhiteSpace(description))
-                        description = "Fast and affordable agentic coding model.";
-                }
-                var resolved = entry["model"]?.GetValue<string>() ?? id;
-                seenBackends.Add(id);
-                Models.Add(new JsonObject
-                {
-                    ["value"] = id,
-                    ["displayName"] = displayName,
-                    ["description"] = description,
-                    ["resolvedModel"] = resolved,
-                    ["supportedEffortLevels"] = levels,
-                    ["supportsEffort"] = levels.Count > 0,
-                    ["supportsAutoMode"] = true,
-                    ["supportsFastMode"] = false,
-                    ["isDefault"] = entry["isDefault"]?.GetValue<bool>() ?? false,
-                });
+                display = "GPT-5.3 Codex Spark";
+                description = SparkDescription;
             }
+            if (string.Equals(id, CodexModelPreset.SolModelId, StringComparison.OrdinalIgnoreCase))
+            {
+                display = CodexModelPreset.SolDisplayName;
+                if (string.IsNullOrWhiteSpace(description)) description = CodexModelPreset.SolDescription;
+            }
+            var resolved = entry["model"]?.GetValue<string>() ?? id;
+            Models.Add(new JsonObject
+            {
+                ["value"] = id, ["displayName"] = display, ["description"] = description,
+                ["resolvedModel"] = resolved, ["supportedEffortLevels"] = levels,
+                ["supportsEffort"] = levels.Count > 0, ["supportsAutoMode"] = true,
+                ["supportsFastMode"] = SupportsFastTier(entry),
+                ["isDefault"] = entry["isDefault"]?.GetValue<bool>() ?? false,
+            });
         }
         if (Models.Count == 0)
-        {
             Models.Add(new JsonObject
             {
                 ["value"] = "default", ["displayName"] = "Codex default", ["resolvedModel"] = "default",
                 ["supportedEffortLevels"] = new JsonArray("low", "medium", "high", "xhigh"),
                 ["supportsEffort"] = true, ["supportsAutoMode"] = true,
             });
-        }
-
-        // If app-server's live catalog omitted a backend (rare/offline), still surface the GPT-5.6 rows so the
-        // picker matches the fallback menu and a later model switch can retry.
-        foreach (var entry in CodexModelPreset.All)
+        foreach (var known in CodexModelPreset.All)
         {
-            if (!seenBackends.Add(entry.ModelId)) continue;
             if (Models.OfType<JsonObject>().Any(row =>
-                    string.Equals(row["value"]?.GetValue<string>(), entry.ModelId, StringComparison.OrdinalIgnoreCase)))
+                    string.Equals(row["value"]?.GetValue<string>(), known.ModelId, StringComparison.OrdinalIgnoreCase)))
                 continue;
             Models.Add(new JsonObject
             {
-                ["value"] = entry.ModelId,
-                ["displayName"] = entry.DisplayName,
-                ["description"] = entry.Description,
-                ["resolvedModel"] = entry.ModelId,
-                ["supportedEffortLevels"] = new JsonArray("low", "medium", "high", "xhigh"),
-                ["supportsEffort"] = true,
-                ["supportsAutoMode"] = true,
-                ["supportsFastMode"] = false,
-                ["isDefault"] = string.Equals(_model, entry.ModelId, StringComparison.OrdinalIgnoreCase),
+                ["value"] = known.ModelId, ["resolvedModel"] = known.ModelId,
+                ["displayName"] = known.DisplayName, ["description"] = known.Description,
+                ["supportedEffortLevels"] = EffortArray(known.EffortLevels),
+                ["supportsEffort"] = true, ["supportsAutoMode"] = true,
+                ["supportsFastMode"] = KnownFastModel(known.ModelId), ["isDefault"] = false,
             });
         }
-
-        if (string.IsNullOrWhiteSpace(_model)) _model = DefaultModelId();
+        if (string.IsNullOrWhiteSpace(_model) || IsRetiredModel(_model)) _model = DefaultModelId();
     }
+
+    internal const string SparkModelId = "gpt-5.3-codex-spark";
+    internal const string SparkDescription = "Near-instant coding iteration. Text-only research preview for ChatGPT Pro.";
+
+    /// <summary>Models VibeCode must never offer or send for a new/resumed Codex turn.</summary>
+    internal static bool IsRetiredModel(string? id)
+    {
+        var backend = id?.Trim();
+        if (string.IsNullOrWhiteSpace(backend)) return false;
+        if (backend.Equals("gpt-5.5", StringComparison.OrdinalIgnoreCase)
+            || backend.StartsWith("gpt-5.5-", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return (backend.Equals("gpt-5.3", StringComparison.OrdinalIgnoreCase)
+                || backend.StartsWith("gpt-5.3-", StringComparison.OrdinalIgnoreCase))
+               && !backend.Equals(SparkModelId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string? NormalizeModelSelection(string? id) => IsRetiredModel(id) ? null : id;
+
+    internal static bool KnownFastModel(string? id) => id is
+        "gpt-6-astra" or "gpt-5.6-sol" or "gpt-5.6-terra" or "gpt-5.6-luna" or "gpt-5.4";
+
+    internal static bool SupportsFastTier(JsonObject entry)
+    {
+        // An explicitly empty live tier list means unsupported; fall back only for older catalogs.
+        if ((entry["serviceTiers"] ?? entry["service_tiers"]) is JsonArray tiers)
+            return tiers.OfType<JsonObject>().Any(tier => SafeString(tier["id"]) is "priority" or "fast");
+        if ((entry["additionalSpeedTiers"] ?? entry["additional_speed_tiers"]) is JsonArray speeds)
+            return speeds.Any(tier => SafeString(tier) is "fast" or "priority");
+        return KnownFastModel(SafeString(entry["model"] ?? entry["id"]));
+    }
+
+    private void ApplyServiceTier(JsonObject request, string? model)
+    {
+        var row = Models.OfType<JsonObject>().FirstOrDefault(entry =>
+            string.Equals(SafeString(entry["value"]), model, StringComparison.OrdinalIgnoreCase));
+        var supported = row?["supportsFastMode"]?.GetValue<bool>() ?? KnownFastModel(model);
+        // Explicit standard clears the previous turn's priority tier, including on resume or a model switch.
+        request["serviceTier"] = _fastMode && supported ? "priority" : "default";
+    }
+
+    /// <summary>The reasoning ladder for a fallback row. Per model rather than one shared list: the CLI gives
+    /// Astra/Sol/Terra an "ultra" level that Luna does not have, and a level the CLI offers has to stay a level
+    /// in the picker.</summary>
+    private static JsonArray EffortArray(IEnumerable<string> levels) =>
+        new(levels.Select(level => (JsonNode?)JsonValue.Create(level)).ToArray());
 
     private string? DefaultModelId() => Models.OfType<JsonObject>()
         .FirstOrDefault(x => x["isDefault"]?.GetValue<bool>() == true)?["value"]?.GetValue<string>()
@@ -534,6 +602,7 @@ public sealed class CodexSession : ICodingSession
     public void SendUser(JsonNode content)
     {
         if (_disposed) return;
+        _reserveRetryAttempted = false;
         if (SessionId is null)
         {
             lock (_earlyMessages) _earlyMessages.Enqueue(content.DeepClone());
@@ -545,10 +614,12 @@ public sealed class CodexSession : ICodingSession
     private async Task StartTurnAsync(JsonNode content)
     {
         if (SessionId is null) return;
+        JsonObject? p = null;
         try
         {
+            await RefreshReportingAsync();
             var input = BuildInput(content);
-            var p = new JsonObject
+            p = new JsonObject
             {
                 ["threadId"] = SessionId,
                 ["input"] = input,
@@ -557,14 +628,18 @@ public sealed class CodexSession : ICodingSession
             var turnModel = ApiModel(_model);
             if (!string.IsNullOrWhiteSpace(turnModel) && turnModel != "default") p["model"] = turnModel;
             if (!string.IsNullOrWhiteSpace(_effort)) p["effort"] = _effort;
+            ApplyServiceTier(p, turnModel);
             ApplySecurity(p, legacyThreadShape: false);
             var response = await RequestAsync("turn/start", p);
-            _turnId = response?["result"]?["turn"]?["id"]?.GetValue<string>() ?? _turnId;
+            TrackAcceptedTurn(response);
+            ObserveMonitorAccess(p, "accepted-turn");
         }
         catch (Exception ex)
         {
             _lastError = ex.Message;
-            EmitFailure("Codex turn failed to start", ex.Message);
+            if (ex is CodexRpcException rpc && CodexReserveFallback.IsUsageLimitError(rpc.Error))
+                CompleteTurn(new JsonObject { ["status"] = "failed", ["error"] = rpc.Error.DeepClone() }, p);
+            else EmitFailure("Codex turn failed to start", ex.Message);
         }
     }
 
@@ -706,14 +781,22 @@ public sealed class CodexSession : ICodingSession
         if (message["id"] is not { } id) return;
         var key = RpcKey(id);
         if (!_pending.TryRemove(key, out var pending)) return;
-        if (message["error"] is { } error) pending.TrySetException(new InvalidOperationException(
-            error["message"]?.GetValue<string>() ?? error.ToJsonString()));
+        if (message["error"] is { } error) pending.TrySetException(new CodexRpcException(error));
         else pending.TrySetResult(message);
     }
 
     private void HandleNotification(string method, JsonObject? p)
     {
         NotificationReceived?.Invoke(method, p?.DeepClone().AsObject());
+        var monitorParams = p;
+        if (method == "serverRequest/resolved" && p?["threadId"] is null && p?["requestId"] is { } requestId
+            && _approvalParams.TryGetValue("codex:" + RpcKey(requestId), out var originalApproval)
+            && originalApproval["threadId"] is { } approvalThread)
+        {
+            monitorParams = p.DeepClone().AsObject();
+            monitorParams["threadId"] = approvalThread.DeepClone();
+        }
+        if (MitreRuntimeTelemetry.FromNotification(method, monitorParams, SessionId) is { } observation) Emit(observation);
         var threadId = NotificationThreadId(p);
         var isRootThread = IsRootThread(threadId);
         switch (method)
@@ -747,7 +830,12 @@ public sealed class CodexSession : ICodingSession
                 if (isRootThread) TranslatePlanUpdate(p);
                 else SetSubagentActivity(threadId!, "Updating its plan");
                 break;
-            case "turn/diff/updated": CaptureTurnDiff(threadId, p?["diff"]?.GetValue<string>()); break;
+            // Normalised like every other branch in this switch. The raw id only diverged from the root key in a
+            // state that cannot occur (SessionId null while a turn is running), but leaving one case keyed
+            // differently from its sibling is how the next reader loses an afternoon.
+            case "turn/diff/updated":
+                CaptureTurnDiff(isRootThread ? null : threadId, p?["diff"]?.GetValue<string>());
+                break;
             case "turn/completed":
                 if (isRootThread) RootTurnCompleted(p?["turn"] as JsonObject);
                 else SubagentTurnCompleted(threadId!, p?["turn"] as JsonObject);
@@ -756,7 +844,12 @@ public sealed class CodexSession : ICodingSession
             case "thread/status/changed": ObserveThreadStatus(threadId, p?["status"]); break;
             case "error":
                 if (isRootThread)
+                {
                     _lastError = p?["error"]?["message"]?.GetValue<string>() ?? p?["message"]?.GetValue<string>();
+                    if (p?["willRetry"]?.GetValue<bool>() != true
+                        && (p?["turnId"] is null || p["turnId"]?.GetValue<string>() == _turnId))
+                        _lastTurnError = p?["error"]?.DeepClone();
+                }
                 else
                     SetSubagentState(threadId!, "errored",
                         p?["error"]?["message"]?.GetValue<string>() ?? p?["message"]?.GetValue<string>() ?? "Error");
@@ -782,6 +875,10 @@ public sealed class CodexSession : ICodingSession
     // HandleLine; this avoids launching a model turn just to verify parent/child event scoping.
     internal void PrimeNotificationFixture(string sessionId) => SessionId = sessionId;
     internal void HandleNotificationFixture(string method, JsonObject? p) => HandleNotification(method, p);
+    internal void ObserveMonitorAccess(JsonNode? settings, string source = "server")
+    {
+        if (SessionId is { } id) Emit(MitreRuntimeTelemetry.Access(settings, id, id, source));
+    }
 
     private static string? NotificationThreadId(JsonObject? p)
     {
@@ -797,13 +894,17 @@ public sealed class CodexSession : ICodingSession
 
     private void BeginRootTurn(JsonObject? p)
     {
-        _interruptRequested = false;
+        if (!_reserveRecoveryPending) _interruptRequested = false;
+        _lastError = null;
+        _lastTurnError = null;
         // A new parent turn may legitimately resume a previously stopped child thread. Keep latches only for late
         // child turns that are already in flight; dormant children are safe to use again in the new turn.
         foreach (var threadId in _subagentsCancelledBeforeStart.Keys)
             if (!_activeSubagentTurns.ContainsKey(threadId))
                 _subagentsCancelledBeforeStart.TryRemove(threadId, out _);
         _turnId = p?["turn"]?["id"]?.GetValue<string>() ?? _turnId;
+        if (_interruptRequested && _turnId is not null)
+            _ = SafeRequest("turn/interrupt", new JsonObject { ["threadId"] = SessionId, ["turnId"] = _turnId });
         _rootThreadReportedActive = true;
         _turnUsage = default;
         _lastUsage = null;
@@ -840,8 +941,20 @@ public sealed class CodexSession : ICodingSession
 
     private void RootTurnCompleted(JsonObject? turn)
     {
+        var completedId = turn?["id"]?.GetValue<string>();
+        if (completedId is not null && (completedId == _lastCompletedRootTurnId
+            || (_turnId is not null && _turnId != completedId))) return;
+        _lastCompletedRootTurnId = completedId;
         _turnId = null; // the parent itself is no longer interruptible; any still-running children remain targets
         _rootThreadReportedActive = false;
+        // Emit the root's synthesised edit cards HERE, not in CompleteTurn. Shell-driven edits have no fileChange
+        // item of their own, so this turn-level diff is their only edit signal - and CompleteTurn sits behind
+        // TryCompletePendingRootTurn's HasActiveSubagents gate. A child that reports a status but never reports a
+        // turn used to hold that gate shut for the rest of the session, and every edit made through a shell
+        // command from then on silently rendered as a plain Bash card with no +/- diffstat. The diff snapshot is
+        // already complete at turn/completed; waiting on children never made it more correct, only later or
+        // never. Remove() keeps this idempotent against the call that follows in CompleteTurn.
+        EmitTurnDiffTools(SessionId, subagentThreadId: null);
         _pendingRootCompletion = turn?.DeepClone().AsObject() ?? new JsonObject { ["status"] = "completed" };
         TryCompletePendingRootTurn();
         EmitTurnActivity();
@@ -883,7 +996,7 @@ public sealed class CodexSession : ICodingSession
         {
             ["type"] = "system",
             ["subtype"] = "turn_activity",
-            ["active"] = _turnId is not null || _rootThreadReportedActive || HasActiveSubagents,
+            ["active"] = _turnId is not null || _rootThreadReportedActive || HasActiveSubagents || _reserveRecoveryPending,
         });
     }
 
@@ -951,6 +1064,7 @@ public sealed class CodexSession : ICodingSession
 
     private void HandleServerMessage(string method, JsonObject? p, JsonNode rpcId)
     {
+        if (MitreRuntimeTelemetry.FromNotification(method, p, SessionId) is { } observation) Emit(observation);
         var key = "codex:" + RpcKey(rpcId);
         _approvalRpcIds[key] = rpcId.DeepClone();
         _approvalMethods[key] = method;
@@ -1263,7 +1377,10 @@ public sealed class CodexSession : ICodingSession
         switch (type)
         {
             case "active": ApplySubagentState(agent, "running", ThreadWaitActivity(statusNode), notify: false); break;
-            case "idle" when agent.SawTurn: ApplySubagentState(agent, "completed", "Finished", notify: false); break;
+            // No SawTurn guard. A thread that reported a status but never reported a turn is exactly the entry
+            // that must be allowed to go idle: while it cannot, HasActiveSubagents stays true forever and the
+            // root turn's completion is parked for the life of the session.
+            case "idle": ApplySubagentState(agent, "completed", "Finished", notify: false); break;
             case "systemError": ApplySubagentState(agent, "errored", "System error", notify: false); break;
             case "notLoaded": ApplySubagentState(agent, "shutdown", "Closed", notify: false); break;
             default: return;
@@ -1367,6 +1484,8 @@ public sealed class CodexSession : ICodingSession
                 // Older builds used a bare string, so accept both without letting a shape change drop the
                 // entire completed file-change notification (and therefore the Artifacts entry).
                 ["kind"] = PatchKind(change["kind"]),
+                // app-server sends full source text for add/delete, and a unified diff only for update.
+                ["diff_format"] = PatchKind(change["kind"]) is "add" or "delete" ? "content" : "unified",
                 ["diff"] = change["diff"]?.GetValue<string>() ?? "",
             }, subagentThreadId: subagentThreadId);
             SettleTool(id, change["diff"]?.GetValue<string>() ?? "File updated", Failed(item), subagentThreadId);
@@ -1383,6 +1502,7 @@ public sealed class CodexSession : ICodingSession
             {
                 ["file_path"] = change.Path,
                 ["kind"] = change.Kind,
+                ["diff_format"] = "unified",
                 ["diff"] = change.Diff,
             }, subagentThreadId: subagentThreadId);
         }
@@ -1654,6 +1774,7 @@ public sealed class CodexSession : ICodingSession
             {
                 ["file_path"] = change.Path,
                 ["kind"] = DiffPatchKind(change.Diff),
+                ["diff_format"] = "unified",
                 ["diff"] = change.Diff,
             }, subagentThreadId: subagentThreadId);
             SettleTool(id, "File updated", failed: false, subagentThreadId);
@@ -1792,7 +1913,13 @@ public sealed class CodexSession : ICodingSession
         },
     }, subagentThreadId);
 
-    private void CompleteTurn(JsonObject? turn)
+    private void CompleteTurn(JsonObject? turn, JsonObject? rejectedRequest = null)
+    {
+        if (BeginReserveRecovery(turn, rejectedRequest)) return;
+        FinishTurn(turn);
+    }
+
+    private void FinishTurn(JsonObject? turn)
     {
         var status = turn?["status"]?.GetValue<string>() ?? "completed";
         var error = turn?["error"]?["message"]?.GetValue<string>() ?? _lastError;
@@ -1810,6 +1937,7 @@ public sealed class CodexSession : ICodingSession
         _rootThreadReportedActive = false;
         _interruptRequested = false;
         _lastError = null;
+        _lastTurnError = null;
         _lastUsage = null;
         _turnDiffByThread.Clear();
         _turnFileChangePaths.Clear();
@@ -1939,6 +2067,7 @@ public sealed class CodexSession : ICodingSession
 
     private Task<JsonNode?> RequestAsync(string method, JsonObject? p = null)
     {
+        if (RequestFixture is { } fixture) return fixture(method, p);
         var id = Interlocked.Increment(ref _requestSeq).ToString();
         var pending = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[id] = pending;
@@ -1978,7 +2107,8 @@ public sealed class CodexSession : ICodingSession
 
     private KeyValuePair<string, string>[] PrepareInterrupt()
     {
-        _interruptRequested = _turnId is not null || HasActiveSubagents;
+        _interruptRequested = _turnId is not null || HasActiveSubagents || _reserveRecoveryPending;
+        CancelReserveRecovery();
         var activeChildTurns = _activeSubagentTurns.ToArray();
         if (_interruptRequested)
         {
@@ -2019,8 +2149,17 @@ public sealed class CodexSession : ICodingSession
 
     public Task SetModelAsync(string? model, string? effort = null)
     {
+        Interlocked.Increment(ref _modelSelectionVersion);
+        CancelReserveRecovery();
+        model = NormalizeModelSelection(model);
         _model = string.IsNullOrWhiteSpace(model) || model == "default" ? DefaultModelId() : model;
         _effort = effort;
+        return Task.CompletedTask;
+    }
+
+    public Task SetFastModeAsync(bool enabled)
+    {
+        _fastMode = enabled;
         return Task.CompletedTask;
     }
 
@@ -2204,7 +2343,9 @@ public sealed class CodexSession : ICodingSession
 
     public void Dispose()
     {
+        AgentStatusReporting.Changed -= OnReportingChanged;
         _disposed = true;
+        CancelReserveRecovery();
         _writeQueue.Writer.TryComplete();
         try { _artifactWatcher?.Dispose(); } catch { /* watcher already gone */ }
         try { _stdin?.Close(); } catch { /* broken pipe */ }   // EOF → the CLI exits on its own

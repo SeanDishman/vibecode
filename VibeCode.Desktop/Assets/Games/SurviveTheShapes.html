@@ -530,7 +530,7 @@
       vampire: false,
       // recoilHeat builds while firing (bloom + kick); recoilControl stacks cut heat & speed recovery
       recoilHeat: 0, recoilControl: 0,
-      // Auto Fire (round 10+ uncommon): auto-aims + auto-fires only when the shot is actually hittable
+      // Auto Fire (round 10+ uncommon): tracks shapes and fires when one is in gun range
       autoAim: false,
       // Force field (round 10+): regenerative shield, levels 0–4
       shieldLevel: 0, shieldHp: 0, shieldMax: 0, shieldRegenCd: 0, shieldRegenAcc: 0, shieldFlash: 0,
@@ -1453,11 +1453,11 @@
       },
       { id: 'pierce',  name: 'Piercing Rounds', tag: 'Pierce',    icon: '🎯', tint: '#b49aff', desc: 'Bullets pass through +1 enemy.', apply: () => { player.pierceBonus += 1; } },
       { id: 'recoilctl', name: 'Recoil Control', tag: 'Stability', icon: '🎛️', tint: '#9eb8ff', desc: '+1 recoil control (less heat & bloom). Stacks additively.', apply: () => { player.recoilControl += 1; } },
-      // Uncommon (same rarity as Long Barrel), round 10+: aims + shoots for you when the shot can hit.
+      // Uncommon (same rarity as Long Barrel), round 10+: aims + shoots for you at in-range shapes.
       {
-        id: 'autofire', name: 'Auto Fire', tag: 'Auto-aim · uncommon', icon: '📡', tint: '#8ff0ff', weight: 0.42,
+        id: 'autofire', name: 'Auto Fire', tag: 'Auto-fire · uncommon', icon: '📡', tint: '#8ff0ff', weight: 0.42,
         available: () => !player.autoAim && round >= 10,
-        desc: 'Aims and fires for you — tracks shapes in range and only shoots when the barrel is on a hittable line. Recoil and bloom still apply. Hold LMB to override.',
+        desc: 'Aims and fires for you — tracks the nearest shape and auto-shoots whenever one is in gun range. Recoil and bloom still apply. Hold LMB to keep firing manually.',
         apply: () => { player.autoAim = true; },
       },
       { id: 'legs',    name: 'Adrenaline',      tag: 'Mobility',  icon: '👟', tint: '#7dffb0', desc: '+15% move speed (additive).', apply: () => { player.moveSpeedBonus += 0.15; refreshMoveSpeed(); } },
@@ -1900,13 +1900,6 @@
       const life = (g.life || 0.9) * (1 + (player.rangeBonus || 0));
       return speed * life;
     }
-    /** Smallest absolute angle between two headings (0…π). */
-    function angleDelta(a, b) {
-      let d = (a - b) % TAU;
-      if (d > Math.PI) d -= TAU;
-      if (d < -Math.PI) d += TAU;
-      return Math.abs(d);
-    }
     /**
      * Nearest targetable shape (materialized, not dead).
      * Optional maxRange (world units) limits the search — Auto Fire prefers in-range targets.
@@ -1923,25 +1916,14 @@
       return best;
     }
     /**
-     * Auto Fire only pulls the trigger when the current aim would actually connect:
-     * target inside gun range, and barrel within the target's angular size (+ thin slack /
-     * a fraction of shotgun cone). Prevents endless off-angle / out-of-range spraying.
+     * True when the target body is inside gun range (center can be a bit farther than
+     * max travel if the body edge is still reachable). Used to decide Auto Fire trigger.
      */
-    function isAutoHitable(target, g) {
+    function targetInGunRange(target, g) {
       if (!target || !g) return false;
-      const dx = target.x - player.x, dy = target.y - player.y;
-      const dist = Math.hypot(dx, dy);
+      const dist = Math.hypot(target.x - player.x, target.y - player.y);
       if (dist < 1) return true;
-      const reach = gunMaxRange(g);
-      // Must be able to reach the body, not just the center point.
-      if (dist - target.radius > reach * 0.98) return false;
-      const want = Math.atan2(dy, dx);
-      const err = angleDelta(player.aim, want);
-      const bodyHalf = Math.asin(Math.min(0.99, (target.radius + (g.radius || 4)) / dist));
-      // Shotguns: only a slice of the random cone counts as "on target" (not free half-screen fire).
-      const coneSlack = Math.min(0.16, (g.spread || 0) * 0.4);
-      const aimSlack = 0.055; // ~3° while aim smoothing settles
-      return err <= bodyHalf + coneSlack + aimSlack;
+      return dist - target.radius <= gunMaxRange(g) * 0.98;
     }
 
     function update(dt) {
@@ -1952,7 +1934,7 @@
       const accel = 2600;
       player.vx += mx * accel * dt; player.vy += my * accel * dt;
       // aim: mouse by default; Auto Fire tracks a shape — prefer in-range, else nearest.
-      // Exponential smoothing (~70ms) keeps it fluid. Recoil/bloom still apply on fire.
+      // Exponential smoothing (~70ms) keeps the reticle fluid. Recoil/bloom still apply on fire.
       const equipGun = GUNS[player.gunIndex];
       const autoRange = player.autoAim ? gunMaxRange(equipGun) : 0;
       const autoTarget = player.autoAim
@@ -1964,7 +1946,8 @@
       } else {
         player.aim = Math.atan2(mouse.y - player.y, mouse.x - player.x);
       }
-      const autoWantsShot = !!(player.autoAim && autoTarget && isAutoHitable(autoTarget, equipGun));
+      // Auto Fire: actually shoot whenever a target is in range (not aim-only).
+      const autoWantsShot = !!(player.autoAim && autoTarget && targetInGunRange(autoTarget, equipGun));
       // friction / speed cap
       const fr = Math.pow(0.0016, dt);
       player.vx *= fr; player.vy *= fr;
@@ -2019,9 +2002,13 @@
       }
 
       // ---- firing ----
-      // Manual LMB always fires. Auto Fire only shoots when the barrel is on a hittable in-range target.
+      // Manual LMB always fires. Auto Fire shoots on cooldown when a shape is in gun range.
       player.fireCooldown -= dt;
       if ((mouse.down || autoWantsShot) && player.fireCooldown <= 0) {
+        // Snap aim onto the auto target for the shot so laggy tracking doesn't waste pellets.
+        if (autoWantsShot && autoTarget) {
+          player.aim = Math.atan2(autoTarget.y - player.y, autoTarget.x - player.x);
+        }
         const g = GUNS[player.gunIndex];
         player.fireCooldown = (g.interval / (1 + player.fireRateBonus)) / 1000;
         fireShot(false);

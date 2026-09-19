@@ -29,6 +29,35 @@
          the scrim + this floor keep message text legible. GlassBar is a touch more opaque to frame. -->
     <SolidColorBrush x:Key="GlassPane" Color="#B0212226" />
     <SolidColorBrush x:Key="GlassBar" Color="#C827282C" />
+
+    <!-- ===== structural surfaces =====
+         The app's own chrome: titlebar, sidebar, right panel, chat header, the Bridge panes and their bars.
+         Keyed apart from the Bg* ladder they are drawn from purely so Themes/Borderless.xaml can remap THESE
+         to transparent and nothing else - a button, chip, popup or message card that says Bg2 keeps its fill
+         in every mode. Values here are identical to the keys each surface used before, so the default look is
+         unchanged. -->
+    <SolidColorBrush x:Key="SurfaceChrome" Color="{StaticResource Bg1Color}" />
+    <SolidColorBrush x:Key="SurfaceCanvas" Color="{StaticResource Bg0Color}" />
+    <SolidColorBrush x:Key="SurfacePane" Color="#B0212226" />
+    <SolidColorBrush x:Key="SurfaceBar" Color="#C827282C" />
+    <!-- the seam between two structural surfaces; borderless turns it into a black hairline -->
+    <SolidColorBrush x:Key="SurfaceOutline" Color="#2C2D32" />
+    <!-- The main chat's composer bubble. A Bridge pane's composer is painted with SurfaceBar, so it empties out
+         with the rest of the pane in borderless while this one - the only composer a single chat has - stayed a
+         filled slab, which is precisely the chat-vs-bridge gap the mode is supposed to close. Its own key, not
+         Bg2, so a borderless override empties the composer without touching the buttons and chips that sit
+         beside it. Same value the bubble used before, so the default look is unchanged. -->
+    <SolidColorBrush x:Key="SurfaceComposer" Color="{StaticResource Bg2Color}" />
+    <!-- Composer send button. Its own three keys rather than Accent/OnAccent directly, so Borderless can drop
+         the filled disc without disturbing the accent anywhere else in the app: once the panels stop painting,
+         that disc is the last piece of the panel look left on screen. The interrupt state is untouched either
+         way - it already ghosts itself to a red outline while a turn is running. -->
+    <SolidColorBrush x:Key="SendButtonFill" Color="{StaticResource AccentColor}" />
+    <SolidColorBrush x:Key="SendButtonFillHover" Color="{StaticResource AccentHoverColor}" />
+    <SolidColorBrush x:Key="SendButtonGlyph" Color="#FFFFFF" />
+    <!-- no ring here: the disc IS the shape. Borderless turns this one on and the fill off, so the circle
+         survives as an outline instead of disappearing with the fill. -->
+    <SolidColorBrush x:Key="SendButtonRing" Color="Transparent" />
     <!-- Spotify extension ONLY: a scoped guest accent. #1DB954 appears solely inside the Spotify card + its
          titlebar popup (enable switch, Connect button, play/pause circle, status dot). Everything else stays blue. -->
     <SolidColorBrush x:Key="SpotifyGreen" Color="#1DB954" />
@@ -47,6 +76,20 @@
     <SolidColorBrush x:Key="Border" Color="#3A3B42" />
     <SolidColorBrush x:Key="BorderSoft" Color="#2C2D32" />
     <SolidColorBrush x:Key="BorderHairline" Color="#232428" />
+    <!-- Fill + outline of a small pill/chip that floats in a BAR rather than inside a card (the bridge header's
+         account usage pills, the parked-pane restore chip). Their own keys because borderless overrides exactly
+         these: once the bar behind them stops painting, a chip that keeps a filled body is the last grey slab in
+         a row of bare glyph buttons - which is the one thing in a borderless bridge that still reads as a panel.
+         Same values as Bg2 / BorderSoft everywhere else. -->
+    <SolidColorBrush x:Key="ChipFill" Color="{StaticResource Bg2Color}" />
+    <SolidColorBrush x:Key="ChipOutline" Color="#2C2D32" />
+    <!-- A message from ANOTHER AGENT (peer message / manager work order). It arrives as a user turn, so without its
+         own surface it is the same grey bubble as the human's prompts and reads as something the user said. Cool
+         indigo: clearly not Bg2, and distinct from Accent so it does not compete with selection and focus. -->
+    <SolidColorBrush x:Key="AgentMsgBg" Color="#22252F" />
+    <SolidColorBrush x:Key="AgentMsgBorder" Color="#3A4260" />
+    <SolidColorBrush x:Key="AgentMsgRail" Color="#6E7FC4" />
+    <SolidColorBrush x:Key="AgentMsgHeader" Color="#9AA8DC" />
     <SolidColorBrush x:Key="Text" Color="#ECEDF1" />
     <SolidColorBrush x:Key="Muted" Color="#9EA0A8" />
     <SolidColorBrush x:Key="Faint" Color="#6C6E77" />
@@ -87,6 +130,11 @@
     </Style>
     <Style x:Key="StatusDot" TargetType="Ellipse" BasedOn="{StaticResource StatusDotBase}">
         <Style.Triggers>
+            <!-- Demon Mode's one rule you can see from across the room: RED is the session you can type into, BLUE is
+                 a read-only worker. Every other chat keeps the ordinary accent dot. -->
+            <DataTrigger Binding="{Binding IsDemonOrchestrator}" Value="True">
+                <Setter Property="Fill" Value="{StaticResource Red}" />
+            </DataTrigger>
             <DataTrigger Binding="{Binding IsWorking}" Value="True">
                 <DataTrigger.EnterActions>
                     <BeginStoryboard x:Name="StatusDotPulse">
@@ -143,15 +191,23 @@
     <CornerRadius x:Key="Rad99">99</CornerRadius>
     <CornerRadius x:Key="Rad999">999</CornerRadius>
     <CornerRadius x:Key="RadBubble">14,14,4,14</CornerRadius>
+    <!-- Bridge pane box and its header/composer bars. Their own keys, not Rad12, so borderless can square the
+         panes off into plain outlined regions without flattening every rounded control in the app. -->
+    <CornerRadius x:Key="RadPane">12</CornerRadius>
+    <CornerRadius x:Key="RadPaneTop">12,12,0,0</CornerRadius>
+    <CornerRadius x:Key="RadPaneBottom">0,0,12,12</CornerRadius>
     <CornerRadius x:Key="RadTop12">12,12,0,0</CornerRadius>
     <CornerRadius x:Key="RadBottom12">0,0,12,12</CornerRadius>
     <CornerRadius x:Key="RadBottom10">0,0,10,10</CornerRadius>
 
-    <!-- type -->
-    <FontFamily x:Key="Ui">Segoe UI Variable Text, Segoe UI</FontFamily>
-    <FontFamily x:Key="Display">Segoe UI Variable Display, Segoe UI</FontFamily>
-    <FontFamily x:Key="Mono">Cascadia Mono, Cascadia Code, Consolas</FontFamily>
-    <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    <!-- type. Each stack ends in "VibeCode Linux Icons" - the compatibility font the Linux package installs,
+         which carries the emoji this UI writes straight into strings (the crown beside the best model, the
+         megaphone, the link). Windows never has that family, so it is skipped there and nothing changes; on
+         Wine it is what stops those characters rendering as empty boxes. -->
+    <FontFamily x:Key="Ui">Segoe UI Variable Text, Segoe UI, VibeCode Linux Icons</FontFamily>
+    <FontFamily x:Key="Display">Segoe UI Variable Display, Segoe UI, VibeCode Linux Icons</FontFamily>
+    <FontFamily x:Key="Mono">Cascadia Mono, Cascadia Code, Consolas, VibeCode Linux Icons</FontFamily>
+    <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets, VibeCode Linux Icons</FontFamily>
 
     <!-- base text -->
     <Style TargetType="TextBlock">
@@ -530,6 +586,114 @@
         </Setter>
     </Style>
 
+    <!-- combo box. WPF's stock ComboBox and its drop-down popup are light-themed (white field, white popup with
+         near-invisible grey text), which is what left the "Add MCP server" pickers as unreadable white boxes.
+         This gives every UNSTYLED ComboBox the same dark input treatment the TextBox above gets. Windows that
+         ship a bespoke picker (the account manager's AccountProviderPicker, Settings' SoundPicker) keep their
+         own keyed Style, and their explicit ItemContainerStyle overrides the implicit ComboBoxItem below, so
+         they are unaffected. No editable combo boxes exist in the app, so the template omits PART_EditableTextBox. -->
+    <Style TargetType="ComboBoxItem">
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Padding" Value="11,7" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBoxItem">
+                    <Border x:Name="opt" Background="{TemplateBinding Background}" CornerRadius="{StaticResource Rad8}"
+                            Padding="{TemplateBinding Padding}" Margin="4,2">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="opt" Property="Background" Value="{StaticResource Bg3}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="opt" Property="Background" Value="{StaticResource AccentSoft}" />
+                            <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="ComboBox">
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="Background" Value="{StaticResource Bg2}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="MaxDropDownHeight" Value="280" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <ToggleButton x:Name="picker" Focusable="False" ClickMode="Press"
+                                      Background="{TemplateBinding Background}"
+                                      BorderBrush="{TemplateBinding BorderBrush}"
+                                      BorderThickness="{TemplateBinding BorderThickness}"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="box" Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            CornerRadius="{StaticResource Rad10}">
+                                        <Border HorizontalAlignment="Right" Width="32" Background="Transparent">
+                                            <TextBlock Text="&#xE70D;" FontFamily="{StaticResource Icons}" FontSize="10"
+                                                       Foreground="{StaticResource Faint}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="box" Property="Background" Value="{StaticResource Bg3}" />
+                                        </Trigger>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter IsHitTestVisible="False" Margin="11,0,34,0" VerticalAlignment="Center"
+                                          HorizontalAlignment="Left" Content="{TemplateBinding SelectionBoxItem}"
+                                          ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                          ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" />
+                        <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                               IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
+                            <Border MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                    Margin="0,5,0,0" Background="{StaticResource Bg2}" BorderBrush="{StaticResource Border}"
+                                    BorderThickness="1" CornerRadius="{StaticResource Rad10}">
+                                <ScrollViewer Margin="2" CanContentScroll="True" VerticalScrollBarVisibility="Auto">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="picker" Property="BorderBrush" Value="{StaticResource Accent}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ================= misc chrome ================= -->
     <Style TargetType="ToolTip">
         <Setter Property="Background" Value="{StaticResource Overlay}" />
@@ -727,5 +891,79 @@
             </EventTrigger>
         </Style.Triggers>
     </Style>
+
+    <!-- ============ right-click menus ============
+         These live in the THEME dictionary rather than MainWindow's, because the menus we build in code -
+         the editing menu every TextBox is handed by UI/TextEditMenu.cs, and the transcript range menu in
+         UI/TranscriptSelection.cs - resolve their style through Application.Resources and cannot see a key
+         declared inside a window. WPF's stock editing menu is a white Win32 popup, i.e. white text on white:
+         Cut/Copy/Paste were invisible on every surface in this app. That is what these replace. -->
+    <Style x:Key="DarkMenuItem" TargetType="MenuItem">
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Padding" Value="11,6" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="bd" Background="Transparent" CornerRadius="{StaticResource Rad7}"
+                            Padding="{TemplateBinding Padding}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter Grid.Column="0" ContentSource="Header" VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                            <!-- shortcut hint: an empty InputGestureText simply measures to nothing -->
+                            <TextBlock x:Name="gesture" Grid.Column="1" Text="{TemplateBinding InputGestureText}"
+                                       Foreground="{StaticResource Faint}" FontSize="11" Margin="22,0,2,0"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource Bg3}" />
+                        </Trigger>
+                        <!-- Cut/Paste go dim rather than vanishing when the command can't run -->
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{StaticResource Faint}" />
+                            <Setter TargetName="gesture" Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="DarkContextMenu" TargetType="ContextMenu">
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="ItemContainerStyle" Value="{StaticResource DarkMenuItem}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{StaticResource Overlay}" BorderBrush="{StaticResource Border}"
+                            BorderThickness="1" CornerRadius="{StaticResource Rad10}" Padding="4">
+                        <ItemsPresenter />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- thin dark separator for the dark context menus (WPF's default is a white line) -->
+    <Style x:Key="DarkSeparator" TargetType="Separator">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Separator">
+                    <Border Height="1" Background="{StaticResource BorderSoft}" Margin="6,4" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Fill drawn behind messages picked out by a cross-message drag (UI/TranscriptSelection.cs). Same hue as
+         the SelectionBrush a single message uses, so a selection that spills into the next message still reads
+         as one selection rather than two different mechanisms. -->
+    <SolidColorBrush x:Key="TranscriptSelectionFill" Color="#4C4C8DF5" />
 
 </ResourceDictionary>

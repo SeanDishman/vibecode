@@ -16,7 +16,7 @@ namespace VibeCode.Services;
 public sealed class ApiKeyAccount : Observable
 {
     public required string Id { get; init; }
-    /// <summary>claude | codex | grok | kimi - matches AppSettings.DefaultProvider.</summary>
+    /// <summary>claude | codex | grok | kimi | glm - matches AppSettings.DefaultProvider.</summary>
     public required string Provider { get; init; }
     public string Label { get; set; } = "";
     /// <summary>Base64 DPAPI ciphertext. Never logged, never shown, never written in the clear.</summary>
@@ -33,9 +33,20 @@ public sealed class ApiKeyAccount : Observable
     [JsonIgnore]
     public bool IsSelected =>
         string.Equals(AppSettings.Current.DefaultProvider, Provider, StringComparison.OrdinalIgnoreCase) &&
+        IsPreferred;
+
+    /// <summary>
+    /// True when this is the key chosen for its own provider, whether or not that provider is the active one.
+    ///
+    /// Distinct from <see cref="IsSelected"/> on purpose. That one answers "is this the credential the next chat
+    /// will run on", which is false for every Grok key while Claude is the active provider - so a per-provider
+    /// key list using it would show no key as chosen at all, and offer to switch to the one already in use.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsPreferred =>
         string.Equals(ApiKeyAccountService.Instance.SelectedId(Provider), Id, StringComparison.Ordinal);
 
-    public void RefreshSelection() { Raise(nameof(IsSelected)); }
+    public void RefreshSelection() { Raise(nameof(IsSelected)); Raise(nameof(IsPreferred)); }
 }
 
 public sealed class ApiKeyValidation
@@ -81,11 +92,32 @@ public sealed class ApiKeyAccountService : Observable
         "codex" => "ChatGPT",
         "grok" => "Grok",
         "kimi" => "Kimi",
+        VibeCode.Protocol.GlmPreset.ProviderId => VibeCode.Protocol.GlmPreset.DisplayName,
         _ => provider ?? "",
     };
 
+    /// <summary>
+    /// The provider list, held in a nested type on purpose.
+    ///
+    /// <see cref="Instance"/> is a static initializer that runs <see cref="Load"/>, and static initializers run in
+    /// DECLARATION order - so anything Load touches that is declared below it is still null when Load runs. A
+    /// nested type's statics initialize on first touch of that type instead, which is order-independent. This bit
+    /// once already: the retired-provider purge read the list from here, got null, threw, and was swallowed whole
+    /// by Load's catch - leaving the purge looking like it simply did nothing.
+    /// </summary>
+    private static class Known
+    {
+        /// <summary>Providers that can be signed into with a key, in menu order.</summary>
+        /// <remarks>GLM is last because it is the only entry here that is ONLY a key - the other four are
+        /// subscription CLIs for which a key is an alternative. Its id must stay in this list: it is also what
+        /// <see cref="DropRetiredProviders"/> checks, so omitting it would silently delete every saved GLM key
+        /// on the next launch.</remarks>
+        internal static readonly string[] InMenuOrder =
+            ["claude", "codex", "grok", "kimi", VibeCode.Protocol.GlmPreset.ProviderId];
+    }
+
     /// <summary>The providers that can be signed into with a key, in menu order.</summary>
-    public static IReadOnlyList<string> Providers { get; } = new[] { "claude", "codex", "grok", "kimi" };
+    public static IReadOnlyList<string> Providers => Known.InMenuOrder;
 
     public string? SelectedId(string provider) =>
         _selected.TryGetValue(provider, out var id) ? id : null;
@@ -180,10 +212,47 @@ public sealed class ApiKeyAccountService : Observable
                 psi.Environment["ANTHROPIC_BASE_URL"] = "https://api.moonshot.ai/anthropic";
                 psi.Environment["ANTHROPIC_AUTH_TOKEN"] = key;
                 break;
+            case VibeCode.Protocol.GlmPreset.ProviderId:
+                // Nothing to inject: this provider has no CLI to launch. GlmSession is spoken in-process and
+                // reads its keys through KeysFor below.
+                return false;
             default:
                 return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// The plaintext key for a provider whose session is spoken in-process rather than launched as a CLI, or ""
+    /// when no key account is selected. The CLI providers must keep using <see cref="ApplyTo"/> - handing a key
+    /// back to arbitrary callers is only safe because this one never leaves the process.
+    /// </summary>
+    public string KeyFor(string provider)
+    {
+        var account = SelectedFor(provider);
+        return account is null ? "" : Reveal(account);
+    }
+
+    /// <summary>
+    /// Every usable key for an in-process provider, the selected one first.
+    ///
+    /// Exists for failover: a free tier can rate-limit after a couple of requests, so a session that holds
+    /// several keys can move to the next one instead of failing the turn. Order matters - the account the
+    /// user picked is always tried first, and the rest are a fallback rather than a pool to round-robin, so
+    /// normal use stays on one key and stays predictable.
+    /// </summary>
+    public IReadOnlyList<string> KeysFor(string provider)
+    {
+        var selected = SelectedFor(provider);
+        var ordered = new List<string>();
+        if (selected is not null && Reveal(selected) is { Length: > 0 } first) ordered.Add(first);
+        foreach (var account in For(provider))
+        {
+            if (selected is not null && account.Id == selected.Id) continue;
+            if (Reveal(account) is { Length: > 0 } key && !ordered.Contains(key, StringComparer.Ordinal))
+                ordered.Add(key);
+        }
+        return ordered;
     }
 
     /* ── validation ───────────────────────────────────────────────────────── */
@@ -211,27 +280,65 @@ public sealed class ApiKeyAccountService : Observable
                 r => r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key)),
             "kimi" => ("https://api.moonshot.ai/v1/models",
                 r => r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key)),
+            // Baseten. Its own scheme rather than Bearer (both work, this is the documented one). A bad key here
+            // answers 403 rather than 401, which the status mapping below already treats as a rejection.
+            VibeCode.Protocol.GlmPreset.ProviderId =>
+                ($"{VibeCode.Protocol.GlmPreset.DefaultBaseUrl.TrimEnd('/')}/models",
+                r => r.Headers.Authorization =
+                    new AuthenticationHeaderValue(VibeCode.Protocol.GlmPreset.AuthScheme, key)),
             _ => (null!, null!),
         };
         if (url is null) return ApiKeyValidation.Bad("Unknown provider.");
 
-        try
+        // A gateway blip must not be reported as a bad key. Measured against Baseten: a wrong key answers 403
+        // about five times in six and an occasional 502, while a good key answers 200 every time - so a single
+        // 5xx says nothing about the credential. Without a retry the damaging case is the good one: paste a
+        // working key, land on the blip, and be told the provider rejected it.
+        const int attempts = 3;
+        for (var attempt = 1; ; attempt++)
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            apply(req);
-            using var res = await Http.SendAsync(req, ct);
-
-            if (res.IsSuccessStatusCode) return ApiKeyValidation.Good();
-            return (int)res.StatusCode switch
+            try
             {
-                401 or 403 => ApiKeyValidation.Bad("The provider rejected that key."),
-                429 => ApiKeyValidation.Good("Key is valid (rate limited right now)."),
-                _ => ApiKeyValidation.Bad($"Provider returned {(int)res.StatusCode}."),
-            };
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                apply(req);
+                // ResponseHeadersRead because only the STATUS is inspected below - never the body.
+                // Not a micro-optimisation: Baseten answers a bad key with a 403 that advertises
+                // "Content-Length: 135" and then sends zero bytes, so buffering the body (the default) throws
+                // "Error while copying content to a stream" before the status is ever looked at. That landed in
+                // the catch-all underneath and told the user "Couldn't reach the provider" for what is really a
+                // rejected key - sending them to debug a network that was working fine.
+                using var res = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+
+                if (res.IsSuccessStatusCode) return ApiKeyValidation.Good();
+                var status = (int)res.StatusCode;
+                if (IsTransientStatus(status) && attempt < attempts)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(400 * attempt), ct);
+                    continue;
+                }
+                return status switch
+                {
+                    401 or 403 => ApiKeyValidation.Bad("The provider rejected that key."),
+                    429 => ApiKeyValidation.Good("Key is valid (rate limited right now)."),
+                    // Deliberately not "that key is bad": after the retries above this is the provider being
+                    // unwell, and the key may well be fine.
+                    _ => ApiKeyValidation.Bad(
+                        $"Couldn't check the key - the provider returned {status}. Try again in a moment."),
+                };
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (TaskCanceledException) { return ApiKeyValidation.Bad("Timed out reaching the provider."); }
+            catch (Exception) when (attempt < attempts)
+            {
+                // A truncated/reset response is the same class of blip as a 5xx; give it the same second chance.
+                await Task.Delay(TimeSpan.FromMilliseconds(400 * attempt), ct);
+            }
+            catch (Exception ex) { return ApiKeyValidation.Bad("Couldn't reach the provider: " + ex.Message); }
         }
-        catch (TaskCanceledException) { return ApiKeyValidation.Bad("Timed out reaching the provider."); }
-        catch (Exception ex) { return ApiKeyValidation.Bad("Couldn't reach the provider: " + ex.Message); }
     }
+
+    /// <summary>A status that says the provider is unwell rather than that the credential is wrong.</summary>
+    private static bool IsTransientStatus(int status) => status >= 500 || status == 408;
 
     /* ── storage ──────────────────────────────────────────────────────────── */
 
@@ -283,8 +390,28 @@ public sealed class ApiKeyAccountService : Observable
             if (data is null) return;
             _accounts.AddRange(data.Accounts);
             foreach (var kv in data.Selected) _selected[kv.Key] = kv.Value;
+            if (DropRetiredProviders()) Save();
         }
         catch { /* a corrupt file must not stop the app starting */ }
+    }
+
+    /// <summary>
+    /// Forget keys saved for a provider this build no longer has.
+    ///
+    /// Not housekeeping for its own sake: <see cref="DisplayName"/> falls back to the raw provider id, so an
+    /// orphaned row would keep the removed provider's internal name visible in the account manager - and there is
+    /// no panel left to delete it from, because the panel went with the provider.
+    /// </summary>
+    private bool DropRetiredProviders()
+    {
+        var live = Known.InMenuOrder;
+        var removed = _accounts.RemoveAll(a => !live.Contains(a.Provider ?? "", StringComparer.OrdinalIgnoreCase));
+        foreach (var key in _selected.Keys.Where(k => !live.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList())
+        {
+            _selected.Remove(key);
+            removed++;
+        }
+        return removed > 0;
     }
 
     private void Save()

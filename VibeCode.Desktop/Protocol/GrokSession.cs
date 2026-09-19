@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using VibeCode.Services;
@@ -68,22 +69,12 @@ public sealed class GrokSession : ICodingSession
 
     public static string ResolveCliPath()
     {
-        // An explicit override always wins over discovery.
-        if (Environment.GetEnvironmentVariable("VIBECODE_GROK_PATH") is { Length: > 0 } configured)
-        {
-            var configuredPath = configured.Trim('"');
-            try { if (File.Exists(configuredPath)) return Path.GetFullPath(configuredPath); }
-            catch { /* report the normal resolver error below */ }
-        }
-
         foreach (var candidate in CliCandidates())
         {
             try { if (File.Exists(candidate)) return Path.GetFullPath(candidate); }
-            catch { /* inaccessible or malformed PATH entry */ }
+            catch { }
         }
-        throw new FileNotFoundException(
-            "Could not find the Grok CLI. Install it so grok.exe is on PATH, or set VIBECODE_GROK_PATH to an " +
-            "existing executable.");
+        throw new FileNotFoundException("Install the Grok CLI or set VIBECODE_GROK_PATH to its executable.");
     }
 
     internal static IReadOnlyList<string> CliCandidates()
@@ -91,49 +82,21 @@ public sealed class GrokSession : ICodingSession
         var candidates = new List<string>();
         if (Environment.GetEnvironmentVariable("VIBECODE_GROK_PATH") is { Length: > 0 } configured)
             candidates.Add(configured.Trim('"'));
-
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "xai-grok-pager.exe"));
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "grok.exe"));
-        foreach (var root in SearchRoots())
-        {
-            candidates.Add(Path.Combine(root, "grok", "grok-build-main", "target", "release", "xai-grok-pager.exe"));
-            candidates.Add(Path.Combine(root, "grok", "grok-build-main", "target", "debug", "xai-grok-pager.exe"));
-        }
-
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var grokHome = Environment.GetEnvironmentVariable("GROK_HOME");
         if (string.IsNullOrWhiteSpace(grokHome)) grokHome = Path.Combine(profile, ".grok");
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, "grok.exe"));
         candidates.Add(Path.Combine(grokHome.Trim('"'), "bin", "grok.exe"));
         candidates.Add(Path.Combine(profile, ".local", "bin", "grok.exe"));
-        candidates.Add(Path.Combine(appData, "npm", "grok.cmd"));
-        candidates.Add(Path.Combine(local, "Microsoft", "WinGet", "Links", "grok.exe"));
-
-        foreach (var value in new[]
-                 {
-                     Environment.GetEnvironmentVariable("PATH"),
-                     Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
-                     Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine),
-                 })
-        foreach (var dir in (value ?? "").Split(Path.PathSeparator,
-                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        foreach (var name in new[] { "grok.exe", "grok.cmd", "xai-grok-pager.exe" })
-            candidates.Add(Path.Combine(dir.Trim('"'), name));
-
+        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "grok.cmd"));
+        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WinGet", "Links", "grok.exe"));
+        foreach (var value in new[] { Environment.GetEnvironmentVariable("PATH"),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine) })
+        foreach (var directory in (value ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var name in new[] { "grok.exe", "grok.cmd" })
+            candidates.Add(Path.Combine(directory.Trim('"'), name));
         return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-    }
-
-    private static IEnumerable<string> SearchRoots()
-    {
-        foreach (var start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
-        {
-            DirectoryInfo? current;
-            try { current = new DirectoryInfo(Path.GetFullPath(start)); }
-            catch { continue; }
-            for (var depth = 0; current is not null && depth < 10; depth++, current = current.Parent)
-                yield return current.FullName;
-        }
     }
 
     public static ProcessStartInfo CreateCliStartInfo(string? workingDirectory, params string[] args)

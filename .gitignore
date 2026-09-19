@@ -14,5 +14,36 @@ publish/
 *.log
 *.bak
 
+# Generated outputs and local runtime state
+artifacts/
+bin-*/
+obj-*/
+VibeCode.Desktop/.*/
+VibeCode.AgentStatus.Mcp/.*/
+build/
+.gradle/
+.kotlin/
+.vibecode/
+.env
+.env.*
+!.env.example
+local.properties
+keystore.properties
+*.keystore
+*.jks
+*.pfx
+*.p12
+*.pem
+*.key
+*.pdb
+*.dmp
+*.stackdump
+auth.json
+settings.json
+*-auth.json
+*.jsonl
+node_modules/
+**/Assets/vibecode-mobile.apk
+
 # local drafts, not part of the project
 reddit-post.txt

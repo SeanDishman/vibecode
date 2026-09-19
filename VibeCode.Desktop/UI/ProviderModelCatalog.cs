@@ -17,12 +17,17 @@ internal static class ProviderModelCatalog
     public static string Normalize(string? provider) =>
         string.IsNullOrWhiteSpace(provider) ? "claude" : provider.Trim().ToLowerInvariant();
 
+    public static bool ModelBelongsTo(string? model, string? provider) =>
+        !CodexSession.IsRetiredModel(model)
+        && (model is null || !model.StartsWith("vibecode:", StringComparison.OrdinalIgnoreCase));
+
     public static string DisplayName(string? provider) => Normalize(provider) switch
     {
         "codex" => "OpenAI Codex",
         "claude" => "Claude Code",
         "kimi" => "Kimi Code",
         "grok" => "Grok",
+        GlmPreset.ProviderId => GlmPreset.DisplayName,
         var value => char.ToUpperInvariant(value[0]) + value[1..],
     };
 
@@ -30,7 +35,8 @@ internal static class ProviderModelCatalog
     public static void Remember(string provider, IEnumerable<ModelChoice> models)
     {
         var key = Normalize(provider);
-        var snapshot = models.Where(m => !string.IsNullOrWhiteSpace(m.Value)).ToList();
+        var snapshot = models.Where(m => !string.IsNullOrWhiteSpace(m.Value)
+                                         && !(key == "codex" && CodexSession.IsRetiredModel(m.Value))).ToList();
         if (snapshot.Count == 0) return;
         if (key == "claude") NormalizeClaudeCatalog(snapshot);
         lock (Gate) Catalogs[key] = snapshot;
@@ -82,13 +88,14 @@ internal static class ProviderModelCatalog
     private static bool NormalizeClaudeCatalog(List<ModelChoice> models)
     {
         if (models.Count == 0) return false;
-        var before = models.Select(m => (m.Value, m.Display)).ToList();
+        // Description counts as a change too: the model pill reads ShortName, which is derived from the
+        // description, so a row whose title was already right but whose description was not still has to be saved.
+        var before = models.Select(m => (m.Value, m.Display, m.Description)).ToList();
 
         for (int i = 0; i < models.Count; i++)
-            if (AliasName(models[i]) is { } renamed)
-                models[i] = WithDisplay(models[i], renamed);
+            models[i] = Retitle(models[i]);
 
-        foreach (var (value, display, description) in ClaudeExtras)
+        foreach (var (value, display, description, fast) in ClaudeExtras)
         {
             // Match on the title too: an alias we just renamed "Opus 4.8" already fills that slot, even
             // when the CLI gave us no resolvedModel to prove it is the same model.
@@ -109,7 +116,7 @@ internal static class ProviderModelCatalog
                 EffortLevels = opus?.EffortLevels?.ToList() ?? new List<string>(),
                 SupportsEffort = opus?.SupportsEffort ?? true,
                 SupportsAutoMode = opus?.SupportsAutoMode ?? false,
-                SupportsFastMode = true,
+                SupportsFastMode = fast,
             });
         }
 
@@ -117,8 +124,15 @@ internal static class ProviderModelCatalog
         models.Clear();
         models.AddRange(sorted);
 
-        return !before.SequenceEqual(models.Select(m => (m.Value, m.Display)));
+        return !before.SequenceEqual(models.Select(m => (m.Value, m.Display, m.Description)));
     }
+
+    /// <summary>
+    /// Model Claude Code's <c>/fast</c> would switch to when the current one has no fast mode.
+    /// Strongest fast-capable row (Opus 5, then 4.8). Null when nothing in the list can do fast.
+    /// </summary>
+    public static ModelChoice? FastModeSwitchTarget(IEnumerable<ModelChoice>? models) =>
+        models?.Where(m => m.SupportsFastMode).OrderBy(Rank).FirstOrDefault();
 
     /// <summary>True when a catalog row already is the given model, ignoring "[1m]"-style variant tags.</summary>
     private static bool IsSameModel(ModelChoice m, string id) =>
@@ -131,27 +145,85 @@ internal static class ProviderModelCatalog
         ["opus"] = "Opus 4.8",
         ["sonnet"] = "Sonnet 5",
         ["haiku"] = "Haiku 4.5",
-        ["fable"] = "Fable 5",
+        // The CLI's own catalog moved latest_per_family.fable to claude-fable-5-1 in 2.1.257, so a bare "fable"
+        // with nothing to resolve is a 5.1 now. A CLI that does report resolvedModel never reaches this line.
+        ["fable"] = "Fable 5.1",
         ["mythos"] = "Mythos 5",
     };
 
     /// <summary>
-    /// New title for a row the CLI labelled with a bare tier word ("Opus"), or null to leave it alone.
-    /// Reads <see cref="ModelChoice.ResolvedModel"/> first so the label stays right if the alias moves.
+    /// The context-window note Claude Code bakes into its Opus naming: it titles the row "Opus (1M context)" and
+    /// describes it as "Opus 5 with 1M context · ...". Matches both shapes.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex ContextNote = new(
+        @"\s*(?:\((?=[^)]*context)[^)]*\)|\bwith\s+\d+\s*[MK]\s*context\b)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>"Opus (1M context)" -> "Opus"; "Opus 5 with 1M context" -> "Opus 5".</summary>
+    private static string WithoutContextNote(string name) => ContextNote.Replace(name ?? "", "").Trim();
+
+    /// <summary>
+    /// Give a row the name the model is actually called.
+    /// <para>
+    /// Two things need fixing and they arrive in different fields. Claude Code titles its top row "Opus
+    /// (1M context)" and opens the description with "Opus 5 with 1M context · ...", and because
+    /// <see cref="ModelChoice.ShortName"/> takes the part of the description before the middle dot, that second
+    /// one is what the composer's model pill reads. Every Opus has had a 1M context window for a while, so the
+    /// qualifier distinguishes nothing and just makes the strongest model's name the longest thing on screen.
+    /// </para>
+    /// <para>
+    /// Both are normalised here rather than at the two call sites, so the picker title, the picker subtitle and
+    /// the pill agree. The title also still resolves a bare tier word through
+    /// <see cref="ModelChoice.ResolvedModel"/>, which is how "Opus" became "Opus 4.8" before and how "Opus
+    /// (1M context)" becomes "Opus 5" now: strip the note, recognise the tier, name it after what it resolves to.
+    /// </para>
+    /// </summary>
+    private static ModelChoice Retitle(ModelChoice m)
+    {
+        var display = AliasName(m) ?? m.Display;
+        var description = DescriptionWithoutContextNote(m.Description);
+        return string.Equals(display, m.Display, StringComparison.Ordinal)
+               && string.Equals(description, m.Description, StringComparison.Ordinal)
+            ? m
+            : With(m, display, description);
+    }
+
+    /// <summary>
+    /// New title for a row the CLI labelled with a tier word - bare ("Opus") or qualified ("Opus (1M context)") -
+    /// or null to leave it alone. Reads <see cref="ModelChoice.ResolvedModel"/> first so the label stays right if
+    /// the alias moves.
     /// </summary>
     private static string? AliasName(ModelChoice m)
     {
-        if (!AliasNames.TryGetValue(m.Display.Trim(), out var fallback)) return null;
+        if (!AliasNames.TryGetValue(WithoutContextNote(m.Display), out var fallback)) return null;
         var named = UsagePalette.KnownName(m.ResolvedModel) ?? fallback;
         return string.Equals(named, m.Display, StringComparison.Ordinal) ? null : named;
     }
 
-    private static ModelChoice WithDisplay(ModelChoice m, string display) => new()
+    /// <summary>
+    /// Drop the context note from the model name a description leads with, keeping the "Name · blurb" shape the
+    /// rest of the catalog uses. Only the name is touched: the blurb after the dot is the CLI's to write, and the
+    /// default row keeps saying which model it resolves to.
+    /// </summary>
+    private static string? DescriptionWithoutContextNote(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return description;
+        var dot = description.IndexOf('·');
+        if (dot <= 0) return description;
+        var name = description[..dot].Trim();
+        var trimmed = WithoutContextNote(name);
+        return trimmed.Length == 0 || string.Equals(trimmed, name, StringComparison.Ordinal)
+            ? description
+            : trimmed + " " + description[dot..];
+    }
+
+    private static ModelChoice With(ModelChoice m, string display, string? description) => new()
     {
         Provider = m.Provider,
         Value = m.Value,
         Display = display,
-        Description = m.Description,
+        Description = description,
         ResolvedModel = m.ResolvedModel,
         EffortLevels = m.EffortLevels,
         SupportsEffort = m.SupportsEffort,
@@ -190,26 +262,33 @@ internal static class ProviderModelCatalog
     /// Claude models the local CLI may not advertise in <c>initialize.models</c>. IDs must be the real
     /// Anthropic ones - the picker sends them straight through as <c>--model</c> / set_model.
     /// Kept in sync with <see cref="VibeCode.Protocol.ClaudeSession"/>'s copy.
+    /// <para><c>Fast</c> is per-model on purpose: fast mode is an Opus 4.8-and-newer tier. Marking 4.6
+    /// fast-capable made the toggle look like it worked while the API ran standard speed. The popup now
+    /// switches to Opus 5 (see <see cref="FastModeSwitchTarget"/>) instead of greying out with "Opus only".</para>
     /// </summary>
-    private static readonly (string Value, string Display, string Description)[] ClaudeExtras =
+    private static readonly (string Value, string Display, string Description, bool Fast)[] ClaudeExtras =
     [
-        ("claude-opus-5", "Claude Opus 5",
-            "Near-Fable intelligence for complex agentic coding and enterprise work, at half Fable price."),
+        ("claude-opus-5", "Opus 5",
+            "Near-Fable intelligence for complex agentic coding and enterprise work, at half Fable price.", true),
         ("claude-opus-4-8", "Opus 4.8",
-            "Previous flagship Opus. Highly autonomous on long-horizon agentic and knowledge work."),
+            "Previous flagship Opus. Highly autonomous on long-horizon agentic and knowledge work.", true),
         ("claude-opus-4-6", "Opus 4.6",
-            "Older Opus. Still accepts temperature and a fixed thinking budget that 4.7+ dropped."),
+            "Older Opus. Still accepts temperature and a fixed thinking budget that 4.7+ dropped.", false),
     ];
 
     private static IReadOnlyList<ModelChoice> Fallback(string provider) => provider switch
     {
         "claude" =>
         [
-            Choice("claude", "claude-opus-5", "Claude Opus 5",
-                "Near-Fable intelligence for complex agentic coding and enterprise work, at half Fable price."),
-            Choice("claude", "fable", "Fable 5", "Anthropic's most capable model, for the most demanding work."),
+            // fastMode: true keeps the Fast mode row reachable before a live CLI catalog exists. Without it the
+            // preview/offline picker reported Opus 5 as not fast-capable, so the toggle never appeared at all.
+            Choice("claude", "claude-opus-5", "Opus 5",
+                "Near-Fable intelligence for complex agentic coding and enterprise work, at half Fable price.",
+                fastMode: true),
+            Choice("claude", "fable", "Fable 5.1", "Anthropic's most capable model, for the most demanding work."),
             Choice("claude", "claude-opus-4-8", "Opus 4.8",
-                "Previous flagship Opus. Highly autonomous on long-horizon agentic and knowledge work."),
+                "Previous flagship Opus. Highly autonomous on long-horizon agentic and knowledge work.",
+                fastMode: true),
             Choice("claude", "claude-opus-4-6", "Opus 4.6",
                 "Older Opus. Still accepts temperature and a fixed thinking budget that 4.7+ dropped."),
             Choice("claude", "sonnet", "Sonnet 5", "Balanced speed and capability."),
@@ -219,12 +298,17 @@ internal static class ProviderModelCatalog
         "codex" =>
         [
             Choice("codex", "default", "Codex default", "OpenAI Codex chooses the recommended model."),
+            // Astra leads the list because it is priority 1 in the CLI's own catalog. It needs codex >= 0.153.0;
+            // an older binary rejects the slug, which is why the account menu surfaces the runtime version.
+            Choice("codex", "gpt-6-astra", "GPT-6 Astra",
+                "Our most capable model for complex, demanding work."),
             Choice("codex", CodexModelPreset.SolModelId, CodexModelPreset.SolDisplayName,
                 CodexModelPreset.SolDescription),
-            Choice("codex", CodexModelPreset.TerraModelId, CodexModelPreset.TerraDisplayName,
-                CodexModelPreset.TerraDescription),
-            Choice("codex", CodexModelPreset.LunaModelId, CodexModelPreset.LunaDisplayName,
-                CodexModelPreset.LunaDescription),
+            Choice("codex", "gpt-5.6-terra", "GPT 5.6 Terra",
+                "Balanced GPT-5.6 agentic coding model."),
+            Choice("codex", "gpt-5.6-luna", "GPT 5.6 Luna",
+                "Fast GPT-5.6 agentic coding model."),
+            Choice("codex", CodexSession.SparkModelId, "GPT-5.3 Codex Spark", CodexSession.SparkDescription),
         ],
         "kimi" =>
         [
@@ -236,18 +320,35 @@ internal static class ProviderModelCatalog
             Choice("grok", Grok45Preset.NormalModelId, Grok45Preset.NormalDisplayName,
                 Grok45Preset.NormalDescription),
         ],
+        // No "default" row: this provider has a fixed catalog rather than a CLI that picks for you, and every id
+        // here is one Baseten actually serves.
+        GlmPreset.ProviderId =>
+            GlmPreset.Models
+                .Select(m => new ModelChoice
+                {
+                    Provider = GlmPreset.ProviderId,
+                    Value = m.Value,
+                    Display = m.Display,
+                    Description = m.Description,
+                    ResolvedModel = m.Value,
+                    SupportsEffort = GlmPreset.SupportsEffort,
+                    EffortLevels = new List<string>(),
+                })
+                .ToList(),
         _ =>
         [
             Choice(provider, "default", $"{DisplayName(provider)} default", $"{DisplayName(provider)} chooses the recommended model."),
         ],
     };
 
-    private static ModelChoice Choice(string provider, string value, string display, string description) => new()
+    private static ModelChoice Choice(string provider, string value, string display, string description,
+        bool fastMode = false) => new()
     {
         Provider = provider,
         Value = value,
         Display = display,
         Description = description,
+        SupportsFastMode = fastMode || (provider == "codex" && CodexSession.KnownFastModel(value)),
     };
 }
 

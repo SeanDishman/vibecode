@@ -102,8 +102,8 @@ public sealed class SpotifyService : Observable
     public string VolumeTooltip => !SupportsVolume
         ? "This Spotify device does not support remote volume control"
         : IsMuted
-            ? "Muted - click to adjust, double-click to restore"
-            : $"Volume {_volumePercent}% - click to adjust, double-click to mute";
+            ? "Muted - click to restore, drag or scroll to set the level"
+            : $"Volume {_volumePercent}% - click to mute, drag or scroll to change";
     private static string Fmt(int ms) { var t = TimeSpan.FromMilliseconds(Math.Max(0, ms)); return $"{(int)t.TotalMinutes}:{t.Seconds:00}"; }
 
     public bool HasTrack => !string.IsNullOrEmpty(_track);
@@ -160,8 +160,8 @@ public sealed class SpotifyService : Observable
         try { callback = WaitForCallbackAsync(); }
         catch (Exception ex) { return $"Couldn't open the local callback on port {CallbackPort}: {ex.Message}"; }
 
-        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = authUrl, UseShellExecute = true }); }
-        catch (Exception ex) { return "Couldn't open the browser: " + ex.Message; }
+        if (!ExternalBrowser.TryOpen(authUrl, out var browserError))
+            return "Couldn't open the browser: " + (browserError ?? "no handler for web links.");
 
         var (code, error, gotState) = await callback;
         if (error is not null) return "Spotify denied the request: " + error;
@@ -233,7 +233,11 @@ public sealed class SpotifyService : Observable
             RepeatState = node?["repeat_state"]?.GetValue<string>() ?? "off";
             var device = node?["device"];
             SupportsVolume = device?["supports_volume"]?.GetValue<bool>() ?? true;
-            VolumePercent = device?["volume_percent"]?.GetValue<int>() ?? _volumePercent;
+            // Spotify takes a moment to apply a volume change and report it back. A poll landing inside
+            // that window returns the OLD number, and writing it here would snap the slider out from
+            // under the user's cursor mid-drag - so a recent local change wins until it settles.
+            if (DateTime.UtcNow >= _volumeHeldUntil)
+                VolumePercent = device?["volume_percent"]?.GetValue<int>() ?? _volumePercent;
         }
         catch { /* transient network - keep last state */ }
     }
@@ -254,14 +258,24 @@ public sealed class SpotifyService : Observable
     public Task ToggleShuffleAsync() => PutStateAsync($"shuffle?state={(!_shuffle).ToString().ToLowerInvariant()}");
     public Task CycleRepeatAsync() => PutStateAsync($"repeat?state={(_repeat switch { "off" => "context", "context" => "track", _ => "off" })}");
 
+    /// <summary>How long a locally-set volume outranks whatever the next poll reports. Covers the round
+    /// trip plus the lag before Spotify reports the new value back.</summary>
+    private static readonly TimeSpan VolumeHold = TimeSpan.FromSeconds(3);
+    private DateTime _volumeHeldUntil;
+
     /// <summary>Updates the bound volume immediately while the slider is moving; the UI debounces the network write.</summary>
-    public void PreviewVolume(int volumePercent) => VolumePercent = volumePercent;
+    public void PreviewVolume(int volumePercent)
+    {
+        _volumeHeldUntil = DateTime.UtcNow + VolumeHold;
+        VolumePercent = volumePercent;
+    }
 
     /// <summary>Set the active Spotify device volume. The optimistic local update keeps the slider and icon responsive.</summary>
     public async Task SetVolumeAsync(int volumePercent)
     {
         if (!SupportsVolume) return;
         volumePercent = Math.Clamp(volumePercent, 0, 100);
+        _volumeHeldUntil = DateTime.UtcNow + VolumeHold;
         VolumePercent = volumePercent;
         await PutStateAsync($"volume?volume_percent={volumePercent}");
     }

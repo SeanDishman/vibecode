@@ -16,11 +16,20 @@ public static class ModelPricing
     public const double CacheWriteMultiplier = 1.25;
     public const double CacheReadMultiplier = 0.10;
 
+    /// <summary>Cache-read rate for the 5.1 frontier pair: $0.25 per Mtok against a $10 input, i.e. 0.025x rather
+    /// than the 0.10x every other Anthropic model uses. Taken from the pricing tier the CLI itself carries
+    /// (<c>tier_10_50_cache_read_0_25</c>: input 10, output 50, cache_write_5m 12.5, cache_read 0.25), not a docs
+    /// page - the docs model table still lists Fable 5 only.</summary>
+    public const double CheapCacheReadMultiplier = 0.025;
+
     // input / output USD per 1M tokens. Keyed by the resolved model id with any "[1m]"-style variant tag stripped.
     private static readonly IReadOnlyDictionary<string, Price> Table = new Dictionary<string, Price>(StringComparer.OrdinalIgnoreCase)
     {
         ["claude-fable-5"]    = new(10.00, 50.00),
         ["claude-mythos-5"]   = new(10.00, 50.00),
+        // 5.1 (2026-09): same $10/$50 base as 5, but a quarter the cache-read rate - see CheapCacheReadMultiplier.
+        ["claude-fable-5-1"]  = new(10.00, 50.00),
+        ["claude-mythos-5-1"] = new(10.00, 50.00),
         // Opus 5 (2026-07-24): near-Fable agentic coding at Opus list price; same $5/$25 as 4.x Opus.
         ["claude-opus-5"]     = new(5.00, 25.00),
         ["claude-opus-4-8"]   = new(5.00, 25.00),
@@ -34,6 +43,12 @@ public static class ModelPricing
 
         // OpenAI standard processing rates. The GPT-5.6 cache-write prices are 1.25x input and
         // cached-input prices are 0.10x input, matching the multipliers used by TurnCost.
+        // GPT-6 Astra (2026-09-03) is 2.5x Sol and lands on the same $10/$50 as the Anthropic frontier pair. Its
+        // published $1 cached-input rate is 0.10x input, so CacheReadMultiplier already covers it. NOT modelled:
+        // OpenAI prices a request whose input passes 272K tokens at 2x input/cache and 1.5x output for the WHOLE
+        // request. The Codex CLI gives Astra a 272K window by default, so that surcharge only becomes reachable
+        // on an explicitly enlarged context - past which this estimate reads low.
+        ["gpt-6-astra"]        = new(10.00, 50.00),
         ["gpt-5.6-sol"]        = new(5.00, 30.00),
         ["gpt-5.6-terra"]      = new(2.50, 15.00),
         ["gpt-5.6-luna"]       = new(1.00, 6.00),
@@ -49,6 +64,15 @@ public static class ModelPricing
         ["kimi-k2.7-code-highspeed"] = new(1.90, 8.00),
         ["kimi-for-coding-highspeed"] = new(1.90, 8.00),
         ["kimi-code/kimi-for-coding-highspeed"] = new(1.90, 8.00),
+
+        // GLM through Baseten. Read from the endpoint's own GET /v1/models pricing block rather than a docs page,
+        // so these are the rates the account is actually billed at. Listed explicitly rather than left unlisted:
+        // the fallback below is the Opus tier, which would have reported the cheapest model here as 33x its real
+        // input cost.
+        ["zai-org/glm-5.3-flash"] = new(0.15, 0.50),
+        ["zai-org/glm-5.2"]       = new(1.40, 4.40),
+        ["zai-org/glm-5.2-fast"]  = new(2.10, 6.60),
+        ["zai-org/glm-4.7"]       = new(0.60, 2.20),
     };
 
     /// <summary>Opus-tier fallback for a model we don't have a listed price for (the app defaults to Opus).</summary>
@@ -83,12 +107,25 @@ public static class ModelPricing
         var p = For(modelId);
         var isKimi = id.Equals("k3", StringComparison.OrdinalIgnoreCase)
                      || id.StartsWith("kimi", StringComparison.OrdinalIgnoreCase);
-        var cacheWriteMultiplier = isKimi ? 1.0 : CacheWriteMultiplier;
-        var cacheReadMultiplier = isKimi &&
-                                  (id.Contains("k2.7", StringComparison.OrdinalIgnoreCase)
-                                   || id.Contains("for-coding", StringComparison.OrdinalIgnoreCase))
-            ? 0.20
-            : CacheReadMultiplier;
+        // Baseten publishes no cache-write price for GLM at all, so a write is charged as ordinary input - the
+        // same shape as Kimi's automatic cache rather than Anthropic's paid-write one.
+        var isGlm = id.StartsWith("zai-org/", StringComparison.OrdinalIgnoreCase);
+        var cacheWriteMultiplier = isKimi || isGlm ? 1.0 : CacheWriteMultiplier;
+        // The 5.1 pair is the only Anthropic tier that moves cache_read off 0.10x input; cache writes are
+        // unchanged, so this is the read multiplier alone rather than a whole alternate price shape.
+        var isCheapCacheRead = id.Equals("claude-fable-5-1", StringComparison.OrdinalIgnoreCase)
+                               || id.Equals("claude-mythos-5-1", StringComparison.OrdinalIgnoreCase);
+        var cacheReadMultiplier = isCheapCacheRead
+            ? CheapCacheReadMultiplier
+            : isKimi && (id.Contains("k2.7", StringComparison.OrdinalIgnoreCase)
+                         || id.Contains("for-coding", StringComparison.OrdinalIgnoreCase))
+                ? 0.20
+                // GLM's cache-hit rate is per model, read from the endpoint: 0.20x input on 4.7 and 5.3 Flash,
+                // 0.10x on the 5.2 pair (which is what CacheReadMultiplier already is).
+                : isGlm && (id.Contains("glm-4.7", StringComparison.OrdinalIgnoreCase)
+                            || id.Contains("glm-5.3", StringComparison.OrdinalIgnoreCase))
+                    ? 0.20
+                    : CacheReadMultiplier;
         double inputUsd = (input + cacheWrite * cacheWriteMultiplier + cacheRead * cacheReadMultiplier) * p.InputPerMTok;
         double outputUsd = output * p.OutputPerMTok;
         return (inputUsd + outputUsd) / 1_000_000.0;

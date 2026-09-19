@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -25,20 +25,33 @@ public abstract class Observable : INotifyPropertyChanged
 
 public abstract class ItemVm : Observable;
 
-/// <summary>Backing collection for a chat transcript. A plain Add lands ABOVE any pending <see cref="QueuedItem"/>,
-/// so the greyed "Queued · sends when the agent finishes" cards stay parked at the very bottom where they read as
-/// "still to come". Cards are appended here from several layers — stream/tool output, permission requests, and the
-/// bridge/manager notices MainViewModel posts straight onto a peer's transcript — and enforcing the rule inside the
-/// collection keeps all of them honest instead of trusting every caller to remember.</summary>
+/// <summary>Backing collection for a chat transcript. A plain Add lands ABOVE the pinned tail — the live
+/// <see cref="PendingItem"/> orb and then any <see cref="QueuedItem"/> — so the greyed
+/// "Queued · sends when the agent finishes" cards stay parked at the very bottom where they read as "still to
+/// come", with the "still thinking" orb just above them at the end of what has actually been said. Cards are
+/// appended here from several layers — stream/tool output, permission requests, and the bridge/manager notices
+/// MainViewModel posts straight onto a peer's transcript — and enforcing the rule inside the collection keeps all
+/// of them honest instead of trusting every caller to remember.</summary>
 public sealed class TranscriptItems : ObservableCollection<ItemVm>
 {
+    /// <summary>How far down the pinned tail an item belongs. Ordinary content is 0 and sits above everything.</summary>
+    internal static int TailRank(ItemVm item) => item switch
+    {
+        QueuedItem => 2,
+        PendingItem => 1,
+        _ => 0,
+    };
+
     protected override void InsertItem(int index, ItemVm item)
     {
-        // Only plain appends are redirected. An explicit Insert at a known index is left alone, and a QueuedItem
-        // itself must still be able to reach the true end.
-        if (index == Count && item is not QueuedItem)
+        // Only plain appends are redirected. An explicit Insert at a known index is left alone, and each tail
+        // member must still be able to reach past everything it outranks.
+        if (index == Count)
+        {
+            var rank = TailRank(item);
             for (var i = 0; i < Count; i++)
-                if (this[i] is QueuedItem) { index = i; break; }
+                if (TailRank(this[i]) > rank) { index = i; break; }
+        }
         base.InsertItem(index, item);
     }
 }
@@ -82,6 +95,7 @@ public sealed class SubagentItem : Observable
     private string _task = "";
     private string _activity = "Starting";
     private string _status = "pendingInit";
+    private string? _workflowAgentId;
     private ObservableCollection<ItemVm> _transcript = new();
 
     public SubagentItem() => _transcript.CollectionChanged += OnTranscriptChanged;
@@ -89,6 +103,29 @@ public sealed class SubagentItem : Observable
     public required string ThreadId { get => _threadId; set => Set(ref _threadId, value); }
     /// <summary>The Claude Agent/Task tool that owns this worker. Codex child threads do not need one.</summary>
     public string? ParentToolUseId { get => _parentToolUseId; set => Set(ref _parentToolUseId, value); }
+
+    /// <summary>
+    /// True for a row mirrored out of a running Workflow rather than reported by the provider's own subagent stream.
+    ///
+    /// A Workflow's agents are real child sessions, but the CLI announces them on a different channel entirely
+    /// (<c>task_progress.workflow_progress</c>) and never lists them in the subagent snapshot — so the roster has to
+    /// be told about them separately, and must not then treat that snapshot as evidence they have gone away.
+    /// </summary>
+    public bool FromWorkflow { get; init; }
+
+    /// <summary>For a workflow row: the run's own id for this agent, which names its transcript file
+    /// (<c>agent-&lt;id&gt;.jsonl</c>) inside the run's transcript directory. Reported by the run itself once the
+    /// agent starts, so it is null while the agent is still queued — and the empty-state text has to move off
+    /// "waiting" the moment it lands, hence the notification.</summary>
+    public string? WorkflowAgentId
+    {
+        get => _workflowAgentId;
+        set { if (Set(ref _workflowAgentId, value)) Raise(nameof(TranscriptEmptyText)); }
+    }
+
+    /// <summary>True once this row's on-disk transcript has been streamed in, so a re-open does not replay it.</summary>
+    public bool WorkflowTranscriptLoaded { get; set; }
+
     public string Label { get => _label; set => Set(ref _label, value); }
     public string Task { get => _task; set => Set(ref _task, value); }
     public string Activity { get => _activity; set => Set(ref _activity, value); }
@@ -99,6 +136,7 @@ public sealed class SubagentItem : Observable
         {
             if (!Set(ref _status, value)) return;
             Raise(nameof(IsActive));
+            Raise(nameof(IsAbandoned));
             Raise(nameof(StatusText));
             Raise(nameof(VisualStatus));
             Raise(nameof(TranscriptEmptyText));
@@ -111,9 +149,17 @@ public sealed class SubagentItem : Observable
     /// </summary>
     public ObservableCollection<ItemVm> Transcript => _transcript;
     public bool HasTranscript => _transcript.Count > 0;
-    public string TranscriptEmptyText => IsActive
-        ? "Waiting for this subagent's first detailed event…"
-        : "This provider did not retain detailed output for this subagent.";
+    public string TranscriptEmptyText => FromWorkflow
+        // Its inner events never reach the session stream, so this is read from the run's own transcript files on
+        // disk instead. Until the journal names this agent there is nothing to open yet.
+        ? WorkflowAgentId is null
+            ? IsActive
+                ? "Waiting for this agent's transcript to appear on disk…"
+                : "This run kept no transcript for this agent."
+            : "Reading this agent's transcript…"
+        : IsActive
+            ? "Waiting for this subagent's first detailed event…"
+            : "This provider did not retain detailed output for this subagent.";
 
     internal void UseTranscript(ObservableCollection<ItemVm> transcript)
     {
@@ -129,6 +175,18 @@ public sealed class SubagentItem : Observable
         Raise(nameof(HasTranscript));
 
     public bool IsActive => _status is "pendingInit" or "running";
+
+    /// <summary>
+    /// Stopped without ever finishing — the turn that owned it was interrupted or failed and took it down, or the
+    /// provider reported the child itself interrupted. It returned no result and nothing will report on it again.
+    ///
+    /// The roster leaves these out entirely rather than listing dead rows beside the live ones: the model's usual
+    /// response to a stopped fan-out is to launch the same one again, and a roster that keeps both showed twenty-two
+    /// workers for eleven that were actually running. The evidence is not lost — the Agent card that spawned each one
+    /// is still in the transcript with everything it managed to do.
+    /// </summary>
+    public bool IsAbandoned => _status is "interrupted" or "shutdown" or "notFound";
+
     public string StatusText => _status switch
     {
         "pendingInit" => "starting",
@@ -154,10 +212,12 @@ public sealed class SubagentItem : Observable
 public sealed class UserItem : ItemVm
 {
     private TurnRollbackCheckpoint? _rollbackCheckpoint;
-    private bool _undoBlockedByLaterTurn;
+    private int _newerPendingTurns;
     private bool _undoInProgress;
 
     public required string Text { get; init; }
+    /// <summary>Stable id used by AgentMemory's deduplication and turn provenance. Never shown in the transcript.</summary>
+    internal string MemoryTurnId { get; init; } = "";
     /// <summary>The chat/pane that owns this row. Kept explicitly so shared message templates never have to guess
     /// ownership from the visual tree (which differs between the normal transcript and Bridge panes).</summary>
     public ChatViewModel? Owner { get; init; }
@@ -165,6 +225,51 @@ public sealed class UserItem : ItemVm
     public IReadOnlyList<Attachment>? Attachments { get; init; }
     public bool HasAttachments => Attachments is { Count: > 0 };
     public bool HasText => !string.IsNullOrWhiteSpace(Text);
+
+    // ---- an app-injected message from ANOTHER AGENT (a peer message or a manager work order) ----
+    //
+    // These arrive as user turns because that is the only way into a session, but they are not the user's words and
+    // they should not read like them: the sender is an agent, so the body is markdown, and the app's framing around
+    // it (who sent it, plus a block of reply-protocol addressed to the model) is chrome rather than message. The
+    // parse either recognises a wire this app built or the row falls back to the ordinary prompt bubble.
+
+    private AgentMessageCard? _agentCard;
+    private bool _agentCardParsed;
+
+    /// <summary>UI-only mailbox presentation. Text stays the lightweight provider notification, so showing the
+    /// full peer message here cannot fold it into a user prompt or re-inject the body into model context.</summary>
+    internal void SetAgentDisplay(AgentMessageCard card)
+    {
+        if (!PeerMessagePolicy.IsPeerMessage(Text))
+            throw new InvalidOperationException("Only a peer notification can carry a mailbox display card.");
+        _agentCard = card;
+        _agentCardParsed = true;
+        Raise(nameof(IsAgentMessage)); Raise(nameof(IsUserPrompt));
+        Raise(nameof(AgentGlyph)); Raise(nameof(AgentSender)); Raise(nameof(AgentKind)); Raise(nameof(AgentBody));
+    }
+
+    private AgentMessageCard? AgentCard
+    {
+        get
+        {
+            if (_agentCardParsed) return _agentCard;
+            _agentCardParsed = true;
+            _agentCard = AgentMessagePresentation.TryParse(Text, out var card) ? card : null;
+            return _agentCard;
+        }
+    }
+
+    /// <summary>True only for a message written by another agent — never for anything the human typed. This is what
+    /// gates markdown rendering: the user's own prompt stays literal, so a prompt ABOUT markdown still shows its
+    /// backticks instead of quietly rewriting what they asked.</summary>
+    public bool IsAgentMessage => AgentCard is not null;
+    public bool IsUserPrompt => AgentCard is null;
+    public string AgentGlyph => AgentCard?.Glyph ?? "";
+    public string AgentSender => AgentCard?.Sender ?? "";
+    public string AgentKind => AgentCard?.Kind ?? "";
+    /// <summary>What the sending agent actually wrote — markdown, without the app's header or reply-protocol.</summary>
+    public string AgentBody => AgentCard?.Body ?? Text;
+
     /// <summary>Single-line snippet of the prompt for the "jump to your messages" navigator list (newlines collapsed).</summary>
     public string Preview => CompactToolPresentation.ToSingleLine(Text);
     /// <summary>Short hover text for the navigator row — full Preview can be thousands of chars (bridge/system
@@ -182,15 +287,28 @@ public sealed class UserItem : ItemVm
 
     /// <summary>Only locally-sent prompts have a checkpoint. Restored/history messages deliberately do not.</summary>
     public bool ShowUndo => _rollbackCheckpoint is not null && !FromSubagent;
-    public bool CanUndo => !_undoBlockedByLaterTurn && _rollbackCheckpoint?.CanRollback == true;
-    /// <summary>The rewind button stays actionable while the current turn is running or its checkpoint is sealing.
-    /// Clicking that state requests Stop first; completed older turns remain ordered by CanUndo.</summary>
+    public bool CanUndo => !UndoCascades && _rollbackCheckpoint?.CanRollback == true;
+
+    /// <summary>
+    /// How many later prompts in this same chat would be rewound along with this one.
+    ///
+    /// The checkpoint engine can only unwind newest-first — restoring an older turn under a newer one would strand
+    /// the newer edits on a workspace state they were never written against. That is a real constraint, but it used
+    /// to be expressed by DISABLING every arrow except the newest, which is indistinguishable from a broken button:
+    /// you click the prompt you want to go back to, three turns up, and nothing happens at all. So the ordering is
+    /// now satisfied by rewinding the chain instead of refusing it.
+    /// </summary>
+    public int NewerPendingTurns => _newerPendingTurns;
+    public bool UndoCascades => _newerPendingTurns > 0;
+
+    /// <summary>The rewind button stays actionable while the current turn is running or its checkpoint is sealing
+    /// (clicking that state requests Stop first), and when only this chat's own newer prompts stand in the way —
+    /// those get rewound on the way past. A blocker this chat CANNOT clear, such as another Bridge pane's overlapping
+    /// turn, still disables it, because no amount of cascading here would resolve one.</summary>
     public bool CanRequestUndo => !_undoInProgress
-                                  && !_undoBlockedByLaterTurn
                                   && _rollbackCheckpoint is { WasRolledBack: false } checkpoint
                                   && checkpoint.UnavailableReason is null
-                                  && !checkpoint.BlockedByNewerTurn
-                                  && (checkpoint.CanRollback || !checkpoint.IsCompleted);
+                                  && (checkpoint.CanRollback || !checkpoint.IsCompleted || UndoCascades);
     public bool HasUndoStatus => _rollbackCheckpoint?.WasRolledBack == true;
     public int UndoChangedFileCount => _rollbackCheckpoint?.ChangedFileCount ?? 0;
     public string UndoStatusText => HasUndoStatus ? "Changes undone · prompt restored" : "";
@@ -201,9 +319,11 @@ public sealed class UserItem : ItemVm
             if (_rollbackCheckpoint is null) return "Undo is unavailable for restored history";
             if (_undoInProgress) return "Stopping this turn and restoring the prompt…";
             if (_rollbackCheckpoint.WasRolledBack) return "This prompt's file changes have already been undone";
-            if (_undoBlockedByLaterTurn) return "Undo the newer prompt first so file history stays consistent";
-            if (_rollbackCheckpoint.BlockedByNewerTurn) return "Undo the newer prompt that also edited these files first (including other Bridge panes)";
             if (_rollbackCheckpoint.UnavailableReason is { Length: > 0 } reason) return reason;
+            if (UndoCascades)
+                return $"Go back to this prompt — also undoes the {_newerPendingTurns} newer prompt" +
+                       $"{(_newerPendingTurns == 1 ? "" : "s")} in this chat and their file changes";
+            if (_rollbackCheckpoint.BlockedByNewerTurn) return "Undo the newer prompt that also edited these files first (including other Bridge panes)";
             if (!_rollbackCheckpoint.IsCompleted) return "Stop this turn and its subagents, then restore the prompt and undo its changes";
             var files = _rollbackCheckpoint.ChangedFileCount;
             return files == 0
@@ -213,7 +333,7 @@ public sealed class UserItem : ItemVm
     }
 
     internal TurnRollbackCheckpoint? RollbackCheckpoint => _rollbackCheckpoint;
-    internal bool UndoBlockedByLaterTurn => _undoBlockedByLaterTurn;
+    internal bool UndoBlockedByLaterTurn => UndoCascades;
 
     internal void SetUndoInProgress(bool inProgress)
     {
@@ -231,10 +351,12 @@ public sealed class UserItem : ItemVm
         OnRollbackStateChanged();
     }
 
-    internal void SetUndoBlockedByLaterTurn(bool blocked)
+    internal void SetNewerPendingTurns(int count)
     {
-        if (_undoBlockedByLaterTurn == blocked) return;
-        _undoBlockedByLaterTurn = blocked;
+        if (_newerPendingTurns == count) return;
+        _newerPendingTurns = count;
+        Raise(nameof(NewerPendingTurns));
+        Raise(nameof(UndoCascades));
         Raise(nameof(CanUndo));
         Raise(nameof(CanRequestUndo));
         Raise(nameof(UndoToolTip));
@@ -276,9 +398,16 @@ public sealed class QueuedItem : ItemVm
     }
     /// <summary>The one-shot choice is captured with the queued prompt so later UI toggles cannot change it.</summary>
     public bool UseSwarm { get; init; }
+    private bool _extended;
     /// <summary>True when this entry belongs to the opt-in extended queue. Extended entries are never folded into
-    /// their neighbour and are dispatched in the owner's configured 1-3 request chunks.</summary>
-    public bool Extended { get; init; }
+    /// their neighbour and are dispatched in the owner's configured 1-3 request chunks. Settable, not init-only:
+    /// turning extended queue off demotes whatever is still pending back to ordinary entries so they fold together
+    /// (see ChatViewModel.CollapseExtendedQueue).</summary>
+    public bool Extended
+    {
+        get => _extended;
+        internal set { if (Set(ref _extended, value)) RefreshQueueState(); }
+    }
     private bool _waitingForSwarmCapacity;
     public bool WaitingForSwarmCapacity { get => _waitingForSwarmCapacity; set { if (Set(ref _waitingForSwarmCapacity, value)) Raise(nameof(QueueStatusText)); } }
     private bool _isQueueHead;
@@ -367,6 +496,24 @@ public sealed class TextItem : ItemVm
     /// <summary>Markdown handed to the viewer: the finished text once idle, otherwise a throttled snapshot.</summary>
     public string RenderText => _render;
 
+    /// <summary>
+    /// Set once the app has ROUTED this reply's <c>@@</c> directives, which drops them from what is rendered.
+    ///
+    /// A directive is an instruction to the app, and once it has been carried out the pane already says so with a
+    /// "messaged agent #3" divider while the recipient holds the message itself. Leaving the block on screen shows
+    /// the same text twice and buries the agent's actual report under protocol source ending in a bare "@@END".
+    /// Display only: <see cref="Text"/> keeps the reply verbatim, so Copy, the manager relay and anything that
+    /// re-reads the turn still see exactly what the model wrote.
+    /// </summary>
+    /// <param name="verb">Only the verb the app actually routed, so a block nobody acted on stays on screen.</param>
+    public void HideRoutedDirective(string verb)
+    {
+        if (!_hiddenVerbs.Add(verb)) return;
+        Publish(force: true);
+    }
+
+    private readonly HashSet<string> _hiddenVerbs = new(StringComparer.Ordinal);
+
     public bool HasText => !string.IsNullOrWhiteSpace(_text);
 
     public void Append(string delta) { _text += delta; Raise(nameof(Text)); Raise(nameof(HasText)); Publish(); }
@@ -389,8 +536,13 @@ public sealed class TextItem : ItemVm
 
     // Closing an unterminated fence keeps a half-streamed code block rendering as code instead of leaking its
     // source into the prose; it is dropped again as soon as the model writes the real closing fence.
-    private string Snapshot() =>
-        !_streaming ? _text : IsFenceOpen(_text) ? _text + Cursor + "\n```" : _text + Cursor;
+    private string Snapshot()
+    {
+        // Never while streaming: a half-written block does not parse, so the text would reflow the moment its
+        // terminator arrived. The flag is only set once the turn has ended anyway.
+        var text = _hiddenVerbs.Count > 0 && !_streaming ? AgentDirectiveParser.Strip(_text, _hiddenVerbs) : _text;
+        return !_streaming ? text : IsFenceOpen(text) ? text + Cursor + "\n```" : text + Cursor;
+    }
 
     private static bool IsFenceOpen(string s)
     {
@@ -443,6 +595,29 @@ public sealed class ThinkingItem : ItemVm
     }
 }
 
+/// <summary>
+/// The "still going" mark parked at the end of the transcript for as long as a turn is in flight.
+///
+/// It exists for the stretch this app used to have no answer for: the model is thinking, or a tool has been
+/// running for a minute, and the conversation just sits there. The status strip says "working…" but the place
+/// the reader is actually looking — the bottom of the transcript — is frozen.
+///
+/// It is a transcript item rather than an overlay for two reasons. The message list is a virtualizing ListBox
+/// whose ScrollViewer lives inside its own template, so anything wedged in below the items would cost pixel
+/// virtualization; and both the main window and every Bridge pane bind the same collection to the same implicit
+/// templates, so as an item it lands on both surfaces with no second copy of the XAML.
+///
+/// <see cref="Quiet"/> is the "and nothing is being said" half. It goes false while a text block is actually
+/// streaming, because the words arriving are already the proof of life and a spinner under them is just noise.
+/// The item itself stays put across that — the template fades the orb instead of collapsing it, so text
+/// starting and stopping never shunts the transcript up and down under someone mid-read.
+/// </summary>
+public sealed class PendingItem : ItemVm
+{
+    private bool _quiet = true;
+    public bool Quiet { get => _quiet; set => Set(ref _quiet, value); }
+}
+
 public sealed class DiffLine : Observable
 {
     public required string Kind { get; init; } // add | del | ctx
@@ -464,7 +639,12 @@ public sealed class ToolItem : ItemVm
 {
     public required string Id { get; init; }
     public required string Name { get; init; }
-    public string DisplayName => Name == "CodexEdit" ? "Edit" : Name;
+    public string DisplayName => Name == "CodexEdit" ? Str(Input?["kind"]) switch
+    {
+        "add" => "Create",
+        "delete" => "Delete",
+        _ => "Edit",
+    } : Name;
 
     private JsonNode? _input;
     private string _status = "running";  // running | done | error
@@ -563,9 +743,11 @@ public sealed class ToolItem : ItemVm
     /// <summary>Segoe Fluent Icons glyph for the tool.</summary>
     public string Icon => Name switch
     {
+        "Workflow" => "",                               // hierarchy - a fan-out of agents
         "Bash" or "PowerShell" or "BashOutput" or "KillShell" => "",    // command prompt
         "Read" => "",                                   // page
         "Write" => "",                                  // document
+        "CodexEdit" when Str(Input?["kind"]) == "add" => "",
         "Edit" or "MultiEdit" or "NotebookEdit" or "CodexEdit" => "",  // pencil
         "Grep" or "Glob" or "LS" => "",                 // search
         "WebSearch" or "WebFetch" => "",                // globe
@@ -600,6 +782,9 @@ public sealed class ToolItem : ItemVm
                 "TaskCreate" => S(i["subject"]) ?? "",
                 "TaskUpdate" => S(i["subject"]) ?? (S(i["status"]) is { } us ? $"#{S(i["taskId"])}: {us}" : $"#{S(i["taskId"])}"),
                 "TodoWrite" => $"{(i["todos"] as JsonArray)?.Count ?? 0} items",
+                // A Workflow's whole script is its input, so the generic JSON fallback below rendered several KB of
+                // JavaScript as the card title. meta.description is what the run is actually FOR.
+                "Workflow" => WorkflowSummary(i),
                 "ExitPlanMode" => "proposed a plan",
                 "Skill" or "SlashCommand" => S(i["command"]) ?? S(i["skill"]) ?? "",
                 _ => Trunc(i.ToJsonString(), 90),
@@ -607,6 +792,33 @@ public sealed class ToolItem : ItemVm
             static string? S(JsonNode? n) => n?.GetValue<string>();
         }
     }
+
+    /// <summary>Name a Workflow from its own <c>meta</c>, or from the saved script / registered name when it was
+    /// re-invoked by path instead of by value.</summary>
+    private static string WorkflowSummary(JsonNode input)
+    {
+        var (name, description) = WorkflowRun.ReadMeta(input["script"]?.GetValue<string>());
+        if (description.Length > 0) return description;
+        if (name.Length > 0) return name;
+        if (input["name"]?.GetValue<string>() is { Length: > 0 } registered) return registered;
+        if (input["scriptPath"]?.GetValue<string>() is { Length: > 0 } path)
+            return System.IO.Path.GetFileNameWithoutExtension(path);
+        return "workflow";
+    }
+
+    /// <summary>Live phase/agent tree for a Workflow tool call, filled from the CLI's progress snapshots.
+    /// Null for every other tool.</summary>
+    public WorkflowRun? Workflow
+    {
+        get => _workflow;
+        set { if (Set(ref _workflow, value)) Raise(nameof(HasWorkflow)); }
+    }
+    public bool HasWorkflow => _workflow is not null;
+    private WorkflowRun? _workflow;
+
+    /// <summary>The CLI's background-task id for this tool call, when it launched one. Needed because the
+    /// completion event (<c>task_updated</c>) is keyed by task id, not by tool_use_id.</summary>
+    public string? TaskId { get; set; }
 
     /// <summary>
     /// A genuinely single-line form for collapsed headers. TextWrapping="NoWrap" does not suppress explicit CR/LF
@@ -634,7 +846,57 @@ public sealed class ToolItem : ItemVm
     public string InputPretty => Input?.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) ?? "";
     public string WriteContent => Trunc(Input?["content"]?.GetValue<string>() ?? "", 6000);
     public string PlanMarkdown => Input?["plan"]?.GetValue<string>() ?? "";
-    public string ResultCapped => Trunc(_result ?? "", 6000);
+    public string ResultCapped => Trunc(LaunchNotice(Name, _result) ?? _result ?? "", 6000);
+
+    /// <summary>
+    /// Collapse a background-launch tool result down to the one line that is addressed to the USER.
+    ///
+    /// Both launches hand back a block of text written for the MODEL. Verbatim, from a real run: the async Agent
+    /// one opens "Async agent launched successfully. (This tool result is internal metadata - never quote or paste
+    /// any part of it, including the agentId below, into a user-facing reply.)" and then lists that agent id, an
+    /// internal output_file path, and a paragraph telling the model not to read it - and the card pasted the lot
+    /// into the transcript the user is reading, which is the one place it was never meant to appear. The Workflow
+    /// launch is the same shape: a transcript dir, a script path, and a {scriptPath: ...} resume fragment.
+    ///
+    /// Returns null for every other tool, so no other output is touched, and <see cref="Result"/> itself is left
+    /// exactly as it arrived - the workflow transcript directory is parsed back out of it
+    /// (see <see cref="VibeCode.Services.WorkflowTranscriptStore.DirectoryFromToolResult"/>), so rewriting the
+    /// stored text would break the inspector.
+    /// </summary>
+    internal static string? LaunchNotice(string name, string? result)
+    {
+        // Gate on the tool NAME first. The phrase below is a real string that shows up in ordinary output - a Bash
+        // run that greps a transcript, say - and collapsing that to a launch notice would eat the user's output.
+        // Only these three tools can ever return a launch block.
+        if (name is not ("Agent" or "Task" or "Workflow")) return null;
+        if (string.IsNullOrWhiteSpace(result)) return null;
+        var text = result.TrimStart();
+
+        // Two readings, most specific first, so a reworded launch message degrades to showing the raw text
+        // rather than silently letting the internal block back onto the screen.
+        if (text.StartsWith("Async agent launched", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("This tool result is internal metadata", StringComparison.OrdinalIgnoreCase))
+            return "Running in the background. Open it from the subagent roster to watch it work.";
+
+        if (text.StartsWith("Workflow launched", StringComparison.OrdinalIgnoreCase))
+            return LabelledLine(text, "Run ID:") is { } run
+                ? $"Running in the background as {run}. Its agents are listed above."
+                : "Running in the background. Its agents are listed above.";
+
+        return null;
+    }
+
+    /// <summary>The value of a "Label: value" line in a plain-text tool result, or null if it has none.</summary>
+    private static string? LabelledLine(string text, string label)
+    {
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (!line.StartsWith(label, StringComparison.OrdinalIgnoreCase)) continue;
+            return line[label.Length..].Trim() is { Length: > 0 } value ? value : null;
+        }
+        return null;
+    }
     public string BashCommand => Input?["command"]?.GetValue<string>() ?? "";
     /// <summary>Raw request details needed by compact rows whose dedicated body would otherwise be empty.</summary>
     public string CompactFallbackInput => Name == "NotebookEdit" || Name == "WebFetch" || Name.StartsWith("mcp__", StringComparison.Ordinal)
@@ -677,6 +939,7 @@ public sealed class ToolItem : ItemVm
 
     private void RaiseAll()
     {
+        Raise(nameof(DisplayName)); Raise(nameof(Icon));
         Raise(nameof(Input)); Raise(nameof(Summary)); Raise(nameof(HeaderSummary)); Raise(nameof(InputPretty));
         Raise(nameof(WriteContent)); Raise(nameof(PlanMarkdown)); Raise(nameof(BashCommand));
         Raise(nameof(CompactFallbackInput)); Raise(nameof(AgentType));

@@ -109,6 +109,9 @@ public sealed class ApiKeyDialog : Window
         "codex" => "Create one at platform.openai.com → API keys. Starts with \"sk-\".",
         "grok" => "Create one in the xAI console → API keys. Starts with \"xai-\".",
         "kimi" => "Create one at platform.moonshot.ai → API keys. Kimi is used through its Anthropic-compatible endpoint.",
+        VibeCode.Protocol.GlmPreset.ProviderId =>
+            "Create one at app.baseten.co → API keys. Looks like \"abcd1234.xxxxx\". GLM runs inside VibeCode "
+            + "against Baseten's inference API — save several keys and a rate-limited one falls through to the next.",
         _ => "Paste the provider's API key.",
     };
 

@@ -1,0 +1,219 @@
+<Window x:Class="VibeCode.PhoneBridgeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:svc="clr-namespace:VibeCode.Services"
+        Title="Phone" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Width="600" Height="760" MinWidth="520" MinHeight="600"
+        Background="{StaticResource Bg0}" WindowStartupLocation="CenterOwner"
+        FontFamily="{StaticResource Ui}" FontSize="13" ShowInTaskbar="False"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        DataContext="{x:Static svc:PhoneBridgeService.Instance}">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolVis" />
+    </Window.Resources>
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                BorderThickness="0,0,0,1" Padding="22,16">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock Text="Phone" FontFamily="{StaticResource Display}" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Muted}" FontSize="11.5"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right"
+                            VerticalAlignment="Center">
+                    <Button x:Name="PowerButton" Style="{StaticResource PrimaryButton}" Padding="16,7"
+                            Click="OnTogglePower" AutomationProperties.Name="Turn phone access on or off" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}"
+                BorderThickness="0,1,0,0" Padding="18,12">
+            <DockPanel>
+                <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Content="Reset &amp; unpair all"
+                        Click="OnReset" Foreground="{StaticResource Red}"
+                        ToolTip="Throw away the security key and every paired phone. They will all have to pair again."
+                        AutomationProperties.Name="Reset phone bridge identity" />
+                <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Done" Padding="20,8"
+                        Click="OnClose" IsDefault="True" IsCancel="True" HorizontalAlignment="Right" />
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22,18">
+            <StackPanel MaxWidth="530">
+
+                <!-- what this is -->
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="Read and reply to your chats from your phone"
+                                   FontFamily="{StaticResource Display}" FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5"
+                                   Margin="0,6,0,0"
+                                   Text="Install the VibeCode app on your phone, put it on the same Wi-Fi as this PC, and pair it below. The connection is encrypted and stays on your network — nothing goes through a server on the internet." />
+                    </StackPanel>
+                </Border>
+
+                <!-- Why can't my phone see this PC? Populated from code-behind, because each entry carries an
+                     action rather than just text and a converter-driven template would hide that. -->
+                <Border x:Name="DiagnosticsCard" Style="{StaticResource Card}" Padding="15" Margin="0,0,0,16"
+                        Visibility="Collapsed">
+                    <StackPanel>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Content="Check again"
+                                    Click="OnRecheck" VerticalAlignment="Top" />
+                            <TextBlock x:Name="DiagnosticsTitle" FontFamily="{StaticResource Display}" FontSize="14"
+                                       FontWeight="SemiBold" Text="Your phone will not be able to reach this PC" />
+                        </DockPanel>
+                        <StackPanel x:Name="DiagnosticsList" Margin="0,10,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- connection -->
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,0,0,16"
+                        Visibility="{Binding Running, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <TextBlock Text="This PC" FontFamily="{StaticResource Display}" FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock Text="Address" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,12,0,4" />
+                        <TextBox Text="{Binding Address, Mode=OneWay}" IsReadOnly="True" FontFamily="{StaticResource Mono}"
+                                 FontSize="15" Background="{StaticResource CodeBg}" Padding="10,8"
+                                 AutomationProperties.Name="Bridge address" />
+                        <TextBlock Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="2,6,0,0"
+                                   Text="Type this into the phone app. If your PC has more than one network adapter and the phone can't reach it, try the other address your router shows for this machine." />
+
+                        <TextBlock Text="Safety code" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,14,0,4" />
+                        <TextBlock Text="{Binding SafetyCode}" FontFamily="{StaticResource Mono}" FontSize="18"
+                                   Foreground="{StaticResource Accent}" />
+                        <TextBlock Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="0,5,0,0"
+                                   Text="The phone shows this same code while pairing. If the two don't match, something else on the network is answering — cancel and don't pair." />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <TextBlock Text="Port" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center"
+                                       Margin="0,0,10,0" />
+                            <TextBox x:Name="PortBox" Width="90" Padding="8,5" FontFamily="{StaticResource Mono}"
+                                     AutomationProperties.Name="Bridge port" />
+                            <Button Style="{StaticResource GhostButton}" Content="Apply" Margin="8,0,0,0"
+                                    Click="OnApplyPort" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- generated app: the primary way in, because it needs nothing typed on either device -->
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,0,0,16"
+                        Visibility="{Binding Running, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <TextBlock Text="Your phone app" FontFamily="{StaticResource Display}" FontSize="14" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,8,0,12"
+                                   Text="Builds an Android app that belongs to this PC alone. It has this machine's security key built in, so it can never be talked into connecting to anything else, and it sets itself up the first time you open it — no codes to type." />
+
+                        <StackPanel x:Name="ApkReadyPanel" Margin="0,0,0,12">
+                            <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad8}" Padding="12,10">
+                                <StackPanel>
+                                    <TextBlock x:Name="ApkPathText" FontFamily="{StaticResource Mono}" FontSize="10.5"
+                                               TextWrapping="Wrap" Foreground="{StaticResource Text}" />
+                                    <TextBlock x:Name="ApkStateText" FontSize="10.5" Margin="0,6,0,0"
+                                               TextWrapping="Wrap" Foreground="{StaticResource Amber}" />
+                                </StackPanel>
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Style="{StaticResource GhostButton}" Content="Show the file" Click="OnShowApk" />
+                                <Button x:Name="RevokeApkButton" Style="{StaticResource GhostButton}" Content="Cancel it"
+                                        Foreground="{StaticResource Red}" Margin="8,0,0,0" Click="OnRevokeApk" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <Button x:Name="BuildApkButton" Style="{StaticResource PrimaryButton}" Padding="16,8"
+                                HorizontalAlignment="Left" Content="Generate the app" Click="OnBuildApk" />
+                        <TextBlock x:Name="ApkHintText" Foreground="{StaticResource Faint}" FontSize="10.5"
+                                   TextWrapping="Wrap" Margin="2,8,0,0"
+                                   Text="Copy the file to your phone and open it. Android will ask you to allow installing from this source — that is expected for an app that did not come from the Play Store." />
+                    </StackPanel>
+                </Border>
+
+                <!-- pairing: the manual fallback, for a phone that already has a generic build of the app -->
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,0,0,16"
+                        Visibility="{Binding Running, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <TextBlock Text="Pair a phone by hand" FontFamily="{StaticResource Display}" FontSize="14" FontWeight="SemiBold" />
+
+                        <StackPanel Visibility="{Binding PairingOpen, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="Enter this code in the phone app" Foreground="{StaticResource Muted}"
+                                       FontSize="11" Margin="0,12,0,6" />
+                            <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad10}" Padding="16,14">
+                                <TextBlock Text="{Binding PairingDisplay}" FontFamily="{StaticResource Mono}" FontSize="34"
+                                           FontWeight="SemiBold" HorizontalAlignment="Center"
+                                           Foreground="{StaticResource Text}" />
+                            </Border>
+                            <TextBlock Text="{Binding PairingCountdown}" Foreground="{StaticResource Amber}" FontSize="11"
+                                       HorizontalAlignment="Center" Margin="0,8,0,0" />
+                            <TextBlock Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="0,10,0,0"
+                                       Text="One phone, one code. It stops working as soon as a phone uses it, after five wrong guesses, or when the timer runs out." />
+                            <Button Style="{StaticResource GhostButton}" Content="Cancel pairing" Margin="0,12,0,0"
+                                    HorizontalAlignment="Left" Click="OnCancelPairing" />
+                        </StackPanel>
+
+                        <!-- The inverse of PairingOpen. Driven from code-behind rather than a converter: the app has
+                             no inverting BooleanToVisibility and one panel does not justify adding one. -->
+                        <StackPanel x:Name="PairIdlePanel">
+                            <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,8,0,12"
+                                       Text="Open the VibeCode app on your phone, tap Pair, and enter the address above. Then press the button here for a code." />
+                            <Button Style="{StaticResource PrimaryButton}" Content="Show pairing code" Padding="16,8"
+                                    HorizontalAlignment="Left" Click="OnStartPairing" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- paired devices -->
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="Paired phones" FontFamily="{StaticResource Display}" FontSize="14" FontWeight="SemiBold" />
+                        <ItemsControl ItemsSource="{Binding Devices}" Margin="0,10,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{StaticResource Bg2}" CornerRadius="{StaticResource Rad8}"
+                                            Padding="12,10" Margin="0,0,0,8">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                                                    Content="Revoke" Foreground="{StaticResource Red}"
+                                                    Click="OnRevoke" Tag="{Binding}" VerticalAlignment="Center" />
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                <TextBlock FontSize="10.5" Foreground="{StaticResource Faint}" Margin="0,3,0,0">
+                                                    <Run Text="last seen" />
+                                                    <Run Text="{Binding LastSeen, StringFormat={}{0:g}, Mode=OneWay}" />
+                                                    <Run Text="·" />
+                                                    <Run Text="{Binding LastAddress, Mode=OneWay}" />
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="NoDevices" Text="No phones paired yet." Foreground="{StaticResource Faint}"
+                                   FontSize="11.5" Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- security note -->
+                <Border Style="{StaticResource Card}" Padding="15" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="How it's protected" FontFamily="{StaticResource Display}" FontSize="13"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="• Traffic is TLS-encrypted, and the phone remembers this PC's exact key — it refuses anything else afterwards." />
+                        <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"
+                                   Text="• Every request needs a token that only a paired phone has. The PC stores just a hash of it." />
+                        <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"
+                                   Text="• Nothing is reachable from outside your Wi-Fi, and the listener is off until you turn it on." />
+                        <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"
+                                   Text="• Lost the phone? Revoke it above and it is locked out immediately." />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock x:Name="ErrorLine" Foreground="{StaticResource Red}" FontSize="11.5" TextWrapping="Wrap"
+                           Margin="2,4,0,0" Visibility="Collapsed" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

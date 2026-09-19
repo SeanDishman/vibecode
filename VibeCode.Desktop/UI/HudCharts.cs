@@ -11,6 +11,17 @@ namespace VibeCode.UI;
 public enum HudMetric { Tokens, Cost, Energy }
 
 /// <summary>
+/// How a throughput panel draws its buckets.
+///
+/// <see cref="Bars"/> is one column per bucket - right for a strip you read bucket-by-bucket, like the HUD's
+/// 24-hour spend. <see cref="Line"/> is a stacked area with the total stroked along the top, which is the shape
+/// a time series wants once the buckets get small and mostly empty: at 5-second resolution a working session is
+/// two or three lone columns in a field of white, and the eye reads the gaps as "no data" rather than as "idle".
+/// A line has nowhere to disappear to - it simply sits on the baseline - so the same reading becomes continuous.
+/// </summary>
+public enum ThroughputPlot { Bars, Line }
+
+/// <summary>
 /// The HUD's main panel: one bar per clock hour, each bar stacked by model.
 ///
 /// Stacking by model is the only "extra" here, and it earns its place - the segments share ONE axis and one
@@ -39,8 +50,8 @@ public sealed class HourlyThroughput : FrameworkElement
         new FrameworkPropertyMetadata(HudMetric.Tokens, FrameworkPropertyMetadataOptions.AffectsRender));
 
     /// <summary>Minutes per bar. Drives the x-axis tick spacing, the label format and the tooltip title, so the
-    /// same panel reads correctly at 30-minute, hourly and daily resolution. 60 keeps the original 24-hour HUD
-    /// strip byte-for-byte as it was.</summary>
+    /// same panel reads correctly from 5-second to daily resolution. 60 keeps the original 24-hour HUD strip
+    /// byte-for-byte as it was.</summary>
     public static readonly DependencyProperty BucketMinutesProperty = DependencyProperty.Register(
         nameof(BucketMinutes), typeof(double), typeof(HourlyThroughput),
         new FrameworkPropertyMetadata(60.0, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -50,6 +61,23 @@ public sealed class HourlyThroughput : FrameworkElement
         get => (double)GetValue(BucketMinutesProperty);
         set => SetValue(BucketMinutesProperty, value);
     }
+
+    /// <summary>Bars or a stacked area with a stroked total. Defaults to Bars so every existing panel is
+    /// untouched; the wall's throughput panels opt in.</summary>
+    public static readonly DependencyProperty PlotProperty = DependencyProperty.Register(
+        nameof(Plot), typeof(ThroughputPlot), typeof(HourlyThroughput),
+        new FrameworkPropertyMetadata(ThroughputPlot.Bars, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public ThroughputPlot Plot
+    {
+        get => (ThroughputPlot)GetValue(PlotProperty);
+        set => SetValue(PlotProperty, value);
+    }
+
+    /// <summary>True for the wall's live panels, where a bar is seconds rather than minutes. Every label on
+    /// this panel then has to carry the seconds too: at 5-second bars "HH:mm" prints the same tick twelve times
+    /// running, which is worse than printing nothing.</summary>
+    private bool SubMinute => BucketMinutes > 0 && BucketMinutes < 1;
 
     public IReadOnlyList<HourUsage>? Hours
     {
@@ -226,9 +254,13 @@ public sealed class HourlyThroughput : FrameworkElement
                 ? 1
                 : HudMotion.Lerp(_from.GetValueOrDefault(hour.Hour), total, morph) / total;
 
+            if (Plot == ThroughputPlot.Line)
+            {
+                // The area itself is already drawn; all this loop still owns here is the x-axis labelling below.
+            }
             // An hour with nothing in it still gets a tick on the baseline, so idle time is visible as idle
             // rather than as a gap the eye reads straight through.
-            if (total <= 0)
+            else if (total <= 0)
             {
                 dc.DrawRectangle(ink.Axis, null, new Rect(left, plot.Bottom - 2, barWidth, 2));
             }
@@ -256,7 +288,10 @@ public sealed class HourlyThroughput : FrameworkElement
             // Hourly keeps its original rhythm: a tick every 3 clock hours, plus midnight, which is what makes a
             // 24h strip readable at a glance. Other resolutions aim for roughly eight labels across the panel
             // instead, because a 30-minute strip on the same rule would print a label every six bars.
-            var isMidnight = hour.Hour is { Hour: 0, Minute: 0 };
+            // Midnight is a landmark on a panel of hours and an accident on a panel of seconds: the first
+            // twelve 5-second bars of a day all satisfy Hour 0 / Minute 0, and every one of them would print
+            // the weekday over a tick that is really 00:00:35.
+            var isMidnight = !SubMinute && hour.Hour is { Hour: 0, Minute: 0 };
             var showTick = BucketMinutes == 60
                 ? hour.Hour.Hour % 3 == 0
                 : i % Math.Max(1, (int)Math.Ceiling(hours.Count / 8.0)) == 0;
@@ -269,6 +304,7 @@ public sealed class HourlyThroughput : FrameworkElement
                 var text = BucketMinutes >= 1440 ? hour.Hour.ToString("dd MMM")
                     : isMidnight ? hour.Hour.ToString("ddd")
                     : BucketMinutes == 60 ? hour.Hour.ToString("HH")
+                    : SubMinute ? hour.Hour.ToString("HH:mm:ss")
                     : BucketMinutes >= 120 && spansDays ? hour.Hour.ToString("dd HH:mm")
                     : hour.Hour.ToString("HH:mm");
                 var ft = _label.Make(text, 8.5, isMidnight ? ink.Secondary : ink.Muted);
@@ -278,14 +314,104 @@ public sealed class HourlyThroughput : FrameworkElement
 
         Chart.Rule(dc, Chart.Hairline(ink.Axis), plot.Left, plot.Bottom, plot.Right, plot.Bottom);
 
+        // AFTER the axis rule, deliberately. An idle bucket puts the total line exactly on the baseline, and drawing
+        // the axis over it turned every quiet stretch back into "nothing here" — which is the entire thing the line
+        // was meant to fix. The line owns the baseline; the axis shows through the translucent bands either side.
+        if (Plot == ThroughputPlot.Line) DrawArea(dc, ink, plot, hours, max, morph, slot);
+
         if (_hover >= 0 && _hover < hours.Count) DrawTooltip(dc, ink, size, hours[_hover]);
+    }
+
+    /// <summary>
+    /// The stacked area, plus the total stroked along its top edge — the "stock chart" reading of the same data.
+    ///
+    /// Two things make this a band chart rather than one flat line. The models keep their <see cref="UsagePalette"/>
+    /// colours, so the panel still answers "what was running", which a single line throws away. And the model order
+    /// is fixed ONCE for the whole window (by each model's total across it) instead of per bucket the way the bars
+    /// order themselves — per-bucket ordering is invisible on separated columns, but on a continuous area it makes
+    /// bands swap places mid-chart and cross over each other.
+    /// </summary>
+    private void DrawArea(DrawingContext dc, ChartInk ink, Rect plot, IReadOnlyList<HourUsage> hours, double max,
+        double morph, double slot)
+    {
+        double X(int i) => plot.Left + slot * (i + 0.5);
+        double Y(double value) => plot.Bottom - plot.Height * Math.Clamp(value / max, 0, 1);
+
+        // Per-bucket morph scale, exactly as the bars use: the stack keeps its proportions and is scaled whole.
+        var scale = new double[hours.Count];
+        for (var i = 0; i < hours.Count; i++)
+        {
+            var total = Value(hours[i]);
+            scale[i] = morph >= 1 || total <= 0
+                ? 1
+                : HudMotion.Lerp(_from.GetValueOrDefault(hours[i].Hour), total, morph) / total;
+        }
+
+        var models = hours.SelectMany(h => h.ByModel)
+            .GroupBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Sum(kv => Value(kv.Value, Metric)))
+            .Select(g => g.Key)
+            .ToList();
+
+        // Running cumulative height per bucket, so each band is drawn between the stack below it and itself.
+        var lower = new double[hours.Count];
+        foreach (var model in models)
+        {
+            var upper = new double[hours.Count];
+            var any = false;
+            for (var i = 0; i < hours.Count; i++)
+            {
+                var v = hours[i].ByModel.TryGetValue(model, out var slice) ? Value(slice, Metric) : 0;
+                upper[i] = lower[i] + Math.Max(0, v) * scale[i];
+                if (v > 0) any = true;
+            }
+            if (any)
+            {
+                var band = new StreamGeometry();
+                using (var ctx = band.Open())
+                {
+                    ctx.BeginFigure(new Point(X(0), Y(upper[0])), isFilled: true, isClosed: true);
+                    for (var i = 1; i < hours.Count; i++) ctx.LineTo(new Point(X(i), Y(upper[i])), true, false);
+                    for (var i = hours.Count - 1; i >= 0; i--) ctx.LineTo(new Point(X(i), Y(lower[i])), true, false);
+                }
+                band.Freeze();
+                dc.DrawGeometry(Chart.Frozen(UsagePalette.ColorFor(model), 0.42), null, band);
+            }
+            lower = upper;
+        }
+
+        // The total line last, over every band. This is the shape the panel is actually read as.
+        var line = new StreamGeometry();
+        using (var ctx = line.Open())
+        {
+            ctx.BeginFigure(new Point(X(0), Y(lower[0])), isFilled: false, isClosed: false);
+            for (var i = 1; i < hours.Count; i++) ctx.LineTo(new Point(X(i), Y(lower[i])), true, false);
+        }
+        line.Freeze();
+        var stroke = new Pen(ink.Accent, 1.6)
+        {
+            LineJoin = PenLineJoin.Round,
+            StartLineCap = PenLineCap.Round,
+            EndLineCap = PenLineCap.Round,
+        };
+        stroke.Freeze();
+        dc.DrawGeometry(null, stroke, line);
+
+        // Hover: a crosshair down the bucket and a dot on the line, so the tooltip's figures have a visible anchor.
+        if (_hover < 0 || _hover >= hours.Count) return;
+        var hx = X(_hover);
+        Chart.Rule(dc, Chart.Hairline(ink.Axis), hx, plot.Top, hx, plot.Bottom);
+        dc.DrawEllipse(ink.Accent, null, new Point(hx, Y(lower[_hover])), 3, 3);
     }
 
     private void DrawTooltip(DrawingContext dc, ChartInk ink, Size size, HourUsage hour)
     {
         var rows = new List<(string, string)>
         {
-            ("turns", hour.Turns.ToString("N0")),
+            // A live bucket is fed by usage SNAPSHOTS, not by finished turns - one turn streaming across a
+            // minute posts a row every few hundred milliseconds - so calling the count "turns" there would
+            // report a single answer as a dozen of them.
+            (SubMinute ? "updates" : "turns", hour.Turns.ToString("N0")),
             ("tokens", UsageAnalytics.Tokens(hour.Total)),
             ("cost", UsageAnalytics.Money(hour.CostUsd)),
             ("energy", UsageAnalytics.Energy(hour.EnergyWh)),
@@ -296,6 +422,7 @@ public sealed class HourlyThroughput : FrameworkElement
         const double pad = 8, gap = 3, titleSize = 10.5, rowSize = 9.5;
         var title = BucketMinutes >= 1440 ? hour.Hour.ToString("ddd dd MMM")
             : BucketMinutes == 60 ? hour.Hour.ToString("ddd HH:00")
+            : SubMinute ? hour.Hour.ToString("HH:mm:ss")
             : hour.Hour.ToString("ddd HH:mm");
         var width = _label.Width(title, titleSize);
         var height = _label.Height(title, titleSize);
