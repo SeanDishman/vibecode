@@ -1,0 +1,235 @@
+<UserControl x:Class="VibeCode.UI.BridgeSharedTerminal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="clr-namespace:VibeCode.UI"
+             Background="{DynamicResource SurfacePane}" FontFamily="{DynamicResource Ui}"
+             UseLayoutRounding="True" SizeChanged="OnPanelSizeChanged">
+    <UserControl.Resources>
+        <ui:StatusBrushConverter x:Key="StatusBrush" />
+        <BooleanToVisibilityConverter x:Key="BoolVis" />
+        <ui:NonEmptyToVisibilityConverter x:Key="ShowIf" />
+        <DataTemplate DataType="{x:Type ui:BridgeTranscriptEntry}">
+            <Border x:Name="EntryBorder" MaxWidth="920" Margin="20,0" Padding="0,4" HorizontalAlignment="Stretch"
+                    BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0">
+                <Grid x:Name="EntryRoot">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="96" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <StackPanel x:Name="EntryAgentHeader" Margin="0,10,12,0" VerticalAlignment="Top"
+                                Visibility="{Binding StartsAgentGroup, Converter={StaticResource BoolVis}}">
+                        <TextBlock x:Name="EntryAgent" Text="{Binding Owner.BridgeTerminalIdentity}" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Owner.BridgeTerminalIdentity}" />
+                        <TextBlock x:Name="EntryRole" FontSize="10" Foreground="{DynamicResource Muted}" Margin="0,2,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="Worker" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Owner.IsBridgeManager}" Value="True">
+                                            <Setter Property="Text" Value="Orchestrator" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    <!-- The content's owning chat stays in the visual tree for permission, copy and tool handlers. -->
+                    <Grid x:Name="EntryBody" Grid.Column="1">
+                        <ContentControl x:Name="EntryContent" DataContext="{Binding Owner}"
+                                        Content="{Binding DataContext.Item, ElementName=EntryRoot}"
+                                        HorizontalContentAlignment="Stretch" />
+                    </Grid>
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding StartsAgentGroup}" Value="True">
+                    <Setter TargetName="EntryBorder" Property="Padding" Value="0,8,0,4" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding EndsAgentGroup}" Value="True">
+                    <Setter TargetName="EntryBorder" Property="Padding" Value="0,4,0,8" />
+                    <Setter TargetName="EntryBorder" Property="BorderThickness" Value="{DynamicResource AgentMessageDividerThickness}" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding StartsAgentGroup}" Value="True" />
+                        <Condition Binding="{Binding EndsAgentGroup}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter TargetName="EntryBorder" Property="Padding" Value="0,8" />
+                </MultiDataTrigger>
+                <DataTrigger Binding="{Binding IsShell}" Value="True">
+                    <Setter TargetName="EntryContent" Property="MaxWidth" Value="760" />
+                    <Setter TargetName="EntryContent" Property="HorizontalAlignment" Value="Left" />
+                    <Setter TargetName="EntryContent" Property="Width" Value="{Binding ActualWidth, ElementName=EntryBody}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </UserControl.Resources>
+    <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition x:Name="RosterColumn" Width="232" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+        <Border BorderBrush="{DynamicResource SurfaceOutline}" BorderThickness="0,0,1,0" Background="{DynamicResource SurfaceBar}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="12,14,12,10">
+                    <DockPanel>
+                        <ui:OrbitSpinner DockPanel.Dock="Right" Width="22" Height="22" Ink="{DynamicResource Accent}"
+                                         Visibility="{Binding HasWorkingAgents, Converter={StaticResource BoolVis}}"
+                                         Spin="{Binding HasWorkingAgents}" AutomationProperties.Name="Agents are working"
+                                         ToolTip="An agent or subagent is still working" />
+                        <TextBlock Text="Agents" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    </DockPanel>
+                    <WrapPanel Margin="0,10,0,0">
+                        <Button Content="Add worker" Click="OnLaunchWorker" Style="{DynamicResource GhostButton}"
+                                Padding="9,6" Margin="0,0,4,4" AutomationProperties.Name="Add worker to this bridge" />
+                        <Button Content="Start orchestrator" Click="OnLaunchOrchestrator" Style="{DynamicResource GhostButton}"
+                                Padding="9,6" Margin="0,0,0,4" ToolTip="Start another orchestrator with its own worker group"
+                                AutomationProperties.Name="Start another bridge orchestrator" />
+                    </WrapPanel>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Bottom" Margin="14,10,12,14">
+                    <Button Content="Show all agents" Click="OnShowAll" Style="{DynamicResource GhostButton}"
+                            Padding="9,5" Margin="0,0,0,8" HorizontalAlignment="Left"
+                            Visibility="{Binding IsReviewing, Converter={StaticResource BoolVis}}"
+                            AutomationProperties.Name="Show all agents in the shared terminal" />
+                    <TextBlock Text="Select to prompt · Review to inspect" FontSize="10.5"
+                               Foreground="{DynamicResource Muted}" TextWrapping="Wrap" />
+                </StackPanel>
+                <!-- Tall agent cards need pixel scrolling so one wheel tick does not skip several agents. -->
+                <ListBox x:Name="AgentRoster" ItemsSource="{Binding Agents}" SelectedItem="{Binding Target, Mode=TwoWay}"
+                         Background="Transparent" BorderThickness="0" Padding="6,0,6,6"
+                         HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.ScrollUnit="Pixel"
+                         AutomationProperties.Name="All bridge agents and worker groups">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0,2" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" />
+                            <Setter Property="Template">
+                                <Setter.Value><ControlTemplate TargetType="ListBoxItem">
+                                    <Border x:Name="AgentRow" Padding="8" CornerRadius="6" Background="{TemplateBinding Background}">
+                                        <ContentPresenter />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsSelected" Value="True"><Setter TargetName="AgentRow" Property="Background" Value="{DynamicResource AccentSoft}" /></Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="AgentRow" Property="Background" Value="{DynamicResource Bg2}" /></Trigger>
+                                        <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="AgentRow" Property="BorderBrush" Value="{DynamicResource Accent}" /><Setter TargetName="AgentRow" Property="BorderThickness" Value="1" /></Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate></Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding BridgeHasCoordinator}" Value="True"><Setter Property="Margin" Value="12,0,0,2" /></DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel ToolTip="{Binding BridgeActivitySummary}">
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Content="&#xE712;" FontFamily="{DynamicResource Icons}"
+                                            FontSize="11" Style="{DynamicResource GhostButton}" Padding="5,2"
+                                            Click="OnAgentMenu" ToolTip="Agent actions" AutomationProperties.Name="Agent actions" />
+                                    <TextBlock Text="{Binding BridgeTerminalIdentity}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" />
+                                </DockPanel>
+                                <TextBlock Text="{Binding BridgeTaskName}" FontSize="12" Margin="0,3,0,0"
+                                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding BridgeGroupLabel}" FontSize="10.5" Margin="0,3,0,0"
+                                           Foreground="{DynamicResource Muted}" TextWrapping="Wrap" />
+                                <DockPanel Margin="0,6,0,2">
+                                    <TextBlock DockPanel.Dock="Left" Text="Review" FontSize="10.5" Foreground="{DynamicResource Muted}"
+                                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <ComboBox x:Name="AgentReviewLevelPicker" DisplayMemberPath="Label" SelectedValuePath="Value"
+                                              ItemsSource="{Binding DataContext.ReviewLevels, RelativeSource={RelativeSource AncestorType={x:Type ui:BridgeSharedTerminal}}}"
+                                              SelectedValue="{Binding BridgeReviewLevel, Mode=OneWay}" SelectionChanged="OnReviewLevelChanged"
+                                              ToolTip="{Binding BridgeReviewHint}" MinHeight="26" FontSize="11"
+                                              AutomationProperties.Name="{Binding BridgeTerminalIdentity, StringFormat={}{0} review level}" />
+                                </DockPanel>
+                                <TextBlock Text="{Binding BridgeConfigurationDisplay}" FontSize="10.5" Margin="0,3,0,0"
+                                           Foreground="{DynamicResource Muted}" TextWrapping="Wrap"
+                                           ToolTip="{Binding BridgeConfigurationDisplay}" />
+                                <TextBlock Text="{Binding BridgeOrchestrationScope}" FontSize="10.5" Margin="0,4,0,0"
+                                           Foreground="{DynamicResource Muted}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                           LineHeight="14" LineStackingStrategy="BlockLineHeight" MaxHeight="28"
+                                           ToolTip="{Binding BridgeOrchestrationScope}"
+                                           Visibility="{Binding BridgeOrchestrationScope, Converter={StaticResource ShowIf}}" />
+                                <TextBlock Text="{Binding BridgeReviewLabel}" FontSize="10.5" Margin="0,3,0,0"
+                                           Foreground="{DynamicResource Muted}" ToolTip="{Binding BridgeReviewSummary}"
+                                           Visibility="{Binding IsBridgeManager, Converter={StaticResource BoolVis}}" />
+                                <TextBlock Text="{Binding PeerInboxLabel}" FontSize="10.5" Margin="0,3,0,0"
+                                           Foreground="{DynamicResource Accent}"
+                                           Visibility="{Binding UnreadPeerMessageCount, Converter={StaticResource ShowIf}}" />
+                                <TextBlock Text="{Binding BridgeActivitySummary}" FontSize="11" Foreground="{DynamicResource Muted}"
+                                           Margin="0,5,0,0" MaxHeight="28" LineHeight="14" LineStackingStrategy="BlockLineHeight"
+                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
+                                <DockPanel Margin="0,5,0,0">
+                                    <Button DockPanel.Dock="Right" Content="Review" Click="OnReviewAgent" Padding="7,3"
+                                            Style="{DynamicResource GhostButton}" FontSize="10.5"
+                                            AutomationProperties.Name="{Binding BridgeTerminalIdentity, StringFormat=Review {0} conversation}" />
+                                    <Grid VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Ellipse Width="6" Height="6" Fill="{Binding Status, Converter={StaticResource StatusBrush}}" Margin="0,0,5,0" />
+                                        <TextBlock Grid.Column="1" Text="{Binding BridgeAvailabilityText}" FontSize="10.5"
+                                                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" />
+                                    </Grid>
+                                </DockPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+            <Border Padding="16,12" BorderBrush="{DynamicResource Stroke}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding HasPlan, Converter={StaticResource BoolVis}}">
+                <StackPanel>
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding PlanAgreementText}" Foreground="{DynamicResource Muted}" FontSize="11" Margin="16,0,0,0" />
+                        <TextBlock Text="{Binding PlanProgressText}" Foreground="{DynamicResource Text}" FontSize="13" FontWeight="SemiBold" />
+                    </DockPanel>
+                    <ProgressBar Value="{Binding CompletedSteps, Mode=OneWay}" Maximum="{Binding TotalSteps}" Height="4" Margin="0,8,0,8"
+                                 Foreground="{DynamicResource Accent}" Background="{DynamicResource Bg3}" BorderThickness="0"
+                                 AutomationProperties.Name="Completed plan steps" ToolTip="Each completed step counts equally. Activity alone does not count as progress." />
+                    <TextBlock Text="{Binding CurrentPlanStep}" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" MaxHeight="48" TextTrimming="CharacterEllipsis" />
+                    <Expander Header="Plan details" Foreground="{DynamicResource Text}" Margin="0,8,0,0" FontSize="12">
+                        <ListBox ItemsSource="{Binding PlanSteps}" MaxHeight="210" Background="Transparent" BorderThickness="0"
+                                 HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                                 AutomationProperties.Name="Plan steps and actual progress">
+                            <ListBox.ItemTemplate><DataTemplate>
+                                <StackPanel Margin="0,4" ToolTip="{Binding Detail}">
+                                    <TextBlock Text="{Binding Label}" Foreground="{DynamicResource Text}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                    <TextBlock Text="{Binding Files}" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap"
+                                               Visibility="{Binding Files, Converter={StaticResource ShowIf}}" />
+                                </StackPanel>
+                            </DataTemplate></ListBox.ItemTemplate>
+                        </ListBox>
+                    </Expander>
+                </StackPanel>
+            </Border>
+            <ListBox Grid.Row="1" x:Name="SharedTranscript" ItemsSource="{Binding Activity}"
+                     Background="Transparent" BorderThickness="0" Padding="0" Margin="0,8,0,0" HorizontalContentAlignment="Stretch"
+                     ui:NavHost.IsEnabled="True" ui:TranscriptSelection.IsEnabled="True" ui:AutoScroll.Enabled="True"
+                     ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto" VirtualizingPanel.IsVirtualizing="True"
+                     VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel"
+                     VirtualizingPanel.CacheLength="1" VirtualizingPanel.CacheLengthUnit="Page"
+                     AutomationProperties.Name="Shared bridge terminal activity">
+                <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate></ListBox.ItemsPanel>
+                <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
+                    <Setter Property="Width" Value="{Binding ViewportWidth, RelativeSource={RelativeSource AncestorType={x:Type ScrollViewer}}}" />
+                    <Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0" />
+                    <Setter Property="BorderThickness" Value="0" /><Setter Property="Background" Value="Transparent" />
+                    <Setter Property="Focusable" Value="False" /><Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter /></ControlTemplate></Setter.Value></Setter>
+                </Style></ListBox.ItemContainerStyle>
+            </ListBox>
+            <TextBlock Grid.Row="1" Text="Choose an agent below to begin, or start an orchestrator with its own workers."
+                       Foreground="{DynamicResource Muted}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
+                       MaxWidth="360" Margin="24,36" HorizontalAlignment="Center" VerticalAlignment="Top"
+                       IsHitTestVisible="False"
+                       Visibility="{Binding Activity.IsEmpty, Converter={StaticResource BoolVis}}" />
+            <StackPanel Grid.Row="2" MaxWidth="920" Margin="16,10,16,12">
+                <ContentControl x:Name="SharedComposer" Content="{Binding Target}"
+                                ContentTemplate="{DynamicResource BridgeComposerTemplate}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

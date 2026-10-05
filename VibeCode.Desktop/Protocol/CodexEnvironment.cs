@@ -26,6 +26,9 @@ public static class CodexEnvironment
         typeof(CodexEnvironment).Assembly.GetName().Version?.ToString() ?? BrowserBuildFlavor;
     private static readonly object PrepareLock = new();
     private static readonly HashSet<string> PreparedHomes = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object VerifyLock = new();
+    private static string? _verifyingRuntimePath;
+    private static Task<RuntimeIntegrityResult>? _verifyingRuntimeTask;
 
     public static string HomeDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VibeCode", "codex");
@@ -180,7 +183,8 @@ public static class CodexEnvironment
             }
         }
         McpCatalog.EnsureLaunchReady(mcpServers, "codex");
-        var mcp = McpCatalog.BuildCodexProjection(mcpServers);
+        // Keep reporting in the isolated home so Settings changes can reload it at turn boundaries.
+        var mcp = McpCatalog.BuildCodexProjection(mcpServers?.Where(server => server.Id != AgentStatusMcpRegistration.ManagedId));
         var projectedArgumentLength = mcp.ConfigOverrides.Sum(value => value.Length + 3);
         if (projectedArgumentLength > McpCatalog.MaxCodexProjectionCharacters)
             throw new InvalidOperationException(
@@ -270,6 +274,22 @@ public static class CodexEnvironment
         catch (Exception ex)
         {
             return new RuntimeIntegrityResult(false, "Could not verify the Codex runtime: " + ex.Message, null);
+        }
+    }
+
+    /// <summary>Run the full signature check away from WPF's dispatcher. Chats launched together can share one
+    /// in-flight check of the same executable; a later launch checks again so a changed runtime is never trusted
+    /// from an earlier result.</summary>
+    internal static Task<RuntimeIntegrityResult> VerifyRuntimeIntegrityAsync(string path)
+    {
+        path = Path.GetFullPath(path);
+        lock (VerifyLock)
+        {
+            if (_verifyingRuntimeTask is { IsCompleted: false }
+                && string.Equals(_verifyingRuntimePath, path, StringComparison.OrdinalIgnoreCase))
+                return _verifyingRuntimeTask;
+            _verifyingRuntimePath = path;
+            return _verifyingRuntimeTask = Task.Run(() => VerifyRuntimeIntegrity(path));
         }
     }
 

@@ -8,9 +8,6 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Themes/Dark.xaml" />
             </ResourceDictionary.MergedDictionaries>
-            <!-- App-scoped so standalone UserControls (e.g. the Games popup card, which is built
-                 outside MainWindow's resource scope) can bind through it. -->
-            <ui:NonEmptyToVisibilityConverter x:Key="NonEmptyVis" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

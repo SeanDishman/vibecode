@@ -8,6 +8,8 @@ namespace VibeCode.Services;
 /// <summary>One reopenable chat tab: its folder, resumable session id, and title.</summary>
 public sealed class OpenChatState
 {
+    public ChatMetadata? Metadata { get; set; }
+    public ChatGoal? Goal { get; set; }
     public string Cwd { get; set; } = "";
     public string? SessionId { get; set; }
     public string Provider { get; set; } = "claude";
@@ -25,6 +27,10 @@ public sealed class OpenChatState
     /// <c>init</c> event reports the CLI's own mode and would overwrite anything the pane had not registered as a
     /// deliberate choice.</para></summary>
     public string? Mode { get; set; }
+    /// <summary>This chat's own fast mode. Without it a restored chat fell back to <see cref="AppSettings.FastMode"/>,
+    /// the seed for NEW chats - whatever any chat toggled last - so turning fast mode on in one Bridge pane turned it
+    /// on for every Claude chat after the next launch. Null in older snapshots, which keep using the seed.</summary>
+    public bool? FastMode { get; set; }
     /// <summary>Unsent composer text. A force quit must not throw away a prompt the user was still writing.</summary>
     public string? Draft { get; set; }
     /// <summary>Chat is held back from the Second Brain. Persisted so a restart cannot quietly start recording a
@@ -42,6 +48,18 @@ public sealed class RecentDirectoryState
 /// <summary>One saved bridge peer - enough to re-spawn its provider thread later.</summary>
 public sealed class SavedBridgePane
 {
+    public string? AgentId { get; set; }
+    public ChatGoal? Goal { get; set; }
+    public VibeCode.UI.BridgeAgentConfiguration? Configuration { get; set; }
+    public VibeCode.UI.BridgeAgentConfiguration? WorkerConfiguration { get; set; }
+    public string? CoordinatorSessionId { get; set; }
+    public string? OrchestrationScope { get; set; }
+    public string? TaskState { get; set; }
+    public string? ReviewState { get; set; }
+    public string? ReviewSummary { get; set; }
+    public string? ActivitySummary { get; set; }
+    public string? TaskName { get; set; }
+    public bool CoordinatesOnly { get; set; }
     public string Cwd { get; set; } = "";
     public string? SessionId { get; set; }   // resumable id; null = never started, skip
     public string? Label { get; set; }       // e.g. "Claude 2" or "Codex 2"
@@ -66,6 +84,22 @@ public sealed class SavedBridgePane
 /// The first agent is a normal chat in OpenChats; this only stores the peers + a link to the host.</summary>
 public sealed class SavedBridgeState
 {
+    public BridgeWorkState? Work { get; set; }
+    public string? HostAgentId { get; set; }
+    /// <summary>True for a live roster at shutdown; false after the user closes it. Null migrates older snapshots.</summary>
+    public bool? ReconnectOnStartup { get; set; }
+    public VibeCode.UI.BridgeAgentConfiguration? HostConfiguration { get; set; }
+    public VibeCode.UI.BridgeAgentConfiguration? HostWorkerConfiguration { get; set; }
+    public string? HostCoordinatorSessionId { get; set; }
+    public string? HostOrchestrationScope { get; set; }
+    public string? HostTaskState { get; set; }
+    public string? HostReviewState { get; set; }
+    public string? HostReviewSummary { get; set; }
+    public bool SingleTerminal { get; set; }
+    public string? SelectedTerminalSessionId { get; set; }
+    public string? HostActivitySummary { get; set; }
+    public string? HostTaskName { get; set; }
+    public bool HostCoordinatesOnly { get; set; }
     public string Cwd { get; set; } = "";
     public string HostSessionId { get; set; } = "";   // matches the host's OpenChats entry
     public string Provider { get; set; } = "claude";  // host provider; each peer persists its own provider
@@ -86,6 +120,9 @@ public sealed class SavedBridgeState
 /// <summary>Persistent user settings - %APPDATA%\VibeCode\settings.json.</summary>
 public sealed class AppSettings
 {
+    /// <summary>Last regular Bridge setup. Absent in older settings, which retain one orchestrator and AI sizing.</summary>
+    public int BridgeOrchestratorCount { get; set; } = 1;
+    public int[]? BridgeOrchestratorWorkerCounts { get; set; }
     public HashSet<string> HiddenProjects { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Session ids created or opened inside VibeCode - the only ones shown when ShowOnlyOwnedSessions is on.</summary>
     public HashSet<string> OwnedSessions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -94,6 +131,7 @@ public sealed class AppSettings
     /// back into the project browser and the recent list. A tombstone is what keeps it gone - and it must outlive the
     /// file, because the transcript belongs to the CLI, not to VibeCode.</summary>
     public HashSet<string> DeletedSessions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, ChatMetadata> ChatMetadata { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>When true, the sidebar/home show only VibeCode's own chats, not the whole Claude Code history.</summary>
     public bool ShowOnlyOwnedSessions { get; set; } = true;
     /// <summary>Opt back in to per-account workspaces, where the sidebar lists only the active login's chats.
@@ -105,6 +143,13 @@ public sealed class AppSettings
     public string? ActiveBackground { get; set; }       // null → built-in gif
     public bool RandomBackground { get; set; }
     public int BackgroundVisibility { get; set; } = 22; // % of the art visible on the home screen
+    private string _thinkingOrbStyle = ThinkingOrbStyles.DefaultId;
+    /// <summary>The Appearance orb selection. Unknown and retired IDs fall back to the default, Globe.</summary>
+    public string ThinkingOrbStyle
+    {
+        get => _thinkingOrbStyle;
+        set => _thinkingOrbStyle = ThinkingOrbStyles.Resolve(value).Id;
+    }
     /// <summary>Overall UI mode: "background" (default art-backed look) or "cli" (terminal-style theme).
     /// Applied at startup by App.OnStartup swapping the theme dictionary; changing it requires a restart
     /// because the app resolves theme brushes with StaticResource at window load.</summary>
@@ -114,8 +159,8 @@ public sealed class AppSettings
     /// <summary>Borderless look: the app's own chrome - titlebar, sidebar, right panel, chat header and the Bridge
     /// panes - stops painting its grey surfaces and keeps only a thin black outline, and the background art is
     /// stretched behind the whole window instead of the chat column alone. So the wallpaper IS the background.
-    /// Cards *inside* a transcript (your prompts, tool cards, code blocks) keep their fill - text has to stay
-    /// readable over the art. Applied by merging Themes/Borderless.xaml over the base theme, through the same
+    /// Tool activity rows also clear their fills and outlines; your prompts and code blocks keep their fill
+    /// for readability. Applied by merging Themes/Borderless.xaml over the base theme, through the same
     /// in-place shell reload <see cref="UiMode"/> uses; nothing restarts.</summary>
     public bool Borderless { get; set; }
     /// <summary>True when this process loaded the borderless surfaces. CLI mode wins: a flat terminal canvas has
@@ -164,11 +209,10 @@ public sealed class AppSettings
     /// without them GLM falls through to <see cref="DefaultModel"/>/<see cref="DefaultEffort"/> — Claude's slots —
     /// and the two providers write over each other. Picking a GLM model would put a <c>zai-org/…</c> id in Claude's
     /// picker, where Claude Code accepts it, caches it in its own <c>.claude.json</c> and lists it back as a
-    /// "custom model" on every launch afterwards. The effort slot is kept even though GLM ignores effort on the
-    /// wire, so that a shared slot can never become the path by which Claude's <c>ultracode</c> level leaks into
-    /// another provider's request.</summary>
-    public string? DefaultGlmModel { get; set; }        // null = GlmPreset.DefaultModelId
-    public string? DefaultGlmEffort { get; set; }       // null = no effort sent (GLM has no effort knob)
+    /// "custom model" on every launch afterwards. Official Z.ai supports low/high/max reasoning effort;
+    /// Baseten ignores this slot and never sends it on the wire.</summary>
+    public string? DefaultGlmModel { get; set; }        // null = selected service's default model
+    public string? DefaultGlmEffort { get; set; }       // null = official Z.ai's max; unused by Baseten
     /// <summary>Optional proxy for the account manager's "Delete all chats" action. grok.com's chat REST API sits
     /// behind Cloudflare, which challenges most home IPs (a plain request gets a 403 "Just a moment" page); routing
     /// through a clean-IP proxy is what lets the stored CLI token reach and delete conversations. Format
@@ -190,6 +234,10 @@ public sealed class AppSettings
     /// <summary>Condense consecutive Bash, edit, web-search, and MCP/browser tool calls into one expandable activity
     /// card. The group opens to a one-line list, and every row can then be opened independently for full details.</summary>
     public bool CompactMode { get; set; }
+    /// <summary>Resume quota-failed chats and Bridge panes when their own provider allowance becomes available.</summary>
+    public bool ContinueAfterLimitResets { get; set; }
+    /// <summary>Show separator lines between messages in the shared Bridge terminal.</summary>
+    public bool ShowAgentMessageDividers { get; set; } = true;
 
     // Desktop notifications (both off by default). A toast is shown only when the chat it concerns is NOT fully
     // visible on screen - covered by another app, minimized, on another virtual desktop, or simply not the
@@ -241,7 +289,7 @@ public sealed class AppSettings
     // stall forever with nobody noticing, which is exactly the failure these thresholds exist to end.
 
     /// <summary>Watch delegated agents and intervene when one stalls. Applies to any managed Bridge, and is always on
-    /// in Demon Mode (a locked read-only worker has no other way to be rescued).</summary>
+    /// for delegated Bridge assignments.</summary>
     public bool AgentSupervisionEnabled { get; set; } = true;
     /// <summary>Seconds of mid-turn silence before a working agent counts as stale.</summary>
     public int SupervisionStaleSeconds { get; set; } = 300;
@@ -258,27 +306,6 @@ public sealed class AppSettings
     /// <summary>Identical consecutive turn outputs that count as a loop.</summary>
     public int SupervisionLoopRepeatThreshold { get; set; } = 3;
 
-    // ---- Demon Mode: a preset Bridge of 4-17 sessions with one locked orchestrator and the rest read-only workers.
-
-    // There is deliberately no "Demon Mode enabled" preference. The Settings switch starts and stops a team directly,
-    // and a team is never resumed across restarts — so a persisted "on" could only ever describe a team that no longer
-    // exists. (An older build stored one; unknown keys in settings.json are ignored, so it simply falls away.)
-
-    /// <summary>Demon Mode's orchestrator plans and dispatches only. Turn this on to also have it review, correct and
-    /// validate worker output — the one behaviour the mode otherwise deliberately withholds.</summary>
-    public bool DemonOrchestratorReviewsWork { get; set; }
-
-    private int _demonSessionCount = DemonModePolicy.SessionCount;
-    /// <summary>How many sessions the next Demon team stands up, orchestrator included. Unlike the switch itself this
-    /// IS remembered: the size is a standing preference about how much of the machine and the account's quota a team
-    /// may take, and re-picking it on every start would be the dialog asking a question it already knows the answer
-    /// to. The setter clamps, so a hand-edited settings.json cannot ask for a roster the wall cannot lay out.</summary>
-    public int DemonSessionCount
-    {
-        get => _demonSessionCount;
-        set => _demonSessionCount = DemonModePolicy.ClampSessionCount(value);
-    }
-
     /// <summary>VibeCode's provider-neutral MCP catalog. Definitions are projected at launch instead of overwriting
     /// Claude, Codex, Kimi, or Grok's own configuration files.</summary>
     public List<McpServerDefinition> McpServers { get; set; } = new();
@@ -286,12 +313,33 @@ public sealed class AppSettings
     // Second Brain (agentmemory). The daemon is a native Windows sidecar; VibeCode talks to its REST API directly
     // so capture/recall works the same way for Claude, Codex, Kimi, Grok, and Bridge agents. Authentication remains
     // in AGENTMEMORY_SECRET - never serialize bearer tokens into settings.json.
+    /// <summary>Explicit opt-in to the Second Brain extension. Legacy implicit-on settings do not enable it.</summary>
+    public bool SecondBrainEnabled { get; set; }
     public bool AgentMemoryEnabled { get; set; } = true;
     public bool AgentMemoryAutoRecall { get; set; } = true;
     // Promote corrections, decisions and stated habits without being asked. Waiting for an explicit "remember this"
     // leaves the durable store empty through exactly the turns worth keeping.
     public bool AgentMemoryAutoRemember { get; set; } = true;
     public string AgentMemoryEndpoint { get; set; } = "http://127.0.0.1:3111";
+
+    // Jarvis is always available from the sidebar. AI selection is independent of ordinary chat defaults.
+    public string JarvisProvider { get; set; } = "codex";
+    public string? JarvisModel { get; set; } = "gpt-6-luna";
+    public string? JarvisEffort { get; set; } = "medium";
+    public bool JarvisVoiceEnabled { get; set; } = true;
+    public string JarvisVoiceId { get; set; } = "bm_george";
+    private double _jarvisSpeechRate = 1;
+    public double JarvisSpeechRate
+    {
+        get => _jarvisSpeechRate;
+        set => _jarvisSpeechRate = double.IsFinite(value) ? Math.Clamp(value, 0.6, 1.5) : 1;
+    }
+    private int _jarvisSpeechVolume = 80;
+    public int JarvisSpeechVolume
+    {
+        get => _jarvisSpeechVolume;
+        set => _jarvisSpeechVolume = Math.Clamp(value, 0, 100);
+    }
 
     // Spotify extension (optional; off by default). The Client ID is the user's own registered Spotify app id
     // (public, PKCE - no secret). OAuth tokens live in a separate spotify-auth.json, never here.
@@ -310,10 +358,6 @@ public sealed class AppSettings
     public double? RadarTop { get; set; }
     public double? RadarWidth { get; set; }
     public double? RadarHeight { get; set; }
-
-    // Games extension. Unlike Spotify and Weather, this one ships ON for a fresh install - it's the friendly
-    // default that shows off the extension surface - but it can still be turned off in Settings > Extensions.
-    public bool GamesEnabled { get; set; } = true;
 
     /// <summary>Route mic dictation through Groq's hosted Whisper large-v3 instead of the offline medium.en model.
     /// Off by default, and deliberately so: the offline path never sends audio anywhere, and this one uploads the
@@ -346,6 +390,7 @@ public sealed class AppSettings
     /// <summary>Every closed/backgrounded bridge, keyed by provider + host session. Keeping more than one
     /// matters: opening a new bridge must not silently orphan the previous bridge's peer conversations.</summary>
     public List<SavedBridgeState> SavedBridges { get; set; } = new();
+    public List<string> BridgeMailboxWorkspaces { get; set; } = new();
     /// <summary>Legacy single-slot bridge state. Read once and migrated into <see cref="SavedBridges"/>; retained only
     /// so settings written by older builds deserialize without losing the last bridge.</summary>
     public SavedBridgeState? SavedBridge { get; set; }
@@ -366,7 +411,7 @@ public sealed class AppSettings
     // ---- run in background: closing the window is not the same thing as quitting ----
 
     /// <summary>Closing the shell leaves VibeCode running in the notification area instead of ending the process,
-    /// so every chat, Bridge peer and Demon worker keeps coding while the window is gone. ON by default: the app's
+    /// so every chat and Bridge peer keeps coding while the window is gone. ON by default: the app's
     /// whole point is agents that work on their own, and a close button that killed a nine-agent Bridge mid-task
     /// was destroying real work on a click people make absent-mindedly. Off restores the literal reading - the
     /// close button ends the process, and every running agent with it.
@@ -502,6 +547,7 @@ public sealed class AppSettings
         loaded.HiddenProjects = new HashSet<string>(loaded.HiddenProjects ?? [], StringComparer.OrdinalIgnoreCase);
         loaded.OwnedSessions = new HashSet<string>(loaded.OwnedSessions ?? [], StringComparer.OrdinalIgnoreCase);
         loaded.DeletedSessions = new HashSet<string>(loaded.DeletedSessions ?? [], StringComparer.OrdinalIgnoreCase);
+        loaded.ChatMetadata = new Dictionary<string, ChatMetadata>(loaded.ChatMetadata ?? new(), StringComparer.OrdinalIgnoreCase);
         loaded.OpenChats ??= new();
         loaded.OpenChats.RemoveAll(chat => chat is null);
         loaded.Backgrounds ??= new();
@@ -589,6 +635,8 @@ public sealed class AppSettings
     public bool NormalizeBridgeState()
     {
         SavedBridges ??= new List<SavedBridgeState>();
+        BridgeMailboxWorkspaces ??= new List<string>();
+        ChatMetadata ??= new Dictionary<string, ChatMetadata>(StringComparer.OrdinalIgnoreCase);
         var candidates = SavedBridges.Where(x => x is not null).ToList();
         if (SavedBridge is not null) candidates.Add(SavedBridge);
         var filledLegacyPeerProviders = false;
@@ -1025,11 +1073,14 @@ public sealed class AppSettings
         Backgrounds = MergeCollection(Backgrounds, disk.Backgrounds, baseline?.Backgrounds);
         McpServers = MergeCollection(McpServers, disk.McpServers, baseline?.McpServers);
         OpenChats = MergeCollection(OpenChats, disk.OpenChats, baseline?.OpenChats);
+        ChatMetadata = global::VibeCode.Services.ChatMetadata.Merge(ChatMetadata, disk.ChatMetadata, baseline?.ChatMetadata);
         // Folder recency is timestamped and additive: unioning avoids one app window erasing another window's newest chat.
         RecentDirectories = RecentDirectoryHistory.NormalizeRemembered(
             (RecentDirectories ?? new List<RecentDirectoryState>())
             .Concat(disk.RecentDirectories ?? new List<RecentDirectoryState>()));
         SavedBridges = MergeSavedBridges(disk.SavedBridges);
+        BridgeMailboxWorkspaces = BridgeMailboxWorkspaces.Concat(disk.BridgeMailboxWorkspaces)
+            .Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         return accountAdopted;
     }

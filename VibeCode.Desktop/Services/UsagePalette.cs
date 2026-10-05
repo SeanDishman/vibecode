@@ -50,12 +50,14 @@ public static class UsagePalette
         ["claude-fable-5-1"] = 0,
         ["claude-mythos-5-1"] = 0,
         // 1 - Claude Opus
+        ["claude-opus-5-5"] = 1,
         ["claude-opus-5"] = 1,
         ["claude-opus-4-8"] = 1,
         ["claude-opus-4-7"] = 1,
         ["claude-opus-4-6"] = 1,
         ["claude-opus-4-5"] = 1,
         // 2 - Claude Sonnet
+        ["claude-sonnet-5-5"] = 2,
         ["claude-sonnet-5"] = 2,
         ["claude-sonnet-4-6"] = 2,
         ["claude-sonnet-4-5"] = 2,
@@ -66,9 +68,12 @@ public static class UsagePalette
         // 4 - OpenAI premium tier. Astra ($10/$50) costs 2.5x the $5/$30 pair under it, but colour follows the
         // entity's tier and not its price, so OpenAI's flagships stay one hue.
         ["gpt-6-astra"] = 4,
+        ["gpt-6.1-sol"] = 4,
+        ["gpt-6-sol"] = 4,
         ["gpt-5.6-sol"] = 4,
         ["gpt-5.5"] = 4,
         // 5 - OpenAI efficient tiers
+        ["gpt-6-luna"] = 5,
         ["gpt-5.6-terra"] = 5,
         ["gpt-5.6-luna"] = 5,
         // 6 - Moonshot Kimi
@@ -148,16 +153,21 @@ public static class UsagePalette
         "claude-fable-5-1" => "Fable 5.1",
         "claude-mythos-5" => "Mythos 5",
         "claude-mythos-5-1" => "Mythos 5.1",
+        "claude-opus-5-5" => "Opus 5.5",
         "claude-opus-5" => "Opus 5",
         "claude-opus-4-8" => "Opus 4.8",
         "claude-opus-4-7" => "Opus 4.7",
         "claude-opus-4-6" => "Opus 4.6",
         "claude-opus-4-5" => "Opus 4.5",
+        "claude-sonnet-5-5" => "Sonnet 5.5",
         "claude-sonnet-5" => "Sonnet 5",
         "claude-sonnet-4-6" => "Sonnet 4.6",
         "claude-sonnet-4-5" => "Sonnet 4.5",
         "claude-haiku-4-5" => "Haiku 4.5",
         "gpt-6-astra" => "GPT-6 Astra",
+        "gpt-6.1-sol" => "GPT-6.1 Sol",
+        "gpt-6-sol" => "GPT-6 Sol",
+        "gpt-6-luna" => "GPT-6 Luna",
         "gpt-5.6-sol" => "GPT-5.6 Sol",
         "gpt-5.6-terra" => "GPT-5.6 Terra",
         "gpt-5.6-luna" => "GPT-5.6 Luna",
@@ -174,6 +184,9 @@ public static class UsagePalette
         "zai-org/GLM-5.2" => "GLM 5.2",
         "zai-org/GLM-5.2-Fast" => "GLM 5.2 Fast",
         "zai-org/GLM-4.7" => "GLM 4.7",
+        "glm-5.3-flash" => "GLM 5.3 Flash",
+        "glm-5.3-flashx" => "GLM 5.3 FlashX",
+        "glm-5.3" => "GLM 5.3",
         _ => null,
     };
 

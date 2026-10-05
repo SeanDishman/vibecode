@@ -18,6 +18,8 @@ public sealed class PhoneDevice
     public string Name { get; set; } = "";
     /// <summary>Base64 SHA-256 of the bearer token. Compared in constant time.</summary>
     public string TokenHash { get; set; } = "";
+    /// <summary>Base64 DER SubjectPublicKeyInfo for the one enrolled P-256 signing key. Empty legacy keys fail closed.</summary>
+    public string PublicKey { get; set; } = "";
     public DateTimeOffset PairedAt { get; set; }
     public DateTimeOffset LastSeen { get; set; }
     /// <summary>Last address this device was seen from. Display only - never used to authorise anything.</summary>
@@ -37,6 +39,7 @@ public sealed class PhoneEnrolment
     /// <summary>Base64 SHA-256 of the enrolment secret. Compared in constant time.</summary>
     public string SecretHash { get; set; } = "";
     public DateTimeOffset IssuedAt { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
     /// <summary>Null while the APK is still waiting for its phone. Stamped exactly once.</summary>
     public DateTimeOffset? UsedAt { get; set; }
     /// <summary>Name the enrolling phone reported, for the devices list.</summary>
@@ -53,7 +56,7 @@ public sealed class PhoneEnrolment
     /// is how the desktop knows to say so instead of leaving the user to guess.</summary>
     public string Fingerprint { get; set; } = "";
 
-    public bool Pending => UsedAt is null;
+    public bool Pending => UsedAt is null && ExpiresAt > DateTimeOffset.UtcNow;
 }
 
 /// <summary>
@@ -72,7 +75,12 @@ public static class PhoneBridgeStore
     public static string Dir => Path.Combine(AppSettings.Dir, "phone-bridge");
     private static string DevicesPath => Path.Combine(Dir, "devices.json");
     private static string CertPath => Path.Combine(Dir, "identity.bin");
-    private static string EnrolmentPath => Path.Combine(Dir, "enrolment.json");
+    private static string EnrolmentsPath => Path.Combine(Dir, "enrolments.json");
+    /// <summary>The single-enrolment file from the one-phone era. Read once, then replaced by enrolments.json.</summary>
+    private static string LegacyEnrolmentPath => Path.Combine(Dir, "enrolment.json");
+    /// <summary>Spent or expired enrolments kept so the window can say which phone used which file. Pending ones
+    /// are always kept; this only bounds the history.</summary>
+    private const int KeptFinishedEnrolments = 12;
     /// <summary>Where generated APKs are written, one per enrolment.</summary>
     public static string ApkDir => Path.Combine(Dir, "apk");
 
@@ -103,7 +111,7 @@ public static class PhoneBridgeStore
         }
     }
 
-    public static void SaveDevices(IEnumerable<PhoneDevice> devices)
+    public static bool SaveDevices(IEnumerable<PhoneDevice> devices)
     {
         lock (Gate)
         {
@@ -113,52 +121,64 @@ public static class PhoneBridgeStore
                 var tmp = DevicesPath + ".tmp";
                 File.WriteAllText(tmp, JsonSerializer.Serialize(devices.ToList(), Json));
                 File.Move(tmp, DevicesPath, overwrite: true);
+                return true;
             }
             catch (Exception ex)
             {
                 CrashLog.Note("PhoneBridge", $"device save failed - {ex.Message}");
+                return false;
             }
         }
     }
 
-    // ---------------- outstanding enrolment ----------------
+    // ---------------- generated-app enrolments ----------------
 
-    public static PhoneEnrolment? LoadEnrolment()
+    /// <summary>Every generated APK this PC still knows about - one per phone, any number outstanding at once.</summary>
+    public static List<PhoneEnrolment> LoadEnrolments()
     {
         lock (Gate)
         {
             try
             {
-                if (!File.Exists(EnrolmentPath)) return null;
-                return JsonSerializer.Deserialize<PhoneEnrolment>(File.ReadAllText(EnrolmentPath), Json);
+                if (File.Exists(EnrolmentsPath))
+                    return JsonSerializer.Deserialize<List<PhoneEnrolment>>(File.ReadAllText(EnrolmentsPath), Json) ?? new();
+                // Before several phones were allowed there was exactly one enrolment, in its own file.
+                if (File.Exists(LegacyEnrolmentPath)
+                    && JsonSerializer.Deserialize<PhoneEnrolment>(File.ReadAllText(LegacyEnrolmentPath), Json) is { } legacy)
+                    return new List<PhoneEnrolment> { legacy };
+                return new List<PhoneEnrolment>();
             }
             catch
             {
                 // Same reasoning as the device list: a corrupt file means "generate another APK", not a crash.
-                return null;
+                return new List<PhoneEnrolment>();
             }
         }
     }
 
-    public static void SaveEnrolment(PhoneEnrolment? enrolment)
+    public static bool SaveEnrolments(IEnumerable<PhoneEnrolment> enrolments)
     {
         lock (Gate)
         {
             try
             {
                 Directory.CreateDirectory(Dir);
-                if (enrolment is null)
-                {
-                    if (File.Exists(EnrolmentPath)) File.Delete(EnrolmentPath);
-                    return;
-                }
-                var tmp = EnrolmentPath + ".tmp";
-                File.WriteAllText(tmp, JsonSerializer.Serialize(enrolment, Json));
-                File.Move(tmp, EnrolmentPath, overwrite: true);
+                var all = enrolments.ToList();
+                var kept = all.Where(e => e.Pending)
+                    .Concat(all.Where(e => !e.Pending).OrderByDescending(e => e.UsedAt ?? e.IssuedAt).Take(KeptFinishedEnrolments))
+                    .ToList();
+                var tmp = EnrolmentsPath + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(kept, Json));
+                File.Move(tmp, EnrolmentsPath, overwrite: true);
+                // The new file now holds whatever the legacy one did, including a spent coupon; keeping both would
+                // let a later downgrade or a failed read fall back to stale state.
+                if (File.Exists(LegacyEnrolmentPath)) File.Delete(LegacyEnrolmentPath);
+                return true;
             }
             catch (Exception ex)
             {
                 CrashLog.Note("PhoneBridge", $"enrolment save failed - {ex.Message}");
+                return false;
             }
         }
     }

@@ -39,22 +39,30 @@ public sealed class PhoneBeacon : IDisposable
 
     /// <summary>Starts listening on the same port number the TCP bridge uses. Failure is non-fatal: discovery is a
     /// convenience, and the baked address list still works without it.</summary>
-    public void Start(int port)
+    public void Start(int port) => Start(port, IPAddress.Any);
+
+    // A loopback binding lets the socket lifecycle be exercised without advertising to the real network.
+    internal void Start(int port, IPAddress listenAddress)
     {
         Stop();
+        UdpClient? socket = null;
         try
         {
-            var socket = new UdpClient(AddressFamily.InterNetwork);
+            socket = new UdpClient(AddressFamily.InterNetwork);
             socket.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            socket.Client.Bind(new IPEndPoint(IPAddress.Any, port));
+            socket.Client.Bind(new IPEndPoint(listenAddress, port));
             socket.EnableBroadcast = true;
             _socket = socket;
             _cancel = new CancellationTokenSource();
-            _ = Task.Run(() => ListenAsync(socket, _cancel.Token));
+            var cancel = _cancel.Token;
+            _ = Task.Run(() => ListenAsync(socket, cancel));
         }
         catch (Exception ex)
         {
             CrashLog.Note("PhoneBridge", $"discovery beacon could not start on {port} - {ex.Message}");
+            socket?.Dispose();
+            _cancel?.Cancel();
+            _cancel = null;
             _socket = null;
         }
     }

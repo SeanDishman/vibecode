@@ -33,7 +33,7 @@ object PinnedTls {
 
     /** Formats a fingerprint the way the desktop's "safety code" line does. */
     fun safetyCode(fingerprint: String): String =
-        if (fingerprint.length >= 8) "${fingerprint.substring(0, 4)}-${fingerprint.substring(4, 8)}" else ""
+        if (fingerprint.length >= 16) fingerprint.take(16).chunked(4).joinToString("-") else ""
 
     /**
      * @param pin the fingerprint that must be presented, or null during pairing discovery — before the user has
@@ -42,6 +42,7 @@ object PinnedTls {
      *        safety code for comparison.
      */
     fun socketFactory(pin: String?, onSeen: ((String) -> Unit)? = null): SSLSocketFactory {
+        require(pin == null || pin.matches(Regex("[0-9a-fA-F]{64}"))) { "Invalid PC certificate fingerprint." }
         val trust = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) =
                 throw CertificateException("this app is never a TLS server")
@@ -56,6 +57,7 @@ object PinnedTls {
                             "answering on that address."
                     )
                 }
+                leaf.checkValidity()
             }
 
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
@@ -84,7 +86,8 @@ object PinnedTls {
         private fun harden(socket: Socket): Socket {
             if (socket is SSLSocket) {
                 val allowed = socket.supportedProtocols.filter { it == "TLSv1.2" || it == "TLSv1.3" }
-                if (allowed.isNotEmpty()) socket.enabledProtocols = allowed.toTypedArray()
+                if (allowed.isEmpty()) throw java.io.IOException("TLS 1.2 or newer is required.")
+                socket.enabledProtocols = allowed.toTypedArray()
             }
             return socket
         }

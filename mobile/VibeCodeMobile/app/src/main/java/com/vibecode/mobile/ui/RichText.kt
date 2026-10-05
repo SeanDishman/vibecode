@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +42,7 @@ fun RichText(
     color: Color = VibeColors.Text,
 ) {
     val blocks = remember(text) { splitBlocks(text) }
+    SelectionContainer {
     Column(modifier = modifier) {
         blocks.forEach { block ->
             when (block) {
@@ -53,6 +55,7 @@ fun RichText(
                 )
             }
         }
+    }
     }
 }
 

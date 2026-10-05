@@ -28,6 +28,8 @@ public static class Grok45Preset
     /// <summary>VibeCode exposes the provider's real model ids directly, so the backend id is the requested id.</summary>
     public static string? BackendModel(string? model) => model;
 
+    public static string? NormalizeModel(string? model) => model;
+
     /// <summary>The CLI's compiled default prompt is replaced with VibeCode's clean coding-agent prompt.</summary>
     public static GrokSessionPrompt SessionPrompt(string? requestedModel, string? appendSystemPrompt) =>
         new(Join(NormalSystemPrompt, appendSystemPrompt), null);

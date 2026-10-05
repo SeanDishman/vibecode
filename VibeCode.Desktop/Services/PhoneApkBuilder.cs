@@ -22,8 +22,8 @@ public static class PhoneApkBuilder
         typeof(PhoneApkBuilder).Assembly.GetManifestResourceNames().Contains(TemplateResource);
 
     /// <summary>
-    /// Mints a fresh enrolment and writes a signed, personalised APK. Returns the path it was written to.
-    /// Any previously generated APK stops working, because issuing a new enrolment retires the old secret.
+    /// Mints a fresh enrolment and writes a signed, personalised APK for one more phone. Returns the path it was
+    /// written to. Earlier APKs keep working: each carries its own single-use secret and its own file name.
     /// </summary>
     public static string Build()
     {
@@ -40,8 +40,8 @@ public static class PhoneApkBuilder
         if (addresses.Count == 0)
             throw new InvalidOperationException("This PC is not on a network, so a phone would have nothing to reach.");
 
-        // Issued last, so a failure above never burns a secret. From here on the old APK is dead.
-        var secret = bridge.IssueEnrolment();
+        // Issued last, so a failure above never burns a secret.
+        var secret = bridge.IssueEnrolment(out var enrolmentId);
 
         var hosts = new JsonArray();
         foreach (var address in addresses) hosts.Add(address);
@@ -63,10 +63,11 @@ public static class PhoneApkBuilder
         try
         {
             var safeName = string.Concat(Environment.MachineName.Split(Path.GetInvalidFileNameChars()));
-            var destination = Path.Combine(PhoneBridgeStore.ApkDir, $"VibeCode-{safeName}.apk");
+            // One file per phone: a shared name meant building the app for a second phone overwrote the first.
+            var destination = Path.Combine(PhoneBridgeStore.ApkDir, $"VibeCode-{safeName}-{enrolmentId[..6]}.apk");
             using var signer = ApkSigningIdentity.LoadOrCreate();
             ApkPersonalizer.Personalize(template, destination, payload, signer);
-            bridge.NoteEnrolmentApk(destination);
+            bridge.NoteEnrolmentApk(enrolmentId, destination);
             return destination;
         }
         finally

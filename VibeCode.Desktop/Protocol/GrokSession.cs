@@ -25,7 +25,7 @@ public sealed class GrokSessionOptions
 /// First-class Grok session facade. Grok and Kimi both speak ACP, so the facade deliberately reuses the hardened
 /// stream, attachment, tool, and permission translation while selecting Grok's lifecycle and model semantics.
 /// </summary>
-public sealed class GrokSession : ICodingSession
+public sealed class GrokSession : ICodingSession, ISteerableSession
 {
     private const string GrokAuthPathEnvironment = "GROK_AUTH_PATH";
     private const string GrokAuthEnvironment = "GROK_AUTH";
@@ -33,7 +33,7 @@ public sealed class GrokSession : ICodingSession
 
     public GrokSession(GrokSessionOptions options)
     {
-        _ = ResolveCliPath();
+        _ = ResolveCliPathForModel(options.Model);
         _inner = new KimiSession(new KimiSessionOptions
         {
             Cwd = options.Cwd,
@@ -60,12 +60,17 @@ public sealed class GrokSession : ICodingSession
     public bool HasExited => _inner.HasExited;
     public void Start() => _inner.Start();
     public void SendUser(JsonNode content) => _inner.SendUser(content);
+    public bool CanSteer => _inner.CanSteer;
+    public Task SteerAsync(JsonNode content) => _inner.SteerAsync(content);
     public Task InterruptAsync() => _inner.InterruptAsync();
     public Task SetPermissionModeAsync(string mode) => _inner.SetPermissionModeAsync(mode);
     public Task SetModelAsync(string? model, string? effort = null) => _inner.SetModelAsync(model, effort);
     public void RespondPermission(string requestId, JsonObject result, string? toolUseId) =>
         _inner.RespondPermission(requestId, result, toolUseId);
     public void Dispose() => _inner.Dispose();
+
+    // Presets now travel as ACP profiles. Every model must use the supported CLI transport.
+    internal static string ResolveCliPathForModel(string? model) => ResolveCliPath();
 
     public static string ResolveCliPath()
     {
@@ -105,8 +110,12 @@ public sealed class GrokSession : ICodingSession
     /// <summary>Launch Grok against one managed credential file without splitting the user's config/session home.</summary>
     public static ProcessStartInfo CreateCliStartInfoForAuth(string? workingDirectory, string? authFilePath,
         params string[] args)
+        => CreateCliStartInfoForModel(workingDirectory, authFilePath, null, args);
+
+    internal static ProcessStartInfo CreateCliStartInfoForModel(string? workingDirectory, string? authFilePath,
+        string? model, params string[] args)
     {
-        var cli = ResolveCliPath();
+        var cli = ResolveCliPathForModel(model);
         var extension = Path.GetExtension(cli).ToLowerInvariant();
         var psi = new ProcessStartInfo
         {

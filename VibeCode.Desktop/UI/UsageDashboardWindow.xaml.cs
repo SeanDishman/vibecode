@@ -102,7 +102,7 @@ public partial class UsageDashboardWindow : Window
         else wall.WindowState = WindowState.Maximized;
     }
 
-    /// <summary>Automated-verification hook, mirroring VIBECODE_OPEN_GAME: with VIBECODE_HIDDEN=1 set,
+    /// <summary>Automated-verification hook: with VIBECODE_HIDDEN=1 set,
     /// VIBECODE_OPEN_WALL=1 opens the wall off-screen at startup. Its normal entry points sit behind a Settings
     /// pane that is Collapsed until selected, so a smoke run cannot otherwise reach it through the UIA tree.
     /// Does nothing during a normal run.</summary>

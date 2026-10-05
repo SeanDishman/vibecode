@@ -2,7 +2,7 @@ namespace VibeCode.Services;
 
 /// <summary>
 /// Anthropic and OpenAI API list prices in USD per 1,000,000 tokens (input / output), used to ESTIMATE a chat's
-/// equivalent-API cost from its token usage. Prices are the public list prices as of July 2026.
+/// equivalent-API cost from its token usage. Claude list prices were verified on October 1, 2026.
 /// On a subscription login the CLI reports <c>total_cost_usd = 0</c>, so this estimate is what the UI
 /// falls back to — it's the "money this chat is using" number, not a bill.
 /// </summary>
@@ -17,9 +17,8 @@ public static class ModelPricing
     public const double CacheReadMultiplier = 0.10;
 
     /// <summary>Cache-read rate for the 5.1 frontier pair: $0.25 per Mtok against a $10 input, i.e. 0.025x rather
-    /// than the 0.10x every other Anthropic model uses. Taken from the pricing tier the CLI itself carries
-    /// (<c>tier_10_50_cache_read_0_25</c>: input 10, output 50, cache_write_5m 12.5, cache_read 0.25), not a docs
-    /// page - the docs model table still lists Fable 5 only.</summary>
+    /// than the usual 0.10x. Opus 5.5 has its own 0.05x rate.
+    /// https://platform.claude.com/docs/en/about-claude/pricing</summary>
     public const double CheapCacheReadMultiplier = 0.025;
 
     // input / output USD per 1M tokens. Keyed by the resolved model id with any "[1m]"-style variant tag stripped.
@@ -30,28 +29,33 @@ public static class ModelPricing
         // 5.1 (2026-09): same $10/$50 base as 5, but a quarter the cache-read rate - see CheapCacheReadMultiplier.
         ["claude-fable-5-1"]  = new(10.00, 50.00),
         ["claude-mythos-5-1"] = new(10.00, 50.00),
-        // Opus 5 (2026-07-24): near-Fable agentic coding at Opus list price; same $5/$25 as 4.x Opus.
+        // Current Claude lineup: https://platform.claude.com/docs/en/about-claude/pricing
+        ["claude-opus-5-5"]   = new(4.00, 20.00),
+        ["claude-sonnet-5-5"] = new(2.00, 10.00),
+        // Earlier models retain their own rates; Sonnet 5 now shares the $2/$10 tier.
         ["claude-opus-5"]     = new(5.00, 25.00),
         ["claude-opus-4-8"]   = new(5.00, 25.00),
         ["claude-opus-4-7"]   = new(5.00, 25.00),
         ["claude-opus-4-6"]   = new(5.00, 25.00),
         ["claude-opus-4-5"]   = new(5.00, 25.00),
-        ["claude-sonnet-5"]   = new(3.00, 15.00),
+        ["claude-sonnet-5"]   = new(2.00, 10.00),
         ["claude-sonnet-4-6"] = new(3.00, 15.00),
         ["claude-sonnet-4-5"] = new(3.00, 15.00),
         ["claude-haiku-4-5"]  = new(1.00, 5.00),
 
-        // OpenAI standard processing rates. The GPT-5.6 cache-write prices are 1.25x input and
-        // cached-input prices are 0.10x input, matching the multipliers used by TurnCost.
-        // GPT-6 Astra (2026-09-03) is 2.5x Sol and lands on the same $10/$50 as the Anthropic frontier pair. Its
-        // published $1 cached-input rate is 0.10x input, so CacheReadMultiplier already covers it. NOT modelled:
-        // OpenAI prices a request whose input passes 272K tokens at 2x input/cache and 1.5x output for the WHOLE
-        // request. The Codex CLI gives Astra a 272K window by default, so that surcharge only becomes reachable
-        // on an explicitly enlarged context - past which this estimate reads low.
+        // OpenAI standard short-context rates, updated 2026-09-30. Cache-write is 1.25x input.
+        // GPT-6.1 Sol's cache reads are 0.05x input; the other listed OpenAI models use 0.10x.
+        // https://developers.openai.com/api/docs/pricing
+        // GPT-5.6 Sol's $4/$20 is the promotional rate OpenAI says runs at least through 2026-11-21.
+        // TurnCost applies the long-context rate only when an individual request's size is known.
+        // A whole agentic turn's token total must never be mistaken for one request's context.
         ["gpt-6-astra"]        = new(10.00, 50.00),
-        ["gpt-5.6-sol"]        = new(5.00, 30.00),
-        ["gpt-5.6-terra"]      = new(2.50, 15.00),
-        ["gpt-5.6-luna"]       = new(1.00, 6.00),
+        ["gpt-6.1-sol"]        = new(2.00, 10.00),
+        ["gpt-6-sol"]          = new(2.00, 10.00),
+        ["gpt-6-luna"]         = new(0.10, 0.50),
+        ["gpt-5.6-sol"]        = new(4.00, 20.00),
+        ["gpt-5.6-terra"]      = new(2.00, 12.00),
+        ["gpt-5.6-luna"]       = new(0.20, 1.20),
         ["gpt-5.5"]            = new(5.00, 30.00),
 
         // Moonshot Kimi API. K3 cache-hit input is 10% of fresh input; K2.7's is 20%.
@@ -73,6 +77,11 @@ public static class ModelPricing
         ["zai-org/glm-5.2"]       = new(1.40, 4.40),
         ["zai-org/glm-5.2-fast"]  = new(2.10, 6.60),
         ["zai-org/glm-4.7"]       = new(0.60, 2.20),
+        // Official Z.ai list prices, 2026-09-25: https://docs.z.ai/guides/overview/pricing
+        // As for other subscriptions, Coding Plan usage shows equivalent API cost, not a subscription charge.
+        ["glm-5.3-flash"]         = new(0.15, 0.50),
+        ["glm-5.3-flashx"]        = new(0.37, 1.25),
+        ["glm-5.3"]               = new(1.40, 4.40),
     };
 
     /// <summary>Opus-tier fallback for a model we don't have a listed price for (the app defaults to Opus).</summary>
@@ -101,7 +110,8 @@ public static class ModelPricing
     /// USD cost of one usage snapshot. The three input buckets are priced at the selected model's fresh,
     /// cache-write, and cache-hit rates; output is priced at the output rate.
     /// </summary>
-    public static double TurnCost(string? modelId, double input, double cacheWrite, double cacheRead, double output)
+    public static double TurnCost(string? modelId, double input, double cacheWrite, double cacheRead, double output,
+        string? serviceTier = null, double? contextInputTokens = null, double cacheWrite1h = 0)
     {
         var id = Strip(modelId);
         var p = For(modelId);
@@ -109,14 +119,23 @@ public static class ModelPricing
                      || id.StartsWith("kimi", StringComparison.OrdinalIgnoreCase);
         // Baseten publishes no cache-write price for GLM at all, so a write is charged as ordinary input - the
         // same shape as Kimi's automatic cache rather than Anthropic's paid-write one.
-        var isGlm = id.StartsWith("zai-org/", StringComparison.OrdinalIgnoreCase);
+        var isOfficialGlm = id.StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
+        var isGlm = isOfficialGlm || id.StartsWith("zai-org/", StringComparison.OrdinalIgnoreCase);
         var cacheWriteMultiplier = isKimi || isGlm ? 1.0 : CacheWriteMultiplier;
-        // The 5.1 pair is the only Anthropic tier that moves cache_read off 0.10x input; cache writes are
-        // unchanged, so this is the read multiplier alone rather than a whole alternate price shape.
+        // Frontier 5.1 reads cost $0.25/MTok; Opus 5.5 reads cost $0.20/MTok against $4 fresh input.
         var isCheapCacheRead = id.Equals("claude-fable-5-1", StringComparison.OrdinalIgnoreCase)
                                || id.Equals("claude-mythos-5-1", StringComparison.OrdinalIgnoreCase);
-        var cacheReadMultiplier = isCheapCacheRead
+        var cacheReadMultiplier = isOfficialGlm ? id.ToLowerInvariant() switch
+        {
+            "glm-5.3" => 0.26 / 1.40,
+            "glm-5.3-flashx" => 0.075 / 0.37,
+            _ => 0.20,
+        } : isCheapCacheRead
             ? CheapCacheReadMultiplier
+            : id.Equals("claude-opus-5-5", StringComparison.OrdinalIgnoreCase)
+                ? 0.05
+            : id.Equals("gpt-6.1-sol", StringComparison.OrdinalIgnoreCase)
+                ? 0.05
             : isKimi && (id.Contains("k2.7", StringComparison.OrdinalIgnoreCase)
                          || id.Contains("for-coding", StringComparison.OrdinalIgnoreCase))
                 ? 0.20
@@ -126,15 +145,46 @@ public static class ModelPricing
                             || id.Contains("glm-5.3", StringComparison.OrdinalIgnoreCase))
                     ? 0.20
                     : CacheReadMultiplier;
-        double inputUsd = (input + cacheWrite * cacheWriteMultiplier + cacheRead * cacheReadMultiplier) * p.InputPerMTok;
+        // Claude's 1h writes cost 2x fresh input instead of the 5m write rate (1.25x).
+        var longWrites = id.StartsWith("claude-", StringComparison.OrdinalIgnoreCase)
+            ? Math.Clamp(cacheWrite1h, 0, Math.Max(0, cacheWrite)) : 0;
+        double inputUsd = (input + (cacheWrite - longWrites) * cacheWriteMultiplier + longWrites * 2
+                          + cacheRead * cacheReadMultiplier) * p.InputPerMTok;
         double outputUsd = output * p.OutputPerMTok;
-        return (inputUsd + outputUsd) / 1_000_000.0;
+        if (contextInputTokens > 272_000 && (id.StartsWith("gpt-6", StringComparison.OrdinalIgnoreCase)
+            || id.StartsWith("gpt-5.6-", StringComparison.OrdinalIgnoreCase) || id == "gpt-5.5"))
+        {
+            inputUsd *= 2;
+            outputUsd *= 1.5;
+        }
+        return (inputUsd + outputUsd) * SpeedMultiplier(id, serviceTier) / 1_000_000.0;
+    }
+
+    /// <summary>API dollar rates, not subscription quota consumption. Verified 2026-10-02.
+    /// https://developers.openai.com/api/docs/pricing
+    /// https://platform.claude.com/docs/en/build-with-claude/fast-mode
+    /// A model with a separately priced fast/highspeed id already includes its premium in Table.</summary>
+    public static double SpeedMultiplier(string? modelId, string? serviceTier)
+    {
+        var id = Strip(modelId).ToLowerInvariant();
+        var tier = serviceTier?.Trim().ToLowerInvariant();
+        if (tier == "ultrafast" && id == "gpt-6-astra") return 6;
+        if (tier is not ("fast" or "priority")) return 1;
+        if (id == "gpt-5.5") return 2.5;
+        return id is "claude-opus-5-5" or "claude-opus-5" or "claude-opus-4-8"
+            or "gpt-6-astra" or "gpt-6.1-sol" or "gpt-6-sol" or "gpt-6-luna"
+            or "gpt-5.6-sol" or "gpt-5.6-terra" or "gpt-5.6-luna" ? 2 : 1;
     }
 
     private static string Strip(string? s)
     {
         if (string.IsNullOrEmpty(s)) return "";
         int i = s.IndexOf('[');
-        return (i >= 0 ? s[..i] : s).Trim();
+        var id = (i >= 0 ? s[..i] : s).Trim();
+        // Claude Code resolves Haiku to its dated API snapshot. That is the same priced model as the alias.
+        if (id.StartsWith("claude-", StringComparison.OrdinalIgnoreCase) && id.Length > 9
+            && id[^9] == '-' && id[^8..].All(char.IsAsciiDigit) && Table.ContainsKey(id[..^9]))
+            id = id[..^9];
+        return id;
     }
 }

@@ -1,13 +1,19 @@
 package com.vibecode.mobile
 
+import android.content.Intent
+import android.provider.Settings
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +26,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,9 +55,6 @@ import com.vibecode.mobile.ui.VibeColors
  */
 class MainActivity : FragmentActivity() {
 
-    /** When the app last went to the background, for the re-lock timeout. */
-    private var backgroundedAt = 0L
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -63,13 +68,16 @@ class MainActivity : FragmentActivity() {
             window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         }
 
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         setContent { VibeCodeTheme { App(activity = this) } }
     }
 
     override fun onStop() {
         super.onStop()
-        backgroundedAt = SystemClock.elapsedRealtime()
+        if (!isChangingConfigurations) backgroundedAt = SystemClock.elapsedRealtime()
     }
 
     /**
@@ -77,11 +85,16 @@ class MainActivity : FragmentActivity() {
      * between a lock people keep and one they turn off: glancing at a notification should not cost a fingerprint,
      * but leaving the phone on a desk for a minute should.
      */
-    fun shouldRelock(): Boolean =
-        backgroundedAt != 0L && SystemClock.elapsedRealtime() - backgroundedAt > RELOCK_AFTER_MS
+    fun shouldRelock(): Boolean {
+        val elapsed = backgroundedAt.takeIf { it != 0L }?.let { SystemClock.elapsedRealtime() - it }
+        backgroundedAt = 0L
+        return elapsed != null && elapsed > RELOCK_AFTER_MS
+    }
 
     private companion object {
         const val RELOCK_AFTER_MS = 60_000L
+        // Process-local so rotating the activity cannot discard an existing background timeout.
+        var backgroundedAt = 0L
     }
 }
 
@@ -101,13 +114,20 @@ private fun App(activity: MainActivity, vm: AppViewModel = viewModel()) {
     }
 
     if (state.locked) {
+        var authenticationUnavailable by remember { mutableStateOf(false) }
+        val unlock = {
+            authenticationUnavailable = false
+            AppLock.prompt(activity, onSuccess = vm::onUnlocked, onUnavailable = { authenticationUnavailable = true })
+        }
         // One prompt per transition into the locked state; the screen's own button covers a cancelled attempt.
         LaunchedEffect(Unit) {
-            AppLock.prompt(activity, onSuccess = vm::onUnlocked, onUnavailable = vm::onUnlocked)
+            unlock()
         }
-        LockScreen(onUnlock = {
-            AppLock.prompt(activity, onSuccess = vm::onUnlocked, onUnavailable = vm::onUnlocked)
-        })
+        LockScreen(
+            onUnlock = unlock,
+            authenticationUnavailable = authenticationUnavailable,
+            onSecuritySettings = { activity.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) },
+        )
         return
     }
 
@@ -120,13 +140,18 @@ private fun App(activity: MainActivity, vm: AppViewModel = viewModel()) {
 
     // System back leaves the transcript rather than the app - the phone's own gesture is the natural way out of
     // a chat, and dropping straight to the launcher from there loses your place for no reason.
-    BackHandler(enabled = state.screen is Screen.Chat) { vm.closeChatScreen() }
+    BackHandler(enabled = state.screen is Screen.Chat && state.sheet == Sheet.None) { vm.closeChatScreen() }
     BackHandler(enabled = state.screen is Screen.NewChat) { vm.cancelNewChat() }
+    BackHandler(enabled = state.screen is Screen.Pair && state.pair.step != PairStep.Address && !state.pair.busy) {
+        vm.backToAddress()
+    }
 
     Scaffold(
         containerColor = VibeColors.Bg0,
+        // Child screens own their Scaffold/safe-drawing insets. The host only positions transient feedback.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = {
-            SnackbarHost(snackbar) { data ->
+            SnackbarHost(snackbar, modifier = Modifier.imePadding().safeDrawingPadding()) { data ->
                 Box(
                     Modifier
                         .padding(14.dp)
@@ -138,8 +163,8 @@ private fun App(activity: MainActivity, vm: AppViewModel = viewModel()) {
                 }
             }
         },
-    ) { _ ->
-        Box(Modifier.fillMaxSize().background(VibeColors.Bg0)) {
+    ) { outerPadding ->
+        Box(Modifier.fillMaxSize().padding(outerPadding).background(VibeColors.Bg0)) {
             when (state.screen) {
                 is Screen.Pair -> PairScreen(
                     state = state.pair,

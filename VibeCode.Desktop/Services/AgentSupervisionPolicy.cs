@@ -16,8 +16,7 @@ public enum SupervisionHealth
     Looping,
     /// <summary>Its session reported an error, or the provider process died.</summary>
     Failed,
-    /// <summary>Stopped on a question, plan review or permission card. In Demon Mode nobody can answer it — the
-    /// worker's pane is read-only — so this is a deadlock, not patience.</summary>
+    /// <summary>Stopped on a question, plan review or permission card.</summary>
     Blocked,
 }
 
@@ -126,6 +125,11 @@ public sealed class SupervisionSettings
 /// </summary>
 public static class AgentSupervisionPolicy
 {
+    public static string ReportingContract =>
+        $"When the work is done, end your reply with a short factual report (what you did, what you actually " +
+        $"verified, anything blocking) followed by \"{CompletionMarker}\". If you cannot do it, " +
+        $"reply \"{FailureMarker}\" plus the reason. An acknowledgement such as \"ready\" or " +
+        "\"standing by\" is NOT a result and will leave the task recorded as unfinished.";
     /// <summary>Classify a delegated agent from observations only. <paramref name="hasAssignment"/> is false for an
     /// agent that legitimately has nothing to do — an idle worker awaiting dispatch is healthy, not stuck.</summary>
     public static SupervisionHealth Diagnose(

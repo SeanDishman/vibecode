@@ -131,85 +131,93 @@ public static class AutoScroll
     public static void SetEnabled(DependencyObject o, bool v) => o.SetValue(EnabledProperty, v);
     public static bool GetEnabled(DependencyObject o) => (bool)o.GetValue(EnabledProperty);
 
+    private static readonly DependencyProperty CleanupProperty = DependencyProperty.RegisterAttached(
+        "Cleanup", typeof(Action), typeof(AutoScroll), new PropertyMetadata(null));
+
     private static void OnEnabledChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
+        (d.GetValue(CleanupProperty) as Action)?.Invoke();
+        d.ClearValue(CleanupProperty);
         if (e.NewValue is not true) return;
-
-        // Attached straight onto a ScrollViewer: wire it up immediately.
-        if (d is ScrollViewer sv)
-        {
-            Attach(sv);
-            return;
-        }
-
-        // Attached onto a control (e.g. a virtualizing ListBox) whose real scroller is a ScrollViewer living
-        // inside its ControlTemplate. That inner ScrollViewer isn't in the visual tree until the template is
-        // applied, so defer the lookup until the element is loaded / laid out.
         if (d is not FrameworkElement fe) return;
+
+        ScrollViewer? attached = null;
+        Action? detach = null;
 
         void Resolve()
         {
-            var inner = FindDescendant<ScrollViewer>(fe);
-            if (inner != null)
-                Attach(inner);
+            if (!fe.IsLoaded || !fe.IsVisible || !GetEnabled(fe)) return;
+            if (fe is Control control) control.ApplyTemplate();
+            var inner = fe as ScrollViewer ?? FindDescendant<ScrollViewer>(fe);
+            if (inner is not null)
+            {
+                fe.LayoutUpdated -= OnLayoutUpdated;
+                if (ReferenceEquals(inner, attached)) return;
+                detach?.Invoke();
+                attached = inner;
+                detach = Attach(inner);
+            }
             else
-                // Template not realized yet on this pass - try again once layout has run.
-                fe.Dispatcher.BeginInvoke(new Action(Resolve), DispatcherPriority.Loaded);
+            {
+                // Collapsed bridge transcripts may have no template yet. Retrying with BeginInvoke at Loaded
+                // priority spins forever and starves input/rendering. Wait for actual layout instead, without
+                // scheduling any work ourselves, and stop listening when hidden, unloaded, or resolved.
+                fe.LayoutUpdated -= OnLayoutUpdated;
+                fe.LayoutUpdated += OnLayoutUpdated;
+            }
         }
 
-        if (fe.IsLoaded)
-            Resolve();
-        else
-            fe.Loaded += (_, __) => Resolve();
+        void OnLayoutUpdated(object? sender, EventArgs args) => Resolve();
+        void OnLoaded(object sender, RoutedEventArgs args) => Resolve();
+        void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
+        {
+            if (fe.IsVisible) Resolve();
+            else fe.LayoutUpdated -= OnLayoutUpdated;
+        }
+        void OnUnloaded(object sender, RoutedEventArgs args)
+        {
+            fe.LayoutUpdated -= OnLayoutUpdated;
+            detach?.Invoke();
+            detach = null;
+            attached = null;
+        }
+
+        fe.Loaded += OnLoaded;
+        fe.Unloaded += OnUnloaded;
+        fe.IsVisibleChanged += OnVisibilityChanged;
+        fe.SetValue(CleanupProperty, (Action)(() =>
+        {
+            fe.Loaded -= OnLoaded;
+            fe.Unloaded -= OnUnloaded;
+            fe.IsVisibleChanged -= OnVisibilityChanged;
+            OnUnloaded(fe, new RoutedEventArgs());
+        }));
+        Resolve();
     }
 
-    private static void Attach(ScrollViewer sv)
+    private static Action Attach(ScrollViewer sv)
     {
         var stick = true;   // start pinned to the newest message
-        // Layout passes still allowed to chase the bottom after the transcript (re)appears. The list is virtualized,
-        // so its extent is an ESTIMATE that firms up as rows realize: one ScrollToBottom lands short of the real end.
-        var chasing = 0;
+        void Pin() => sv.ScrollToBottom();
 
-        void Pin()
-        {
-            chasing = 6;
-            sv.ScrollToBottom();
-        }
-
-        sv.ScrollChanged += (_, a) =>
+        void OnScrollChanged(object sender, ScrollChangedEventArgs a)
         {
             // ScrollChanged BUBBLES. A markdown viewer or code block inside a message is a scroller of its own, and
             // realizing one raises an extent change carrying ITS numbers - which read here as "the transcript grew"
             // and scrolled the transcript for a reason that had nothing to do with it.
             if (!ReferenceEquals(a.OriginalSource, sv)) return;
 
-            // Everything this behaviour does moves DOWN, so an upward move is always the user - and it wins even
-            // mid-chase, or reading a long transcript would be a fight against the scroller.
-            if (chasing > 0 && a.VerticalChange >= -1)
-            {
-                // Mid-chase every offset is ours, not the user's - reading stickiness off it would un-stick us at
-                // the halfway point the estimate happened to land on.
-                chasing--;
-                stick = true;
-                if (sv.ScrollableHeight > 0.5 && sv.VerticalOffset < sv.ScrollableHeight - 0.5) sv.ScrollToBottom();
-                else chasing = 0;
-                return;
-            }
-            chasing = 0;
+            var layoutChanged = a.ExtentHeightChange != 0 || a.ViewportHeightChange != 0 || a.ViewportWidthChange != 0;
+            stick = ShouldFollowBottom(sv, a, stick, 24);
 
-            // An explicit offset move IS a scroll, whatever the extent did in the SAME layout pass. A virtualized
-            // list refines its estimated extent as rows realize, so scrolling up arrives as one event carrying both
-            // changes - and reading only the extent there yanked the reader straight back to the bottom.
-            if (a.VerticalChange != 0 || a.ExtentHeightChange == 0)
-                // a plain scroll (user or programmatic): remember whether they're parked at the bottom
-                stick = sv.VerticalOffset >= sv.ScrollableHeight - 24;
-            else if (stick)
-                // content grew (new output) while pinned - follow it; if they'd scrolled up, don't move
-                Pin();
-        };
+            // Keep following through every estimate refinement, rather than giving up after a fixed number of
+            // layout passes. A viewport change (resizing/composer growth) moves the bottom without growing content.
+            if (stick && layoutChanged && sv.VerticalOffset < sv.ScrollableHeight - 0.5) Pin();
+        }
         // Expanding a card focuses/grows a child; stop WPF from auto-scrolling it into view (that's the "jumps to bottom").
-        sv.AddHandler(FrameworkElement.RequestBringIntoViewEvent,
-            new RequestBringIntoViewEventHandler((_, ev) => ev.Handled = true), true);
+        RequestBringIntoViewEventHandler onBringIntoView = (_, ev) => ev.Handled = true;
+        sv.ScrollChanged += OnScrollChanged;
+        sv.AddHandler(FrameworkElement.RequestBringIntoViewEvent, onBringIntoView, true);
 
         // A pane whose transcript is already IN it when the scroller is built never sees the extent grow, so following
         // growth is not enough on its own - it would sit at the top until the agent happened to say something. That is
@@ -217,7 +225,30 @@ public static class AutoScroll
         Pin();
         // Navigating away only COLLAPSES the surface, which keeps the same scroller and skips Attach entirely. Re-pin
         // when it comes back - unless the user had deliberately scrolled up, whose place is theirs to keep.
-        sv.IsVisibleChanged += (_, e) => { if (e.NewValue is true && stick) Pin(); };
+        void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (e.NewValue is true && stick) Pin();
+        }
+        sv.IsVisibleChanged += OnVisibilityChanged;
+        return () =>
+        {
+            sv.ScrollChanged -= OnScrollChanged;
+            sv.RemoveHandler(FrameworkElement.RequestBringIntoViewEvent, onBringIntoView);
+            sv.IsVisibleChanged -= OnVisibilityChanged;
+        };
+    }
+
+    internal static bool ShouldFollowBottom(ScrollViewer sv, ScrollChangedEventArgs change, bool wasFollowing, double tolerance)
+    {
+        if (sv.VerticalOffset >= sv.ScrollableHeight - tolerance) return true;
+        var layoutChanged = change.ExtentHeightChange != 0 || change.ViewportHeightChange != 0 || change.ViewportWidthChange != 0;
+        var bottomChange = change.ExtentHeightChange - change.ViewportHeightChange;
+        // Recycling and streaming can adjust both the extent AND offset in one event. Even a negative offset
+        // change can simply follow a shrinking extent or growing viewport. Only an upward move beyond that
+        // layout correction detaches the reader; it also wins over output arriving in the same layout pass.
+        var movedUp = change.VerticalChange < -0.5 && change.VerticalChange < Math.Min(0, bottomChange) - 0.5;
+        if (movedUp || !layoutChanged && change.VerticalChange != 0) return false;
+        return wasFollowing;
     }
 
     // First ScrollViewer in the visual subtree (the scroll host inside a ListBox/control template).

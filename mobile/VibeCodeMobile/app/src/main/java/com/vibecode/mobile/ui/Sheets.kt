@@ -17,10 +17,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Switch
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -30,10 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vibecode.mobile.UiState
+import com.vibecode.mobile.Link
 import com.vibecode.mobile.data.EffortOption
 import com.vibecode.mobile.data.ModelOption
 
@@ -59,16 +68,20 @@ fun ControlsSheet(
     val options = state.options
     val detail = state.detail
     SheetShell(onDismiss) {
-        SheetTitle("Session")
+        item { SheetTitle("Session settings") }
+        if (state.link != Link.Online) {
+            item { EmptyNote("Reconnect to your PC to change session settings.") }
+        }
 
         // --- mode ---
-        SectionLabel("Permissions")
-        Modes.forEach { (value, label, description) ->
-            val selected = detail.mode == value || options?.mode == value
+        item { SectionLabel("Permissions") }
+        items(Modes) { (value, label, description) ->
+            val selected = value == (options?.mode?.takeIf { it.isNotBlank() } ?: detail.mode)
             PickerRow(
                 label = label,
                 description = description,
                 selected = selected,
+                enabled = state.link == Link.Online,
                 // Bypass is the one choice that removes every guardrail on a machine the user cannot see.
                 accent = if (value == "bypassPermissions") VibeColors.Red else VibeColors.Accent,
                 onClick = { onMode(value) },
@@ -77,6 +90,7 @@ fun ControlsSheet(
 
         // --- fast mode ---
         if (detail.canFast || options?.canFast == true) {
+            item {
             Spacer(Modifier.height(14.dp))
             SectionLabel("Speed")
             PickerRow(
@@ -84,13 +98,16 @@ fun ControlsSheet(
                 description = if (detail.canFastNow) "Same model, faster output."
                 else "Not available on the model this chat is using.",
                 selected = detail.fast,
-                enabled = detail.canFastNow || detail.fast,
+                enabled = state.link == Link.Online && (detail.canFastNow || detail.fast),
+                toggle = true,
                 onClick = { onFast(!detail.fast) },
             )
+            }
         }
 
         // --- model ---
         if (options == null) {
+            item {
             Spacer(Modifier.height(14.dp))
             Text(
                 if (state.optionsBusy) "Loading the PC's model list…" else "The PC did not send a model list.",
@@ -98,33 +115,39 @@ fun ControlsSheet(
                 color = VibeColors.Faint,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
+            }
         } else {
             if (options.models.isNotEmpty()) {
+                item {
                 Spacer(Modifier.height(14.dp))
                 SectionLabel("Model")
-                options.models.forEach { model -> ModelRow(model, options.model, onModel) }
+                }
+                items(options.models) { model -> ModelRow(model, options.model, state.link == Link.Online, onModel) }
             }
             if (options.efforts.isNotEmpty()) {
+                item {
                 Spacer(Modifier.height(14.dp))
                 SectionLabel("Reasoning effort")
-                options.efforts.forEach { effort -> EffortRow(effort, options.effort, onEffort) }
+                }
+                items(options.efforts) { effort -> EffortRow(effort, options.effort, state.link == Link.Online, onEffort) }
             }
         }
     }
 }
 
 @Composable
-private fun ModelRow(model: ModelOption, current: String?, onPick: (String?) -> Unit) {
+private fun ModelRow(model: ModelOption, current: String?, enabled: Boolean, onPick: (String?) -> Unit) {
     PickerRow(
         label = model.label,
         description = model.description,
         selected = model.value == current,
+        enabled = enabled,
         onClick = { onPick(model.value) },
     )
 }
 
 @Composable
-private fun EffortRow(effort: EffortOption, current: String?, onPick: (String?) -> Unit) {
+private fun EffortRow(effort: EffortOption, current: String?, enabled: Boolean, onPick: (String?) -> Unit) {
     // The desktop draws effort as a filled/empty dot meter; reproducing it keeps the two surfaces legible as one app.
     val meter = if (effort.steps > 0) {
         "●".repeat(effort.rank) + "○".repeat((effort.steps - effort.rank).coerceAtLeast(0))
@@ -134,6 +157,7 @@ private fun EffortRow(effort: EffortOption, current: String?, onPick: (String?) 
         description = effort.description,
         trailing = meter,
         selected = effort.value == current,
+        enabled = enabled,
         onClick = { onPick(effort.value) },
     )
 }
@@ -143,11 +167,11 @@ private fun EffortRow(effort: EffortOption, current: String?, onPick: (String?) 
 fun TodosSheet(state: UiState, onDismiss: () -> Unit) {
     SheetShell(onDismiss) {
         val todos = state.detail.todos
-        SheetTitle(if (todos.isEmpty()) "Task list" else "Task list · ${state.detail.todosDone}/${todos.size}")
+        item { SheetTitle(if (todos.isEmpty()) "Task list" else "Task list · ${state.detail.todosDone}/${todos.size}") }
         if (todos.isEmpty()) {
-            EmptyNote("The agent's task list appears here once it starts planning.")
+            item { EmptyNote("The agent's task list appears here once it starts planning.") }
         } else {
-            todos.forEach { todo ->
+            items(todos) { todo ->
                 val color = when {
                     todo.done -> VibeColors.Green
                     todo.active -> VibeColors.Amber
@@ -183,11 +207,10 @@ fun TodosSheet(state: UiState, onDismiss: () -> Unit) {
 fun FilesSheet(state: UiState, onDismiss: () -> Unit) {
     SheetShell(onDismiss) {
         val files = state.detail.files
-        SheetTitle(if (files.isEmpty()) "Files" else "Files · ${files.size}")
+        item { SheetTitle(if (files.isEmpty()) "Files" else "Files · ${files.size}") }
         if (files.isEmpty()) {
-            EmptyNote("Files the agent creates or edits show up here.")
+            item { EmptyNote("Files the agent creates or edits show up here.") }
         } else {
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
                 items(files) { file ->
                     Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -212,12 +235,9 @@ fun FilesSheet(state: UiState, onDismiss: () -> Unit) {
                             file.path,
                             style = MonoStyle,
                             color = VibeColors.Faint,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
-            }
         }
     }
 }
@@ -227,26 +247,27 @@ fun FilesSheet(state: UiState, onDismiss: () -> Unit) {
 fun CommandsSheet(state: UiState, onDismiss: () -> Unit, onPick: (String) -> Unit) {
     SheetShell(onDismiss) {
         val commands = state.options?.commands.orEmpty()
-        SheetTitle("Slash commands")
+        item { SheetTitle("Slash commands") }
         if (commands.isEmpty()) {
+            item {
             EmptyNote(
                 if (state.optionsBusy) "Asking the PC what this chat supports…"
                 else "This chat's CLI has not advertised any commands."
             )
+            }
         } else {
-            LazyColumn(Modifier.heightIn(max = 440.dp)) {
                 items(commands) { command ->
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(9.dp))
-                            .clickable { onPick(command.name) }
+                            .clickable(role = Role.Button) { onPick(command.name) }
+                            .heightIn(min = 48.dp)
                             .padding(horizontal = 8.dp, vertical = 9.dp),
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column {
                             Text("/${command.name}", style = MonoStyle, color = VibeColors.Accent)
                             if (command.hint.isNotBlank()) {
-                                Spacer(Modifier.width(8.dp))
                                 Text(command.hint, style = MonoStyle, color = VibeColors.Faint)
                             }
                         }
@@ -259,7 +280,6 @@ fun CommandsSheet(state: UiState, onDismiss: () -> Unit, onPick: (String) -> Uni
                         }
                     }
                 }
-            }
         }
     }
 }
@@ -268,25 +288,23 @@ fun CommandsSheet(state: UiState, onDismiss: () -> Unit, onPick: (String) -> Uni
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SheetShell(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+private fun SheetShell(onDismiss: () -> Unit, content: LazyListScope.() -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = VibeColors.Bg1,
         contentColor = VibeColors.Text,
-        dragHandle = {
-            Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(width = 34.dp, height = 4.dp).clip(CircleShape).background(VibeColors.Border))
-            }
-        },
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 18.dp),
-        ) { content() }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
+            IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Close panel", tint = VibeColors.Muted)
+            }
+        }
+        LazyColumn(
+            Modifier.fillMaxWidth().weight(1f, fill = false),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            content = content,
+        )
     }
 }
 
@@ -327,6 +345,7 @@ private fun PickerRow(
     trailing: String = "",
     selected: Boolean,
     enabled: Boolean = true,
+    toggle: Boolean = false,
     accent: Color = VibeColors.Accent,
     onClick: () -> Unit,
 ) {
@@ -334,11 +353,12 @@ private fun PickerRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp)
+            .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (selected) accent.copy(alpha = 0.10f) else Color.Transparent)
             .border(1.dp, border, RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .selectable(selected = selected, enabled = enabled, role = if (toggle) Role.Switch else Role.RadioButton, onClick = onClick)
+            .heightIn(min = 48.dp)
             .padding(horizontal = 12.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -361,7 +381,10 @@ private fun PickerRow(
             Spacer(Modifier.width(10.dp))
             Text(trailing, style = MaterialTheme.typography.bodySmall, color = VibeColors.Muted)
         }
-        if (selected) {
+        if (toggle) {
+            Spacer(Modifier.width(10.dp))
+            Switch(checked = selected, onCheckedChange = null, enabled = enabled)
+        } else if (selected) {
             Spacer(Modifier.width(10.dp))
             Text("✓", style = MaterialTheme.typography.titleSmall, color = accent)
         }
@@ -379,8 +402,9 @@ fun Pill(
         Modifier
             .clip(RoundedCornerShape(7.dp))
             .background(color.copy(alpha = 0.13f))
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick).heightIn(min = 48.dp) else Modifier)
             .padding(horizontal = 8.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text,

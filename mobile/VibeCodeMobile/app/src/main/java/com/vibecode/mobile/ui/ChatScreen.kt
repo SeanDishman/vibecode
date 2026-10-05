@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.vibecode.mobile.ui
 
 import androidx.compose.animation.core.RepeatMode
@@ -10,6 +12,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -27,6 +38,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -54,6 +67,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -61,9 +75,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vibecode.mobile.Sheet
+import com.vibecode.mobile.Link
 import com.vibecode.mobile.UiState
 import com.vibecode.mobile.data.Message
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -114,12 +133,14 @@ fun ChatScreen(state: UiState, actions: ChatActions) {
 
     Scaffold(
         containerColor = VibeColors.Bg0,
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = { ChatTopBar(state, actions) },
         bottomBar = {
             Composer(
                 draft = state.draft,
                 sending = state.sending,
                 working = chat?.working == true,
+                online = state.link == Link.Online,
                 onDraftChanged = actions.onDraftChanged,
                 onSend = actions.onSend,
                 onCommands = { actions.onSheet(Sheet.Commands) },
@@ -128,7 +149,7 @@ fun ChatScreen(state: UiState, actions: ChatActions) {
     ) { padding ->
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -164,6 +185,7 @@ private fun ChatTopBar(state: UiState, actions: ChatActions) {
     val detail = state.detail
     var menuOpen by remember { mutableStateOf(false) }
 
+    Column(Modifier.background(VibeColors.Bg1)) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = VibeColors.Bg1,
@@ -182,48 +204,22 @@ private fun ChatTopBar(state: UiState, actions: ChatActions) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // The pills are the chat's live configuration and they double as the way into the control sheet,
-                // which is how the desktop's composer bar works too.
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()).padding(top = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    chat?.folder?.takeIf { it.isNotBlank() }?.let { Pill(it, VibeColors.Faint) }
-                    val model = detail.modelLabel.ifBlank { chat?.model.orEmpty() }
-                    if (model.isNotBlank()) Pill(model, VibeColors.Blue) { actions.onSheet(Sheet.Controls) }
-                    val mode = detail.modeLabel.ifBlank { chat?.modeLabel.orEmpty() }
-                    if (mode.isNotBlank()) {
-                        val danger = detail.mode == "bypassPermissions" || chat?.mode == "bypassPermissions"
-                        Pill(mode, if (danger) VibeColors.Red else VibeColors.Violet) { actions.onSheet(Sheet.Controls) }
-                    }
-                    if (detail.fast) Pill("fast", VibeColors.Amber) { actions.onSheet(Sheet.Controls) }
-                    detail.effort?.let { Pill("effort $it", VibeColors.Muted) { actions.onSheet(Sheet.Controls) } }
-                    if (detail.tokensLabel.isNotBlank()) Pill(detail.tokensLabel, VibeColors.Faint)
-                    if (detail.costLabel.isNotBlank()) Pill(detail.costLabel, VibeColors.Faint)
-                }
+                Text(
+                    when (state.link) {
+                        Link.Offline -> "Offline · reconnecting"
+                        Link.Connecting -> "Connecting…"
+                        Link.Online -> if (chat?.working == true) "Agent working" else "Connected"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.link == Link.Online) VibeColors.Muted else VibeColors.Amber,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         },
         actions = {
-            if (detail.todos.isNotEmpty()) {
-                IconButton(onClick = { actions.onSheet(Sheet.Todos) }) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Checklist, "Task list", tint = VibeColors.Muted)
-                        // A dot rather than a count: the exact number matters less than "there is a plan running".
-                        if (detail.todosDone < detail.todos.size) {
-                            Box(
-                                Modifier
-                                    .padding(start = 14.dp, bottom = 14.dp)
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(VibeColors.Amber)
-                            )
-                        }
-                    }
-                }
-            }
             if (chat?.working == true) {
-                IconButton(onClick = actions.onStop) {
+                IconButton(onClick = actions.onStop, enabled = state.link == Link.Online) {
                     Icon(Icons.Default.Stop, "Stop this turn", tint = VibeColors.Red)
                 }
             }
@@ -261,6 +257,27 @@ private fun ChatTopBar(state: UiState, actions: ChatActions) {
             }
         },
     )
+    // Metadata gets the full screen width rather than competing with navigation and action buttons.
+    // Session controls remain available from the labelled toolbar button in compact landscape windows.
+    if (LocalConfiguration.current.screenHeightDp >= 480) {
+        Row(
+            Modifier.fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            chat?.folder?.takeIf { it.isNotBlank() }?.let { Pill(it, VibeColors.Muted) }
+            val model = detail.modelLabel.ifBlank { chat?.model.orEmpty() }
+            if (model.isNotBlank()) Pill(model, VibeColors.Blue)
+            val mode = detail.modeLabel.ifBlank { chat?.modeLabel.orEmpty() }
+            if (mode.isNotBlank()) Pill(mode, if (detail.mode == "bypassPermissions" || chat?.mode == "bypassPermissions") VibeColors.Red else VibeColors.Violet)
+            if (detail.fast) Pill("fast", VibeColors.Amber)
+            detail.effort?.let { Pill("effort $it", VibeColors.Muted) }
+            if (detail.tokensLabel.isNotBlank()) Pill(detail.tokensLabel, VibeColors.Muted)
+            if (detail.costLabel.isNotBlank()) Pill(detail.costLabel, VibeColors.Muted)
+        }
+    }
+    }
 }
 
 @Composable
@@ -314,15 +331,7 @@ private fun UserBubble(message: Message, undoing: Boolean, onUndo: (Int) -> Unit
             } else if (message.canUndo && message.ordinal >= 0) {
                 Spacer(Modifier.height(6.dp))
                 if (!confirming) {
-                    Text(
-                        "↩  Rewind to here",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = VibeColors.Muted,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable(enabled = !undoing) { confirming = true }
-                            .padding(horizontal = 6.dp, vertical = 3.dp),
-                    )
+                    ActionButton("Rewind to here", VibeColors.Muted, enabled = !undoing) { confirming = true }
                 } else {
                     // Rewinding rolls files back on a machine the user cannot see, so it asks first — and says
                     // how many later turns it would take with it.
@@ -334,7 +343,7 @@ private fun UserBubble(message: Message, undoing: Boolean, onUndo: (Int) -> Unit
                         color = VibeColors.Amber,
                     )
                     Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         ActionButton("Rewind", VibeColors.Amber, enabled = !undoing) {
                             confirming = false
                             onUndo(message.ordinal)
@@ -367,7 +376,8 @@ private fun ThinkingCard(message: Message, index: Int) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(VibeColors.Bg1)
-            .clickable(enabled = hasText) { expanded = !expanded }
+            .clickable(enabled = hasText, role = Role.Button) { expanded = !expanded }
+            .heightIn(min = 48.dp)
             .padding(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -402,7 +412,8 @@ private fun ToolCard(message: Message, index: Int) {
             .clip(RoundedCornerShape(10.dp))
             .background(VibeColors.Bg1)
             .border(1.dp, VibeColors.BorderSoft, RoundedCornerShape(10.dp))
-            .clickable(enabled = message.text.isNotBlank()) { expanded = !expanded }
+            .clickable(enabled = message.text.isNotBlank(), role = Role.Button) { expanded = !expanded }
+            .heightIn(min = 48.dp)
             .padding(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -412,20 +423,10 @@ private fun ToolCard(message: Message, index: Int) {
                 if (message.agent) "${message.name} (agent)" else message.name,
                 style = MaterialTheme.typography.titleSmall,
                 color = VibeColors.Text,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
-            if (message.summary.isNotBlank()) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    message.summary,
-                    style = MonoStyle,
-                    color = VibeColors.Muted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
             if (message.added > 0 || message.removed > 0) {
                 Spacer(Modifier.width(6.dp))
                 Text("+${message.added}", style = MaterialTheme.typography.labelSmall, color = VibeColors.Green)
@@ -433,17 +434,14 @@ private fun ToolCard(message: Message, index: Int) {
                 Text("−${message.removed}", style = MaterialTheme.typography.labelSmall, color = VibeColors.Red)
             }
         }
+        if (message.summary.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(message.summary, style = MonoStyle, color = VibeColors.Muted,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
         if (expanded && message.text.isNotBlank()) {
             Spacer(Modifier.height(10.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(VibeColors.CodeBg)
-                    .padding(10.dp)
-            ) {
-                Text(message.text, style = MonoStyle, color = if (message.error) VibeColors.Red else VibeColors.Muted)
-            }
+            CodeBlock(message.text)
         }
     }
 }
@@ -472,21 +470,13 @@ private fun PermissionCard(message: Message, onPermission: (String, Boolean, Boo
 
         Spacer(Modifier.height(10.dp))
         if (message.status == "pending") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ActionButton("Allow", VibeColors.Green) { onPermission(message.requestId, true, false) }
                 ActionButton("Deny", VibeColors.Red) { onPermission(message.requestId, false, false) }
             }
             if (message.canAlways) {
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    "Always allow this",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = VibeColors.Green,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable { onPermission(message.requestId, true, true) }
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                )
+                ActionButton("Always allow this", VibeColors.Green) { onPermission(message.requestId, true, true) }
             }
         } else {
             Decision(message.status)
@@ -503,8 +493,8 @@ private fun QuestionCard(
     // Selection lives here rather than in the view model: it is scratch state for one card, and the poll that
     // refreshes the transcript must not be able to wipe a half-made choice. Held as immutable maps so every
     // change is a single state write - a mutable set inside a state map would mutate without recomposing.
-    var picked by remember(message.requestId) { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
-    var custom by remember(message.requestId) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var picked by rememberSaveable(message.requestId) { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var custom by rememberSaveable(message.requestId) { mutableStateOf<Map<String, String>>(emptyMap()) }
 
     CardShell(pending = pending, accent = VibeColors.Blue) {
         Text(
@@ -531,7 +521,7 @@ private fun QuestionCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 2.dp)
+                        .padding(vertical = 4.dp)
                         .clip(RoundedCornerShape(9.dp))
                         .background(if (selected) VibeColors.AccentSoft else Color.Transparent)
                         .border(
@@ -539,7 +529,7 @@ private fun QuestionCard(
                             if (selected) VibeColors.Accent else VibeColors.BorderSoft,
                             RoundedCornerShape(9.dp),
                         )
-                        .clickable(enabled = pending) {
+                        .selectable(selected = selected, enabled = pending, role = if (question.multi) Role.Checkbox else Role.RadioButton) {
                             val next = when {
                                 selected -> chosen - option
                                 // A single-answer question replaces rather than accumulates, which is what makes
@@ -549,6 +539,7 @@ private fun QuestionCard(
                             }
                             picked = picked + (question.question to next)
                         }
+                        .heightIn(min = 48.dp)
                         .padding(horizontal = 11.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -567,6 +558,7 @@ private fun QuestionCard(
                 OutlinedTextField(
                     value = custom[question.question].orEmpty(),
                     onValueChange = { custom = custom + (question.question to it) },
+                    label = { Text("Your answer") },
                     placeholder = { Text("Something else…", color = VibeColors.Faint) },
                     colors = fieldColors(),
                     shape = RoundedCornerShape(9.dp),
@@ -599,8 +591,8 @@ private fun QuestionCard(
 @Composable
 private fun PlanCard(message: Message, onPlan: (String, Boolean, Boolean, String) -> Unit) {
     val pending = message.status == "pending"
-    var feedback by remember(message.requestId) { mutableStateOf("") }
-    var rejecting by remember(message.requestId) { mutableStateOf(false) }
+    var feedback by rememberSaveable(message.requestId) { mutableStateOf("") }
+    var rejecting by rememberSaveable(message.requestId) { mutableStateOf(false) }
 
     CardShell(pending = pending, accent = VibeColors.Violet) {
         Text(
@@ -639,6 +631,7 @@ private fun PlanCard(message: Message, onPlan: (String, Boolean, Boolean, String
             OutlinedTextField(
                 value = feedback,
                 onValueChange = { feedback = it },
+                label = { Text("Plan feedback") },
                 placeholder = { Text("Optional feedback", color = VibeColors.Faint) },
                 colors = fieldColors(),
                 shape = RoundedCornerShape(9.dp),
@@ -647,7 +640,7 @@ private fun PlanCard(message: Message, onPlan: (String, Boolean, Boolean, String
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ActionButton("Send", VibeColors.Amber) {
                     onPlan(message.requestId, false, false, feedback)
                 }
@@ -693,17 +686,22 @@ private fun CodeBlock(text: String) {
             .background(VibeColors.CodeBg)
             .padding(10.dp)
     ) {
-        Text(text, style = MonoStyle, color = VibeColors.Text)
+        SelectionContainer {
+            Text(text, style = MonoStyle, color = VibeColors.Text, softWrap = false,
+                modifier = Modifier.horizontalScroll(rememberScrollState()))
+        }
     }
 }
 
 @Composable
 private fun DiffBlock(message: Message) {
+    SelectionContainer {
     Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(7.dp))
             .background(VibeColors.CodeBg)
+            .horizontalScroll(rememberScrollState())
             .padding(vertical = 8.dp),
     ) {
         message.diff.forEach { line ->
@@ -716,11 +714,11 @@ private fun DiffBlock(message: Message) {
                 (if (line.kind == "add") "+ " else if (line.kind == "del") "− " else "  ") + line.text,
                 style = MonoStyle,
                 color = color,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                softWrap = false,
                 modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 10.dp),
             )
         }
+    }
     }
 }
 
@@ -730,6 +728,7 @@ private fun ActionButton(label: String, color: Color, enabled: Boolean = true, o
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(8.dp))
             .border(1.dp, if (enabled) color else VibeColors.Border, RoundedCornerShape(8.dp)),
     ) {
@@ -792,7 +791,7 @@ private fun QueuedCard(message: Message, onSendNow: (Int) -> Unit, onCancel: (In
             Text(message.text, style = MaterialTheme.typography.bodyMedium, color = VibeColors.Muted)
             if (message.ordinal >= 0) {
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     ActionButton("Send now", VibeColors.Accent) { onSendNow(message.ordinal) }
                     ActionButton("Cancel", VibeColors.Red) { onCancel(message.ordinal) }
                 }
@@ -839,6 +838,7 @@ private fun Composer(
     draft: String,
     sending: Boolean,
     working: Boolean,
+    online: Boolean,
     onDraftChanged: (String) -> Unit,
     onSend: () -> Unit,
     onCommands: () -> Unit,
@@ -847,13 +847,15 @@ private fun Composer(
         modifier = Modifier
             .fillMaxWidth()
             .background(VibeColors.Bg1)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .imePadding()
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
-        if (working) {
+        if (!online || working) {
             Text(
-                "The agent is working — your message will be queued and sent when it finishes.",
+                if (!online) "Reconnect to send. You can keep writing your message."
+                else "Your message will be queued while the agent works.",
                 style = MaterialTheme.typography.labelSmall,
                 color = VibeColors.Faint,
                 modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
@@ -862,7 +864,8 @@ private fun Composer(
         Row(verticalAlignment = Alignment.Bottom) {
             IconButton(
                 onClick = onCommands,
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(VibeColors.Bg3),
+                modifier = Modifier.size(48.dp).clip(CircleShape).background(VibeColors.Bg3)
+                    .semantics { contentDescription = "Slash commands" },
             ) {
                 Text("/", style = MaterialTheme.typography.titleMedium, color = VibeColors.Muted)
             }
@@ -873,12 +876,12 @@ private fun Composer(
                 placeholder = { Text("Message", color = VibeColors.Faint) },
                 colors = fieldColors(),
                 shape = RoundedCornerShape(20.dp),
-                maxLines = 6,
+                maxLines = if (LocalConfiguration.current.screenHeightDp < 480) 2 else 5,
                 textStyle = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).semantics { contentDescription = "Message" },
             )
             Spacer(Modifier.width(8.dp))
-            val enabled = draft.isNotBlank() && !sending
+            val enabled = online && draft.isNotBlank() && !sending
             IconButton(
                 onClick = onSend,
                 enabled = enabled,

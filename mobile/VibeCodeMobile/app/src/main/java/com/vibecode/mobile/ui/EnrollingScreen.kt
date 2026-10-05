@@ -8,11 +8,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,10 +44,13 @@ fun EnrollingScreen(state: UiState, onRetry: () -> Unit) {
     val pc = state.boundTo.ifBlank { "your PC" }
 
     Box(
-        Modifier.fillMaxSize().background(VibeColors.Bg0).padding(32.dp),
+        Modifier.fillMaxSize().background(VibeColors.Bg0).safeDrawingPadding().padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            Modifier.widthIn(max = 600.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Box(
                 Modifier.size(72.dp).clip(CircleShape).background(VibeColors.Bg2),
                 contentAlignment = Alignment.Center,
@@ -61,6 +71,7 @@ fun EnrollingScreen(state: UiState, onRetry: () -> Unit) {
                 },
                 style = MaterialTheme.typography.headlineSmall,
                 color = VibeColors.Text,
+                textAlign = TextAlign.Center,
             )
 
             Spacer(Modifier.height(8.dp))
@@ -115,10 +126,10 @@ fun EnrollingScreen(state: UiState, onRetry: () -> Unit) {
                         )
                     } else {
                         listOf(
-                            "VibeCode is open, and Phone access says On",
-                            "The \"Your phone will not be able to reach this PC\" panel is empty — it names the exact problem and has a button to fix it",
-                            "A VPN on the PC is not blocking the local network",
-                            "This phone is on the same Wi-Fi, not mobile data",
+                            "VibeCode is open and phone access is enabled",
+                            "In the Phone panel, check the connection status and address",
+                            "The PC's firewall and VPN allow this connection",
+                            "Use the same local network or a configured private VPN",
                         )
                     }
                     steps.forEach { step ->
@@ -133,16 +144,13 @@ fun EnrollingScreen(state: UiState, onRetry: () -> Unit) {
             }
 
             Spacer(Modifier.height(24.dp))
-            Text(
-                if (state.enrolFatal) "Try again" else "Try now",
-                style = MaterialTheme.typography.titleSmall,
-                color = VibeColors.OnAccent,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(VibeColors.Accent)
-                    .clickable(onClick = onRetry)
-                    .padding(horizontal = 30.dp, vertical = 13.dp),
-            )
+            Button(
+                onClick = onRetry,
+                enabled = !state.enrolBusy,
+                modifier = Modifier.heightIn(min = 48.dp),
+                shape = RoundedCornerShape(11.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = VibeColors.Accent, contentColor = VibeColors.OnAccent),
+            ) { Text(if (state.enrolBusy) "Connecting…" else if (state.enrolFatal) "Try again" else "Try now") }
         }
     }
 }

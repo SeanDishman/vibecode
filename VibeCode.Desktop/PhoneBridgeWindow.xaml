@@ -50,7 +50,13 @@
                                    FontFamily="{StaticResource Display}" FontSize="14" FontWeight="SemiBold" />
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5"
                                    Margin="0,6,0,0"
-                                   Text="Install the VibeCode app on your phone, put it on the same Wi-Fi as this PC, and pair it below. The connection is encrypted and stays on your network — nothing goes through a server on the internet." />
+                                   Text="Install the VibeCode app on your phone and pair it below. Use the same local network, or a private VPN that connects your phone to this PC. The app checks this PC's certificate before sending credentials." />
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5"
+                                   Margin="0,10,0,0"
+                                   Text="Away from home: connect both devices through your private VPN and use this PC's VPN IPv4 address and port. VibeCode does not set up a VPN, public relay, or router port forwarding." />
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="10.5"
+                                   Margin="0,8,0,0"
+                                   Text="Keep VibeCode running and this PC awake. Remote access is unverified until the phone connects with Wi-Fi off. Automatic discovery only searches the local network." />
                     </StackPanel>
                 </Border>
 
@@ -61,9 +67,9 @@
                     <StackPanel>
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Content="Check again"
-                                    Click="OnRecheck" VerticalAlignment="Top" />
+                                    x:Name="DiagnosticsCheckButton" Click="OnRecheck" VerticalAlignment="Top" />
                             <TextBlock x:Name="DiagnosticsTitle" FontFamily="{StaticResource Display}" FontSize="14"
-                                       FontWeight="SemiBold" Text="Your phone will not be able to reach this PC" />
+                                       FontWeight="SemiBold" Text="Local connection checks" TextWrapping="Wrap" />
                         </DockPanel>
                         <StackPanel x:Name="DiagnosticsList" Margin="0,10,0,0" />
                     </StackPanel>
@@ -74,12 +80,13 @@
                         Visibility="{Binding Running, Converter={StaticResource BoolVis}}">
                     <StackPanel>
                         <TextBlock Text="This PC" FontFamily="{StaticResource Display}" FontSize="14" FontWeight="SemiBold" />
-                        <TextBlock Text="Address" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,12,0,4" />
-                        <TextBox Text="{Binding Address, Mode=OneWay}" IsReadOnly="True" FontFamily="{StaticResource Mono}"
+                        <TextBlock Text="IPv4 addresses on this PC" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,12,0,4" />
+                        <TextBox Text="{Binding ConnectionAddresses, Mode=OneWay}" IsReadOnly="True" FontFamily="{StaticResource Mono}"
                                  FontSize="15" Background="{StaticResource CodeBg}" Padding="10,8"
+                                 TextWrapping="Wrap" MaxHeight="130" VerticalScrollBarVisibility="Auto"
                                  AutomationProperties.Name="Bridge address" />
                         <TextBlock Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="2,6,0,0"
-                                   Text="Type this into the phone app. If your PC has more than one network adapter and the phone can't reach it, try the other address your router shows for this machine." />
+                                   Text="Use the address for the network shared with your phone. A listed address or a listening port does not prove that your phone can reach it. Check again after changing networks." />
 
                         <TextBlock Text="Safety code" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,14,0,4" />
                         <TextBlock Text="{Binding SafetyCode}" FontFamily="{StaticResource Mono}" FontSize="18"
@@ -95,6 +102,8 @@
                             <Button Style="{StaticResource GhostButton}" Content="Apply" Margin="8,0,0,0"
                                     Click="OnApplyPort" />
                         </StackPanel>
+                        <TextBlock Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="If you change the port, update the connection address on your phone. Discovery cannot find a changed port." />
                     </StackPanel>
                 </Border>
 
@@ -106,21 +115,31 @@
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,8,0,12"
                                    Text="Builds an Android app that belongs to this PC alone. It has this machine's security key built in, so it can never be talked into connecting to anything else, and it sets itself up the first time you open it — no codes to type." />
 
-                        <StackPanel x:Name="ApkReadyPanel" Margin="0,0,0,12">
-                            <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad8}" Padding="12,10">
-                                <StackPanel>
-                                    <TextBlock x:Name="ApkPathText" FontFamily="{StaticResource Mono}" FontSize="10.5"
-                                               TextWrapping="Wrap" Foreground="{StaticResource Text}" />
-                                    <TextBlock x:Name="ApkStateText" FontSize="10.5" Margin="0,6,0,0"
-                                               TextWrapping="Wrap" Foreground="{StaticResource Amber}" />
-                                </StackPanel>
-                            </Border>
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <Button Style="{StaticResource GhostButton}" Content="Show the file" Click="OnShowApk" />
-                                <Button x:Name="RevokeApkButton" Style="{StaticResource GhostButton}" Content="Cancel it"
-                                        Foreground="{StaticResource Red}" Margin="8,0,0,0" Click="OnRevokeApk" />
-                            </StackPanel>
-                        </StackPanel>
+                        <!-- One entry per generated app: each sets up exactly one phone, and several can be waiting
+                             at once, so a second phone never costs the first one its file. -->
+                        <ItemsControl x:Name="ApkList" Margin="0,0,0,4">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,12">
+                                        <Border Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad8}" Padding="12,10">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Path}" FontFamily="{StaticResource Mono}" FontSize="10.5"
+                                                           TextWrapping="Wrap" Foreground="{StaticResource Text}" />
+                                                <TextBlock Text="{Binding State}" Foreground="{Binding StateBrush}" FontSize="10.5"
+                                                           Margin="0,6,0,0" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <Button Style="{StaticResource GhostButton}" Content="Show the file" Click="OnShowApk"
+                                                    Tag="{Binding}" Visibility="{Binding ShowVisibility}" />
+                                            <Button Style="{StaticResource GhostButton}" Content="Cancel it" Click="OnRevokeApk"
+                                                    Tag="{Binding}" Visibility="{Binding CancelVisibility}"
+                                                    Foreground="{StaticResource Red}" Margin="8,0,0,0" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
                         <Button x:Name="BuildApkButton" Style="{StaticResource PrimaryButton}" Padding="16,8"
                                 HorizontalAlignment="Left" Content="Generate the app" Click="OnBuildApk" />
@@ -205,7 +224,7 @@
                         <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"
                                    Text="• Every request needs a token that only a paired phone has. The PC stores just a hash of it." />
                         <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"
-                                   Text="• Nothing is reachable from outside your Wi-Fi, and the listener is off until you turn it on." />
+                                   Text="• Use your local network or a private VPN. VibeCode has no public relay, and phone access stays off until enabled." />
                         <TextBlock Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"
                                    Text="• Lost the phone? Revoke it above and it is locked out immediately." />
                     </StackPanel>

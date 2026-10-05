@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Collections.Specialized;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -11,22 +12,24 @@ namespace VibeCode;
 /// <summary>
 /// The pairing and status surface for <see cref="PhoneBridgeService"/>.
 ///
-/// Everything security-relevant is deliberately explicit here rather than buried in Settings: the listener is off
-/// until this window turns it on, the pairing code only exists while this window is showing it, and the safety
-/// code the phone must match is on screen next to it. A user who never opens this window never has an open port.
+/// Shows listener state, local setup checks and pairing. Phone access starts only after it is enabled; that
+/// preference is restored on app launch. Local checks do not establish reachability from a phone or private VPN.
 /// </summary>
 public partial class PhoneBridgeWindow : Window
 {
     private static PhoneBridgeWindow? _open;
     private readonly DispatcherTimer _tick;
     private readonly PhoneBridgeService _bridge = PhoneBridgeService.Instance;
+    private bool _closed;
+    private bool _diagnosticsBusy;
+    private bool _diagnosticsAgain;
 
     public PhoneBridgeWindow()
     {
         InitializeComponent();
         PortBox.Text = _bridge.Port.ToString();
         _bridge.PropertyChanged += OnBridgeChanged;
-        _bridge.Devices.CollectionChanged += (_, _) => Refresh();
+        _bridge.Devices.CollectionChanged += OnDevicesChanged;
 
         // Only runs while this window is open — the countdown is the only thing that needs a per-second tick and
         // there is no reason for it to exist when nobody is watching a code expire.
@@ -34,7 +37,7 @@ public partial class PhoneBridgeWindow : Window
         _tick.Tick += (_, _) => _bridge.TickPairingCountdown();
         _tick.Start();
 
-        Refresh();
+        Refresh(recheck: true);
     }
 
     /// <summary>Shows the window, or brings the existing one forward. One bridge, one window.</summary>
@@ -52,17 +55,26 @@ public partial class PhoneBridgeWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _closed = true;
         _tick.Stop();
         _bridge.PropertyChanged -= OnBridgeChanged;
+        _bridge.Devices.CollectionChanged -= OnDevicesChanged;
         // Leaving pairing open behind a closed window would mean a code nobody can read is still accepted.
         _bridge.ClosePairing();
         _open = null;
         base.OnClosed(e);
     }
 
-    private void OnBridgeChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
+    private void OnBridgeChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        // Countdown bindings update themselves. Do not run COM and VPN processes every second.
+        if (e.PropertyName == nameof(PhoneBridgeService.PairingCountdown)) return;
+        Refresh(recheck: e.PropertyName is nameof(PhoneBridgeService.Running) or nameof(PhoneBridgeService.Port));
+    }
 
-    private void Refresh()
+    private void OnDevicesChanged(object? sender, NotifyCollectionChangedEventArgs e) => Refresh();
+
+    private void Refresh(bool recheck = false)
     {
         PowerButton.Content = _bridge.Running ? "Turn off" : "Turn on";
         PairIdlePanel.Visibility = _bridge.Running && !_bridge.PairingOpen ? Visibility.Visible : Visibility.Collapsed;
@@ -70,7 +82,11 @@ public partial class PhoneBridgeWindow : Window
         ErrorLine.Text = _bridge.Error;
         ErrorLine.Visibility = _bridge.HasError ? Visibility.Visible : Visibility.Collapsed;
         RefreshApk();
-        RefreshDiagnostics();
+        if (recheck)
+        {
+            _bridge.RefreshAddresses();
+            RefreshDiagnostics();
+        }
     }
 
     /// <summary>
@@ -83,31 +99,58 @@ public partial class PhoneBridgeWindow : Window
     /// </summary>
     private void RefreshDiagnostics()
     {
-        List<PhoneProblem> problems;
+        // A window can be constructed before the normal application dispatcher loop installs its context.
+        // Enter through the dispatcher so every continuation below returns to the window's owning thread.
+        Dispatcher.BeginInvoke(new Action(RefreshDiagnosticsAsync));
+    }
+
+    private async void RefreshDiagnosticsAsync()
+    {
+        if (_closed) return;
+        if (_diagnosticsBusy)
+        {
+            _diagnosticsAgain = true;
+            return;
+        }
+        _diagnosticsBusy = true;
+        DiagnosticsCard.Visibility = Visibility.Visible;
+        DiagnosticsCheckButton.IsEnabled = false;
         try
         {
-            problems = PhoneReachability.Check();
+            do
+            {
+                _diagnosticsAgain = false;
+                DiagnosticsTitle.Text = "Checking this PC…";
+                List<PhoneProblem> problems;
+                try
+                {
+                    problems = await Task.Run(PhoneReachability.Check);
+                }
+                catch (Exception ex)
+                {
+                    CrashLog.Note("PhoneBridge", $"reachability check failed - {ex.Message}");
+                    problems = new List<PhoneProblem>
+                    {
+                        new("Local checks could not finish", "Try Check again. Phone and remote connectivity have not been verified.", Blocking: false),
+                    };
+                }
+                if (_closed) return;
+
+                DiagnosticsList.Children.Clear();
+                DiagnosticsTitle.Text = problems.Any(p => p.Blocking)
+                    ? "Connection setup needs attention"
+                    : "Local connection checks";
+                if (problems.Count == 0)
+                    problems.Add(new PhoneProblem("No local setup issue detected",
+                        "This check does not test your phone's route or remote access. Connect from the phone to verify it.", Blocking: false));
+                foreach (var problem in problems) DiagnosticsList.Children.Add(BuildProblemRow(problem));
+            } while (_diagnosticsAgain);
         }
-        catch (Exception ex)
+        finally
         {
-            CrashLog.Note("PhoneBridge", $"reachability check failed - {ex.Message}");
-            DiagnosticsCard.Visibility = Visibility.Collapsed;
-            return;
+            _diagnosticsBusy = false;
+            if (!_closed) DiagnosticsCheckButton.IsEnabled = true;
         }
-
-        DiagnosticsList.Children.Clear();
-        if (problems.Count == 0)
-        {
-            DiagnosticsCard.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        DiagnosticsCard.Visibility = Visibility.Visible;
-        DiagnosticsTitle.Text = problems.Any(p => p.Blocking)
-            ? "Your phone will not be able to reach this PC"
-            : "Worth knowing";
-
-        foreach (var problem in problems) DiagnosticsList.Children.Add(BuildProblemRow(problem));
     }
 
     private UIElement BuildProblemRow(PhoneProblem problem)
@@ -169,7 +212,7 @@ public partial class PhoneBridgeWindow : Window
                 if (result.Length == 0)
                 {
                     // Believe the system, not the exit code: re-run every check and let the panel redraw itself.
-                    Refresh();
+                    Refresh(recheck: true);
                     return;
                 }
                 status.Text = result;
@@ -190,54 +233,60 @@ public partial class PhoneBridgeWindow : Window
         };
     }
 
-    private void OnRecheck(object sender, RoutedEventArgs e) => Refresh();
+    private void OnRecheck(object sender, RoutedEventArgs e) => Refresh(recheck: true);
+
+    /// <summary>One generated app as the window lists it.</summary>
+    public sealed record ApkRow(string Id, string Path, string State, System.Windows.Media.Brush StateBrush,
+        bool CanCancel, bool HasFile)
+    {
+        public Visibility CancelVisibility => CanCancel ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility ShowVisibility => HasFile ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Recently claimed or expired apps listed under the waiting ones, so "which phone used which file"
+    /// stays answerable without the list growing forever.</summary>
+    private const int ShownFinishedApps = 3;
 
     private void RefreshApk()
     {
-        var enrolment = _bridge.Enrolment;
-        var haveFile = enrolment is not null && enrolment.ApkPath.Length > 0 && File.Exists(enrolment.ApkPath);
-
-        ApkReadyPanel.Visibility = haveFile ? Visibility.Visible : Visibility.Collapsed;
-        BuildApkButton.Content = haveFile ? "Generate a new one" : "Generate the app";
         BuildApkButton.IsEnabled = PhoneApkBuilder.TemplateAvailable;
-
         if (!PhoneApkBuilder.TemplateAvailable)
         {
+            ApkList.ItemsSource = null;
+            BuildApkButton.Content = "Generate the app";
             ApkHintText.Text = "This build of VibeCode does not include the phone app, so there is nothing to "
                                + "generate. Pair by hand below instead.";
             return;
         }
 
-        if (haveFile)
-        {
-            ApkPathText.Text = enrolment!.ApkPath;
-            // The distinction that matters: an app nobody has installed yet is a live credential sitting in a
-            // file, and one that has been claimed is inert. Say which.
-            ApkStateText.Text = enrolment.Pending
-                ? "Not set up yet. The FIRST phone to open it claims it — after that the same file cannot set up "
-                  + "any other phone, ever. Until then, treat it like a key."
-                : $"Claimed by \"{enrolment.DeviceName}\" on {enrolment.UsedAt:g}. That is the only phone this file "
-                  + "will ever work on — anyone else who opens it is refused, even with the file in hand.";
-            ApkStateText.Foreground = enrolment.Pending
-                ? (System.Windows.Media.Brush)FindResource("Amber")
-                : (System.Windows.Media.Brush)FindResource("Faint");
-            RevokeApkButton.Visibility = enrolment.Pending ? Visibility.Visible : Visibility.Collapsed;
-            ApkHintText.Text = "Copy the file to your phone and open it. Generating a new one immediately stops "
-                               + "the previous file from being able to set up a phone.";
-        }
+        var enrolments = _bridge.Enrolments.Where(e => e.ApkPath.Length > 0).ToList();
+        var shown = enrolments.Where(e => e.Pending)
+            .Concat(enrolments.Where(e => !e.Pending).Take(ShownFinishedApps))
+            .Select(e => new ApkRow(e.Id, e.ApkPath, ApkState(e),
+                (System.Windows.Media.Brush)FindResource(e.Pending ? "Amber" : "Faint"),
+                e.Pending, File.Exists(e.ApkPath)))
+            .ToList();
+        ApkList.ItemsSource = shown;
+        BuildApkButton.Content = shown.Count > 0 || _bridge.Devices.Count > 0 ? "Generate an app for another phone" : "Generate the app";
+        ApkHintText.Text = shown.Count > 0 || _bridge.Devices.Count > 0
+            ? "Copy a file to the phone it is for and open it there. Each file sets up exactly one phone, so make one per "
+              + "phone — every phone you pair keeps working alongside the others."
+            : "Copy the file to your phone and open it. Android will ask you to allow installing from this source — that "
+              + "is expected for an app that did not come from the Play Store.";
     }
+
+    /// <summary>The distinction that matters: an app nobody has installed yet is a live credential sitting in a file,
+    /// and one that has been claimed is inert. Say which.</summary>
+    private static string ApkState(PhoneEnrolment enrolment) => enrolment.Pending
+        ? $"Not set up yet. Expires {enrolment.ExpiresAt.ToLocalTime():g}. The FIRST phone to open it claims it. "
+          + "Until then, treat the file like a key."
+        : enrolment.UsedAt is null
+            ? "This enrollment has expired. Generate a new app on this PC."
+        : $"Claimed by \"{enrolment.DeviceName}\" on {enrolment.UsedAt:g}. That is the only phone this file will ever "
+          + "work on — anyone else who opens it is refused, even with the file in hand.";
 
     private void OnBuildApk(object sender, RoutedEventArgs e)
     {
-        if (_bridge.Enrolment?.Pending == true)
-        {
-            var confirm = MessageBox.Show(this,
-                "The app you generated last time has not been set up on a phone yet. Generating a new one stops "
-                + "that file from working.\r\n\r\nContinue?",
-                "Phone", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (confirm != MessageBoxResult.OK) return;
-        }
-
         try
         {
             Mouse.OverrideCursor = Cursors.Wait;
@@ -258,17 +307,18 @@ public partial class PhoneBridgeWindow : Window
 
     private void OnShowApk(object sender, RoutedEventArgs e)
     {
-        var path = _bridge.Enrolment?.ApkPath;
-        if (!string.IsNullOrEmpty(path) && File.Exists(path)) Reveal(path);
+        if (sender is Button { Tag: ApkRow row } && File.Exists(row.Path)) Reveal(row.Path);
     }
 
     private void OnRevokeApk(object sender, RoutedEventArgs e)
     {
+        if (sender is not Button { Tag: ApkRow row }) return;
         var answer = MessageBox.Show(this,
-            "Cancel the generated app? The file stays on disk but can no longer set up a phone.",
+            $"Cancel {System.IO.Path.GetFileName(row.Path)}? The file stays on disk but can no longer set up a phone. "
+            + "Other generated apps and paired phones are not affected.",
             "Phone", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.OK) return;
-        _bridge.RevokeEnrolment();
+        _bridge.RevokeEnrolment(row.Id);
         Refresh();
     }
 

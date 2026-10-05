@@ -122,7 +122,7 @@ public sealed class PhoneBridgeMirror
 
             var count = chat.Items.Count;
             var baseIndex = 0;
-            if (clientVersion > 0 && chat.Changes.Count > 0 && clientVersion >= chat.Changes[0].Version)
+            if (clientVersion > 0 && clientVersion < chat.Version && chat.Changes.Count > 0 && clientVersion >= chat.Changes[0].Version)
             {
                 var min = count;
                 foreach (var (v, idx) in chat.Changes)

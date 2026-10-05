@@ -8,10 +8,15 @@ public sealed partial class ChatViewModel
     private sealed record MailboxNotice(BridgeMailboxStore.Message Message, Action<int> OnDispatch,
         PeerMessageLimits Limits);
     private readonly List<MailboxNotice> _mailboxNotices = new();
-    private bool HasPendingDispatch => _sendQueue.Count > 0 || _mailboxNotices.Count > 0;
+    internal Func<bool>? PeerNotificationWakeAllowed { get; set; }
+    internal bool CanWakeForPeerMessages => PeerNotificationWakeAllowed?.Invoke() ?? false;
+    private bool HasPendingDispatch => _sendQueue.Count > 0 || (CanWakeForPeerMessages && _mailboxNotices.Count > 0);
+    public int UnreadPeerMessageCount => PeerMailbox?.Messages.Count(m => ReferenceEquals(m.To, PeerMailbox) && !m.ReadAt.HasValue) ?? 0;
+    public string PeerInboxLabel => $"{UnreadPeerMessageCount} unread message{(UnreadPeerMessageCount == 1 ? "" : "s")}";
+    internal void RaisePeerInbox() { Raise(nameof(UnreadPeerMessageCount)); Raise(nameof(PeerInboxLabel)); }
     internal bool IsPeerNotificationTurn { get; private set; }
 
-    internal bool AcceptsPeerNotifications => _status != "closed" && _session is { HasExited: false }
+    internal bool AcceptsPeerNotifications => _status is not ("closed" or "error") && _session is { HasExited: false }
         && PeerMailbox?.Store.Available != false;
 
     /// <summary>Separate control queue: never calls Send/Interrupt, folds user text, consumes SwarmNextTurn,
@@ -23,12 +28,13 @@ public sealed partial class ChatViewModel
             throw new InvalidOperationException("The recipient mailbox/session is no longer available.");
         _mailboxNotices.Add(new(message, onDispatch, limits));
         _mailboxNotices.RemoveAll(n => !message.To.Messages.Contains(n.Message));
-        if (_status == "idle") Post(FlushQueue);
+        RaisePeerInbox();
+        if (_status == "idle" && CanWakeForPeerMessages) Post(FlushQueue);
     }
 
     private bool FlushPeerNotifications()
     {
-        if (_status != "idle" || !AcceptsPeerNotifications || IsPeerNotificationTurn) return false;
+        if (_status != "idle" || !AcceptsPeerNotifications || IsPeerNotificationTurn || !CanWakeForPeerMessages) return false;
         _mailboxNotices.RemoveAll(n => n.Message.To.Closed || !n.Message.To.Messages.Contains(n.Message)
             || n.Message.ReadAt.HasValue);
         if (_mailboxNotices.Count == 0) return false;
@@ -45,6 +51,12 @@ public sealed partial class ChatViewModel
         IsPeerNotificationTurn = true;
         latest.OnDispatch(hop); // assign to the actual notification turn, not whichever turn was already running
         var row = SendNow(wire, null);
+        if (row is null)
+        {
+            IsPeerNotificationTurn = false;
+            _mailboxNotices.AddRange(notices);
+            return false;
+        }
         if (row is not null)
         {
             var labels = notices.Select(n => $"{n.Message.From.Label} {n.Message.FromAtSend}").Distinct();
@@ -58,18 +70,18 @@ public sealed partial class ChatViewModel
         return true;
     }
 
-    internal void ClearPeerMailbox()
+    internal void ClearPeerMailbox(bool preserve = true)
     {
         _mailboxNotices.Clear();
         IsPeerNotificationTurn = false;
         if (PeerMailbox is not { } box) return;
-        try { box.Store.Close(box); }
+        try { if (preserve) box.Store.Detach(box); else box.Store.Close(box); }
         catch (Exception ex)
         {
             // Do not silently claim cleanup succeeded or overwrite a user-replaced file.
             Items.Add(new BannerItem { Level = "warning", Text = $"Could not remove {box.FilePath}: {ex.Message}" });
             SupervisionLog.Write(BridgeLabel, "PEER-MAILBOX-CLEANUP", ex.Message);
         }
-        finally { PeerMailbox = null; }
+        finally { PeerMailbox = null; RaisePeerInbox(); }
     }
 }

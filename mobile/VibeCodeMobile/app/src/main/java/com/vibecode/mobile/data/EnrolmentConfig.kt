@@ -49,7 +49,9 @@ data class EnrolmentConfig(
                 secret = o.optString("secret"),
             )
             // A half-filled slot is worse than none: it would send the app looking for a PC it cannot verify.
-            if (config.hosts.isEmpty() || config.fingerprint.length != 64) null else config
+            if (config.hosts.isEmpty() || !config.fingerprint.matches(Regex("[0-9a-fA-F]{64}")) ||
+                config.port !in 1..65535 || !config.secret.matches(Regex("[A-Za-z0-9_-]{43}")) ||
+                config.hosts.any { host -> host.any { it.isWhitespace() || it in "/\\?#@" } }) null else config
         }.getOrNull()
     }
 }

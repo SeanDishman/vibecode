@@ -10,6 +10,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,6 +28,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -72,6 +79,18 @@ fun ChatListScreen(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<ChatSummary?>(null) }
+    var confirmingUnpair by remember { mutableStateOf(false) }
+
+    if (confirmingUnpair) {
+        AlertDialog(
+            onDismissRequest = { confirmingUnpair = false },
+            title = { Text("Unpair this phone?") },
+            text = { Text("To connect again, you will need to set up phone access from your PC.") },
+            confirmButton = { TextButton(onClick = { confirmingUnpair = false; onUnpair() }) { Text("Unpair", color = VibeColors.Red) } },
+            dismissButton = { TextButton(onClick = { confirmingUnpair = false }) { Text("Cancel") } },
+            containerColor = VibeColors.Bg2,
+        )
+    }
 
     renaming?.let { chat ->
         RenameDialog(
@@ -83,6 +102,7 @@ fun ChatListScreen(
 
     Scaffold(
         containerColor = VibeColors.Bg0,
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -120,7 +140,7 @@ fun ChatListScreen(
                         )
                         DropdownMenuItem(
                             text = { Text("Unpair this phone", color = VibeColors.Red) },
-                            onClick = { menuOpen = false; onUnpair() },
+                            onClick = { menuOpen = false; confirmingUnpair = true },
                         )
                     }
                 },
@@ -144,7 +164,7 @@ fun ChatListScreen(
             EmptyState(state, Modifier.padding(padding))
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
+                modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                 contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -173,6 +193,7 @@ private fun RenameDialog(chat: ChatSummary, onDismiss: () -> Unit, onConfirm: (S
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
+                label = { Text("Chat name") },
                 singleLine = true,
                 colors = fieldColors(),
                 shape = RoundedCornerShape(9.dp),
@@ -213,7 +234,7 @@ private fun LinkDot(link: Link) {
     Box(Modifier.size(7.dp).alpha(alpha).clip(CircleShape).background(color))
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ChatCard(
     chat: ChatSummary,
@@ -224,34 +245,13 @@ private fun ChatCard(
 ) {
     var actions by remember(chat.id) { mutableStateOf(false) }
 
-    Box {
-        DropdownMenu(
-            expanded = actions,
-            onDismissRequest = { actions = false },
-            containerColor = VibeColors.Bg2,
-        ) {
-            DropdownMenuItem(
-                text = { Text(if (chat.pinned) "Unpin" else "Pin to top", color = VibeColors.Text) },
-                onClick = { actions = false; onPin() },
-            )
-            DropdownMenuItem(
-                text = { Text("Rename", color = VibeColors.Text) },
-                onClick = { actions = false; onRename() },
-            )
-            DropdownMenuItem(
-                text = { Text("Close on PC", color = VibeColors.Red) },
-                onClick = { actions = false; onClosePane() },
-            )
-        }
-    }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(VibeColors.Bg1)
             .border(1.dp, if (chat.attention) VibeColors.Amber else VibeColors.BorderSoft, RoundedCornerShape(14.dp))
-            .combinedClickable(onClick = onClick, onLongClick = { actions = true })
+            .combinedClickable(onClick = onClick, onLongClickLabel = "Chat actions", onLongClick = { actions = true })
             .padding(14.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -284,21 +284,24 @@ private fun ChatCard(
                 )
             }
             Spacer(Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Chip(chat.folder.ifBlank { "—" }, VibeColors.Bg3, VibeColors.Muted)
-                Spacer(Modifier.width(6.dp))
                 Chip(chat.providerLabel, VibeColors.Bg3, VibeColors.provider(chat.provider))
                 if (chat.mode == "bypassPermissions") {
-                    Spacer(Modifier.width(6.dp))
                     Chip("bypass", VibeColors.RedSoft, VibeColors.Red)
                 }
                 if (chat.hasTodos) {
-                    Spacer(Modifier.width(6.dp))
                     Chip(
                         "${chat.todosDone}/${chat.todosTotal}",
                         VibeColors.Bg3,
                         if (chat.todosDone == chat.todosTotal) VibeColors.Green else VibeColors.Amber,
                     )
+                }
+                when {
+                    chat.attention -> Chip("needs you", VibeColors.AmberSoft, VibeColors.Amber)
+                    chat.working -> WorkingPill()
+                    chat.queued -> Chip("queued", VibeColors.Bg3, VibeColors.Muted)
+                    else -> Chip("idle", VibeColors.Bg3, VibeColors.Faint)
                 }
             }
             if (chat.preview.isNotBlank()) {
@@ -313,12 +316,14 @@ private fun ChatCard(
             }
         }
         Spacer(Modifier.width(8.dp))
-        Column(horizontalAlignment = Alignment.End) {
-            when {
-                chat.attention -> Chip("needs you", VibeColors.AmberSoft, VibeColors.Amber)
-                chat.working -> WorkingPill()
-                chat.queued -> Chip("queued", VibeColors.Bg3, VibeColors.Muted)
-                else -> Chip("idle", VibeColors.Bg3, VibeColors.Faint)
+        Box {
+            IconButton(onClick = { actions = true }, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Actions for ${chat.title.ifBlank { "chat" }}", tint = VibeColors.Muted)
+            }
+            DropdownMenu(expanded = actions, onDismissRequest = { actions = false }, containerColor = VibeColors.Bg2) {
+                DropdownMenuItem(text = { Text(if (chat.pinned) "Unpin" else "Pin to top") }, onClick = { actions = false; onPin() })
+                DropdownMenuItem(text = { Text("Rename") }, onClick = { actions = false; onRename() })
+                DropdownMenuItem(text = { Text("Close on PC", color = VibeColors.Red) }, onClick = { actions = false; onClosePane() })
             }
         }
     }
@@ -344,13 +349,13 @@ internal fun Chip(text: String, background: androidx.compose.ui.graphics.Color, 
             .background(background)
             .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, color = foreground, maxLines = 1)
+        Text(text, style = MaterialTheme.typography.labelSmall, color = foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
 private fun EmptyState(state: UiState, modifier: Modifier) {
-    Box(modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+    Box(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 when (state.link) {
@@ -365,7 +370,7 @@ private fun EmptyState(state: UiState, modifier: Modifier) {
             Text(
                 when (state.link) {
                     Link.Online -> "Tap + to start one, or open a chat on the PC and it will appear here."
-                    Link.Connecting -> "Both devices need to be on the same Wi-Fi."
+                    Link.Connecting -> "Keep VibeCode open on your PC. Use the same local network or your configured remote connection."
                     Link.Offline -> state.linkError.ifBlank { "It will reconnect on its own when the PC is back." }
                 },
                 style = MaterialTheme.typography.bodyMedium,

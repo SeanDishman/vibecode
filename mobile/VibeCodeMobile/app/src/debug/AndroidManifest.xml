@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Synthetic UI only: this activity never constructs a client or reads a saved pairing. -->
+        <activity android:name=".UiFixtureActivity" android:exported="true"
+            android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.VibeCode" />
+    </application>
+</manifest>

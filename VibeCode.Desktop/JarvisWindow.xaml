@@ -1,0 +1,161 @@
+<Window x:Class="VibeCode.JarvisWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:VibeCode.UI"
+        Title="Jarvis" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Width="1280" Height="800" MinWidth="760" MinHeight="480" WindowStartupLocation="CenterScreen"
+        Background="#0A0D13" Foreground="#E7EDF7" FontFamily="Segoe UI" FontSize="15"
+        ShowInTaskbar="True" UseLayoutRounding="True" SnapsToDevicePixels="True" PreviewKeyDown="OnWindowKeyDown">
+    <Window.Resources>
+        <Style x:Key="QuietButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#BBC8DB" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="10" />
+            <Setter Property="MinWidth" Value="40" />
+            <Setter Property="MinHeight" Value="40" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+                <Border x:Name="Surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="#1C2532" /></Trigger>
+                    <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Background" Value="#29394D" /></Trigger>
+                    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="#99CBFF" /></Trigger>
+                    <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4" /></Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate></Setter.Value></Setter>
+        </Style>
+        <Style x:Key="OptionsMenuItem" TargetType="MenuItem">
+            <Setter Property="Foreground" Value="#E7EDF7" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="12,10" />
+            <Setter Property="MinHeight" Value="40" />
+            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
+                <Border x:Name="Row" Background="Transparent" BorderBrush="Transparent" BorderThickness="1"
+                        CornerRadius="5" Padding="{TemplateBinding Padding}">
+                    <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center" />
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Row" Property="Background" Value="#29394D" /></Trigger>
+                    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Row" Property="BorderBrush" Value="#99CBFF" /></Trigger>
+                    <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4" /></Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate></Setter.Value></Setter>
+        </Style>
+        <Style x:Key="OptionsMenu" TargetType="ContextMenu">
+            <Setter Property="Background" Value="#17202D" />
+            <Setter Property="Foreground" Value="#E7EDF7" />
+            <Setter Property="BorderBrush" Value="#34445B" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="MinWidth" Value="224" />
+            <Setter Property="Padding" Value="5" />
+            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ContextMenu">
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                </Border>
+            </ControlTemplate></Setter.Value></Setter>
+        </Style>
+    </Window.Resources>
+    <Grid Background="#0A0D13">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+        <Grid x:Name="PresencePanel" Margin="24,18,24,28">
+            <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+            <ui:JarvisOrb x:Name="PresenceRing" State="{Binding State}" AudioLevel="{Binding MicrophoneLevel}"
+                          VerticalAlignment="Stretch" HorizontalAlignment="Stretch" />
+            <StackPanel Grid.Row="1" HorizontalAlignment="Center" Width="300" MaxWidth="300">
+                <TextBlock x:Name="StatusLabel" Text="{Binding PresenceText}" Foreground="#AABAD0" FontSize="13"
+                           TextAlignment="Center" TextWrapping="Wrap" Margin="0,0,0,12" AutomationProperties.LiveSetting="Polite" />
+                <ui:MicLevelMeter x:Name="InputWaveform" RecordingOwner="{Binding}" Foreground="#99CBFF" Height="38" Margin="0,0,0,14"
+                                  AutomationProperties.HelpText="Real microphone audio. Taller bars mean louder speech. Click Stop and send when you finish speaking." />
+                <Button x:Name="ListenButton" Background="#162131"
+                        IsEnabled="{Binding CanUseTalkButton}" Padding="24,13" MinWidth="180" HorizontalAlignment="Center"
+                        Click="OnTalkClick" ToolTip="Click to talk. Click again to stop and send. Escape cancels."
+                        AutomationProperties.Name="{Binding TalkButtonText}" AutomationProperties.HelpText="Click, press Space or Enter, or activate to start recording. Activate again to stop and send. Escape cancels.">
+                    <Button.Style><Style TargetType="Button" BasedOn="{StaticResource QuietButton}">
+                        <Setter Property="BorderBrush" Value="#31445D" />
+                        <Style.Triggers><DataTrigger Binding="{Binding IsListening}" Value="True">
+                            <Setter Property="BorderBrush" Value="#99CBFF" />
+                        </DataTrigger></Style.Triggers>
+                    </Style></Button.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <Viewbox Width="18" Height="20" Margin="0,0,10,0"><Canvas Width="24" Height="24">
+                            <Path Stroke="#CBDFF8" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Data="M9,5 A3,3 0 0 1 15,5 L15,12 A3,3 0 0 1 9,12 Z M5,11 L5,12 A7,7 0 0 0 19,12 L19,11 M12,19 L12,23 M8,23 L16,23" />
+                        </Canvas></Viewbox>
+                        <TextBlock Text="{Binding TalkButtonText}" FontSize="14" VerticalAlignment="Center" Foreground="#E7EDF7" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Grid>
+        <Border Grid.Column="1" BorderBrush="#242D3A" BorderThickness="1,0,0,0" Background="#0E121A">
+            <Grid Margin="28,18,28,28">
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <Button x:Name="OptionsButton" Style="{StaticResource QuietButton}" HorizontalAlignment="Right" Click="OnOptions"
+                        ToolTip="Conversation options" AutomationProperties.Name="Conversation options">
+                    <Canvas Width="18" Height="4"><Ellipse Width="3" Height="3" Fill="#BBC8DB" /><Ellipse Canvas.Left="7" Width="3" Height="3" Fill="#BBC8DB" /><Ellipse Canvas.Left="14" Width="3" Height="3" Fill="#BBC8DB" /></Canvas>
+                    <Button.ContextMenu><ContextMenu Style="{StaticResource OptionsMenu}" Placement="Bottom" HorizontalOffset="-184" VerticalOffset="6">
+                        <MenuItem Style="{StaticResource OptionsMenuItem}" Header="_Jarvis settings" Click="OnSettings" />
+                        <MenuItem Style="{StaticResource OptionsMenuItem}" Header="_VibeCode settings" Click="OnAppSettings" />
+                        <Separator><Separator.Template><ControlTemplate TargetType="Separator">
+                            <Border Height="1" Background="#34445B" Margin="12,5" />
+                        </ControlTemplate></Separator.Template></Separator>
+                        <MenuItem Style="{StaticResource OptionsMenuItem}" Header="_Clear conversation" Click="OnClear" />
+                    </ContextMenu></Button.ContextMenu>
+                </Button>
+                <Grid Grid.Row="1">
+                    <TextBlock x:Name="Welcome" Text="What’s on your mind?" FontSize="26" Foreground="#DCE6F5"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="16">
+                        <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers><DataTrigger Binding="{Binding Messages.Count}" Value="0"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                        </Style></TextBlock.Style>
+                    </TextBlock>
+                    <ListBox x:Name="ConversationList" ItemsSource="{Binding Messages}" Background="Transparent" Foreground="#E7EDF7"
+                             BorderThickness="0" Padding="0,20,6,12" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto" HorizontalContentAlignment="Stretch" AutomationProperties.Name="Jarvis conversation">
+                        <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0,0,0,26" /><Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter /></ControlTemplate></Setter.Value></Setter>
+                        </Style></ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate><DataTemplate>
+                            <StackPanel>
+                                <TextBlock Text="{Binding Speaker}" FontSize="12" FontWeight="SemiBold" Foreground="#99CBFF" Margin="0,0,0,8" />
+                                <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
+                                         Background="Transparent" Foreground="#E7EDF7" BorderThickness="0" Padding="0" Style="{x:Null}"
+                                         FontFamily="Segoe UI" FontSize="15" IsReadOnlyCaretVisible="False" SelectionBrush="#3B587E"
+                                         AutomationProperties.Name="{Binding Speaker}" />
+                            </StackPanel>
+                        </DataTemplate></ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+                <Border Grid.Row="2" Background="#151D29" BorderThickness="1" CornerRadius="12" Padding="15,12">
+                    <Border.Style><Style TargetType="Border"><Setter Property="BorderBrush" Value="#34445B" />
+                        <Style.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderBrush" Value="#99CBFF" /></Trigger></Style.Triggers>
+                    </Style></Border.Style>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="MessageBox" Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap"
+                                 MaxHeight="120" MinHeight="36" MaxLength="12000" VerticalScrollBarVisibility="Auto" Background="Transparent"
+                                 Foreground="#E7EDF7" CaretBrush="#99CBFF" SelectionBrush="#3B587E" BorderThickness="0" Padding="0,7,12,4"
+                                 Style="{x:Null}" FontSize="15" PreviewKeyDown="OnInputKeyDown" AutomationProperties.Name="Message Jarvis"
+                                 AutomationProperties.HelpText="Enter sends. Shift plus Enter inserts a new line." />
+                        <TextBlock Text="Message Jarvis…" Foreground="#AABAD0" IsHitTestVisible="False" Margin="0,7,0,0">
+                            <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers><DataTrigger Binding="{Binding InputText}" Value=""><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers>
+                            </Style></TextBlock.Style>
+                        </TextBlock>
+                        <Button x:Name="SendButton" Grid.Column="1" Style="{StaticResource QuietButton}" Background="#25384E"
+                                IsEnabled="{Binding CanSubmit}" Click="OnSubmit" ToolTip="Send message" AutomationProperties.Name="Send message">
+                            <Path Width="16" Height="18" Stretch="Uniform" Stroke="#D5E9FF" StrokeThickness="1.8"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M8,17 L8,1 M2,7 L8,1 L14,7" />
+                        </Button>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

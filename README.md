@@ -1,17 +1,19 @@
 # VibeCode
 
-**Run a whole team of AI coding agents on one project, from one window.** VibeCode wraps the terminal agents you
-already use - Claude Code, OpenAI Codex, Kimi Code, and Grok - in a native WPF interface, then adds the thing a
-terminal can't give you: **multiple agents working the same codebase with shared memory, a manager that assigns
-them lanes, a broadcast channel that interrupts all of them at once, and per-agent sub-agent swarms.**
+**Run a whole team of AI coding agents on one project, from one window.** VibeCode brings Claude Code,
+OpenAI Codex, Kimi Code, Grok, and GLM into a native Windows interface with account switching, readable tool
+activity, session recovery, and usage tracking. Bridges let agents coordinate on the same codebase; advanced
+bridges add orchestrators, worker groups, shared progress, and configurable reviews.
 
-For Claude, Codex, Kimi, and Grok, each chat launches an installed CLI as a child process and speaks its streaming
-protocol. VibeCode adds account switching, session history, MCP configuration, and permission controls around
-those runtimes. A separate **GLM provider** connects through an API account you configure in the app.
+**Jarvis** is your built-in desktop assistant for everyday questions, help with VibeCode, voice conversations,
+and supported app and Windows actions. It can also open a project and hand a coding task to a normal chat.
+
+Claude, Codex, Kimi, and Grok chats use an installed CLI and its streaming protocol. GLM uses an API account you
+configure in the app. Each chat keeps its own provider, model, account, and permission controls.
 
 > [!WARNING]
 > **VibeCode is a work in progress.** It is under active development - expect rough edges, changing behavior, and
-> features that are still landing. **Found a bug? [Open an issue](../../issues).** Crashes, broken tool cards, a
+> features that are still landing. **Found a bug? [Open an issue](https://github.com/SeanDishman/vibecode/issues).** Crashes, broken tool cards, a
 > provider that won't connect, layout weirdness - all of it is worth reporting. Include what you did, what you
 > expected, what happened, and which provider you were on. Bug reports are the fastest way to make this better.
 
@@ -22,11 +24,12 @@ those runtimes. A separate **GLM provider** connects through an API account you 
 ## Table of contents
 
 - [What it is](#what-it-is)
-- [Bridges - many agents, one shared memory](#bridges---many-agents-one-shared-memory)
+- [Bridges - multiple agents, one project](#bridges---multiple-agents-one-project)
 - [Announce - interrupt every agent at once](#announce---interrupt-every-agent-at-once)
-- [Bridge manager - one agent assigns the work](#bridge-manager---one-agent-assigns-the-work)
+- [Advanced bridges - orchestrators and workers](#advanced-bridges---orchestrators-and-workers)
 - [Agent swarms - provider-native sub-agents](#agent-swarms---provider-native-sub-agents)
 - [Queues and the orchestrator wall](#queues-and-the-orchestrator-wall)
+- [Jarvis - your desktop assistant](#jarvis---your-desktop-assistant)
 - [Second Brain - memory across chats](#second-brain---memory-across-chats)
 - [MCP servers - one catalog, every CLI](#mcp-servers---one-catalog-every-cli)
 - [Usage and cost tracking](#usage-and-cost-tracking)
@@ -62,43 +65,31 @@ With **Run in background** enabled, closing the window keeps ongoing work runnin
 Objects so exiting or crashing cleans up the processes it owns. Independently launched terminal sessions keep
 their own lifetime.
 
-## Bridges - many agents, one shared memory
+## Bridges - multiple agents, one project
 
-![A bridge running two agents side by side, each aware of the other](assets/screenshots/bridge.png)
+![A bridge running two agents side by side](assets/screenshots/bridge.png)
 
-A **Bridge** puts multiple independent agents on the *same project folder* at the same time, side by side in one
-grid. Each pane is a full root CLI session with its own composer, provider, model, reasoning effort, and
-permission mode - you can run Claude, Codex, and Grok together on one codebase.
+A **Bridge** runs multiple independent agents in the same project folder. Every agent has its own chat,
+provider, model, reasoning effort, account, and permission mode. Mix providers and choose a team that fits the work.
 
-The hard part of multi-agent coding is that agents don't know what the others are doing, so they collide, redo
-work, and overwrite each other. Bridges solve that with **one shared memory file** the agents themselves maintain:
-`.vibecode-bridge.md` in the project root.
+Agents coordinate through built-in bridge tools: they can discover the roster, name their task, report activity,
+send peer messages, read their inbox, and inspect recent file edits. VibeCode records which agent changed which
+file and lines, with seven days of edit history available to peers. That history helps agents coordinate when
+their changes overlap; a file listed on a task is an activity hint, not an editing lock.
 
-- **Area-claims board** (`## Active`) - every agent keeps a short block naming what it's working on. Before doing
-  anything else, a joining agent reads the board and picks an area nobody has claimed.
-- **Live-activity board** (`## Live activity`) - with real-time sharing on, each agent also keeps a one-block
-  snapshot of the file(s) it's touching *right now* and what it's changing there. Peers check it before editing a
-  file, so two agents don't land in the same file. It's rewritten in place at checkpoints (start, switch, finish a
-  file), never appended, which keeps the awareness cheap in tokens.
-- **Real-time sharing off** falls back to high-level coordination: agents stay out of each other's areas without
-  tracking line-by-line activity.
+Peer conversation lookup provides additional context for handoffs. Bridge messages, tasks, and recovery state
+are maintained by the app, so agents can pick up their work after a restart. The project-level
+`.vibecode-bridge.md` file remains available for bridge context.
 
-Agents can also send **peer messages** and look up **peer conversations** to hand off work or ask for context.
-The shared file remains the durable coordination board; messaging and conversation lookup complement it.
+Bridges support **up to 17 root agents**, with a default ceiling of 9. Add agents from the bridge header:
 
-Bridges hold **up to 17 agents** (default limit 9), and you can mix providers freely - add another agent from the
-bridge header and pick whichever CLI suits the lane:
+<img src="assets/screenshots/add-agent.png" alt="Adding an agent to a bridge" width="280">
 
-<img src="assets/screenshots/add-agent.png" alt="Adding a Claude, Codex, Kimi, or Grok agent to a bridge" width="280">
+The team keeps working when you switch chats. Recovery snapshots restore the bridge after a crash, and an idle
+timeout closes inactive sessions. Configure the agent ceiling, peer messaging, second-display layout, and
+completion notifications in Settings.
 
-A bridge keeps running in the background when you navigate away, is restored after a crash from a recovery
-snapshot, and auto-closes after an idle timeout - never mid-task. When an agent leaves, its claimed area is
-released and the remaining agents are told.
-
-Bridge behavior is configurable in Settings - real-time sharing, the agent ceiling, dual-monitor layout, and
-per-agent completion notifications:
-
-<img src="assets/screenshots/settings.png" alt="VibeCode settings: notifications, dual-monitor bridge, real-time sharing, max agents per bridge" width="560">
+<img src="assets/screenshots/settings.png" alt="Bridge and notification settings" width="560">
 
 ## Announce - interrupt every agent at once
 
@@ -111,41 +102,31 @@ Sometimes you need every agent to stop and hear the same thing: a change of dire
 agent on the bridge** and delivers that single message into all of their sessions at once. No repeating yourself
 per pane, no agent continuing on stale instructions.
 
-## Bridge manager - one agent assigns the work
+## Advanced bridges - orchestrators and workers
 
-<!-- ![The crowned manager dispatching lanes to its workers](assets/screenshots/manager.png) -->
+![An advanced bridge with one orchestrator, three workers, a shared activity feed, and per-agent review controls](assets/screenshots/advanced-bridge.png)
 
-Crown any pane as the bridge's **manager** (👑) and the bridge becomes hierarchical: you stop directing agents
-individually and run the whole project through one of them.
+Use an **advanced bridge** when a task benefits from a team with an orchestrator. Choose the orchestrator and
+workers in bridge setup, or arrange several orchestrator groups within the bridge's agent ceiling. Each group
+has its own workers, and each agent can use a different provider, model, and reasoning effort.
 
-The manager is the brain. You talk to it; it decomposes the project into **non-overlapping lanes** (disjoint
-files and areas) and assigns them to the other agents, which become its workers.
+The **shared activity feed** brings messages, tool calls, edits, and progress into one view, with the responsible
+agent shown beside each entry. The sidebar shows each agent's assignment, status, unread messages, and review
+level. Use the composer’s **Send to** control to address the agent you want to steer.
 
-- **Dispatch** - the manager assigns work by emitting a block in its reply:
+- **Plans and tasks:** orchestrators publish steps with stable task IDs, owners, and dependencies. Progress and
+  plan details remain visible while the team works.
+- **Delegation and handoffs:** an orchestrator dispatches assignments to its own workers, receives their results,
+  and assigns further work as dependencies finish. Workers can communicate across groups when messaging allows it.
+- **Coordination before dispatch:** multiple groups agree on the division of work, or use a temporary central
+  orchestrator to prepare the assignments. The app tracks the plan version and opens dispatch when the groups are ready.
+- **Reviews you control:** select **None**, **Low**, **Normal**, or **High** per agent. None skips optional review;
+  Low permits one quick pass, Normal one focused pass, and High up to two passes. Requested checks still apply.
+- **Recovery:** plans, tasks, inbox state, and review results are saved with the bridge. Interrupted tasks can be
+  retried without losing the team’s progress.
 
-  ```
-  @@DISPATCH agent=3
-  Refactor the settings dialog. Own Services/AppSettings.cs and SettingsWindow.xaml.
-  Do not touch the composer or Themes/.
-  @@END
-  ```
-
-  VibeCode extracts each block when the reply finishes and delivers it **into that worker's session**. Workers
-  never see the rest of the manager's reply, and `agent=all` broadcasts one order to everyone. Dispatching to a
-  busy worker is fine - it queues and arrives when that worker's current turn ends, so you can steer workers
-  without interrupting them.
-- **Reports flow back automatically.** A worker ends each task with a short factual report, and the tail of its
-  reply is relayed to the manager for you.
-- **The manager reacts to events.** VibeCode messages it a `👑 [MANAGER UPDATE]` whenever a worker finishes,
-  errors, joins, or leaves - so it verifies the work, updates its plan, and immediately dispatches that freed
-  worker its next lane. Idle workers get refilled without you saying "continue."
-- **The plan is durable.** The manager maintains a `## Manager plan` section in `.vibecode-bridge.md`, which is
-  its memory if anything restarts.
-- **You stay in the loop.** Talk to the manager at any time while workers run; it folds your input into the plan.
-  When every lane is done it dispatches a final verification pass, tells you, and stops.
-
-Crowning is reversible, the crown follows the conversation if you move it, and if the manager leaves the bridge
-the remaining agents are told to go back to coordinating as equals.
+Direct the orchestrator from its chat while watching worker activity in the shared feed. You can also inspect
+individual agents and change direction as the task develops.
 
 ## Agent swarms - provider-native sub-agents
 
@@ -169,13 +150,42 @@ Supported for Claude, Codex, and Grok.
 
 ## Queues and the orchestrator wall
 
-Queue follow-up prompts while an agent is working, or use a longer task queue to keep a sequence of work visible
-in the chat. Bridge supervision tracks ongoing work and worker updates alongside the manager's plan.
+Queue follow-up prompts while an agent works, or use an extended queue for a longer sequence of tasks. Send
+supported steering messages during a turn and use the queue controls to pause or resume pending work.
 
-**Demon Mode** opens an orchestrator wall with a selectable team of **4-17 root sessions**: one orchestrator and
-up to 16 workers. You direct the orchestrator from its main pane and follow worker progress in the surrounding
-grid. It uses the bridge's session and dispatch machinery, with the orchestrator responsible for planning and
-assigning lanes.
+The orchestrator view keeps the team's assignments, worker updates, and shared progress visible alongside the
+main conversation. A bridge can also use a second display. Session recovery and configured usage-limit recovery
+help long-running work continue across interruptions.
+
+## Jarvis - your desktop assistant
+
+![Jarvis settings for provider, model, thinking effort, spoken replies, voice, speed, volume, and microphone testing](assets/screenshots/jarvis-settings.png)
+
+**Jarvis** is VibeCode’s personal desktop assistant. Ask how VibeCode works, get help with settings, or talk
+through everyday questions, writing, plans, and ideas. Jarvis uses VibeCode’s provider adapters and desktop
+actions, with its own conversation and configurable AI provider.
+
+Open Jarvis from the app and type a message, or use the microphone button to speak. For example:
+
+- “How do I set up an advanced bridge?”
+- “Open `C:\Projects\MyApp` and start a chat to fix the login screen.”
+- “Find my chats about checkout,” or “Close the chats in this directory.”
+- “Set your voice volume to 50 percent,” or “Help me configure an MCP server.”
+- “Open Spotify,” “Switch to Chrome,” or “What Windows version am I running?”
+
+Jarvis can open or create project folders, create and find chats, pass coding tasks to normal chats, change
+supported VibeCode preferences, and configure MCP servers. Its Windows actions include listing visible apps,
+opening or focusing an app, requesting a normal window close, opening a file or URL, and opening a web search.
+When a target is ambiguous, it asks for clarification; completed actions are reported from the desktop’s results.
+
+In **Settings > Jarvis**, choose the **provider, model, and thinking effort** independently of your coding chats.
+Turn spoken replies on or off, preview a voice, adjust **speech speed** and **volume**, and test your microphone.
+The default voice is **George**, a British male Kokoro voice; other stock voices are available in the picker.
+Kokoro speech runs locally after its voice model has downloaded. Microphone dictation uses the app’s configured
+Whisper or Groq speech service.
+
+If Second Brain is enabled, Jarvis follows the active chat’s memory permission. Configure the extension and
+per-chat access controls to choose when recalled context is available.
 
 ## Second Brain - memory across chats
 
@@ -214,11 +224,10 @@ breakdown.
 Spend is estimated from each model's public pricing, and the cache-served percentage shows how much of your token
 volume came back from prompt caching rather than being billed fresh. It is a rough guide, not an invoice.
 
-Chat headers also show elapsed time, token totals, and rolling **tok/s** and **tok/min**. When a provider reports
-usage in a large batch, the rate spreads those tokens over the reporting interval and averages over up to the
-last 60 seconds. A delayed batch therefore reflects the time spent producing it instead of appearing as a
-one-second spike. Rates count input, cached input, and output tokens. A `~` marks provisional streaming estimates
-until reported usage arrives.
+Chat headers also show elapsed time, token totals, and separate **read** and **write** rates. Read includes input
+and cached tokens; write counts generated output. Each row shows the trailing-minute total, with a per-second
+average while recent tokens arrive. Delayed batches are spread over the reporting interval, and a `~` marks
+provisional streaming estimates until reported usage arrives. Empty rows and finished-turn rates stay hidden.
 
 ## Android companion
 
@@ -257,7 +266,7 @@ Pairing credentials and the signing identity are generated on the desktop. See t
 - Local Whisper speech-to-text dictation with optional Vulkan acceleration and CPU fallback
 - Optional Groq-hosted dictation using your own API key; enabling it uploads the recorded clip to Groq
 - Embedded browser panel and browser tools, animated backgrounds with an adjustable scrim, and theme choices
-- Optional Spotify playback controls, weather and radar, and built-in games
+- Optional Spotify playback controls, weather and radar, and configurable thinking animations
 - Completion notifications and continued work in the system tray
 - Dual-monitor support: run the bridge on a second display
 
@@ -347,14 +356,18 @@ VibeCode.Desktop/
     KimiSession.cs            ACP protocol (shared by Kimi and Grok)
     GrokSession.cs            Grok facade over the ACP session
     GlmSession.cs             GLM API session
-  Services/                 Accounts, memory, phone, usage, MCP, speech, sessions, pricing
+  Services/                 Accounts, bridges, Jarvis, memory, phone, usage, MCP, speech, sessions
   UI/                       ViewModels, converters, diff/syntax rendering, extra windows
   Themes/                   Dark.xaml (design tokens) and Cli.xaml
   Assets/                   Background art and bundled application resources
   MainWindow.xaml(.cs)      Shell: sidebar, chat, composer, bridge overlay
+  BridgeOrchestratorWindow  Advanced bridge and orchestrator view
+  JarvisWindow.xaml(.cs)    Desktop assistant and voice conversation
+VibeCode.AgentStatus.Mcp/   Embedded MCP transport, bridge tools, and Second Brain proxy
 mobile/VibeCodeMobile/      Android companion source and Gradle wrapper
-tests/VibeCode.PublicTests/ Provider, token-rate, and WPF layout regression checks
+tests/                     Provider, bridge, Jarvis, phone, recovery, and WPF regression checks
 scripts/                   Build, mobile-template validation, and publish helpers
+VibeCode.sln                Desktop, MCP helper, and public regression projects
 ```
 
 Adding a provider means implementing `ICodingSession` and registering it - the UI is protocol-agnostic.
@@ -382,14 +395,15 @@ desktop, pairing secret, or signing identity. Android build prerequisites are on
 Run the local regression checks without provider accounts or live coding requests:
 
 ```powershell
-dotnet run --project tests/VibeCode.PublicTests/VibeCode.PublicTests.csproj -c Release
-powershell -NoProfile -File tests/Test-MobileTemplate.ps1
+powershell -NoProfile -File scripts/Test.ps1
 ```
 
-They cover provider catalogs, reasoning and speed options, a **50,000-token burst simulation**, delayed usage
-reports, estimate reconciliation, independent chat panes, idle timers, header layouts, and enrollment validation.
-Building the mobile template first also enables the APK personalization check. The GitHub Actions workflow builds,
-runs these checks, and publishes a Windows artifact for each push and pull request.
+These checks build the public solution and cover provider catalogs, reasoning and speed options, a
+**50,000-token burst simulation**, delayed usage reports, estimate reconciliation, shared bridge rendering,
+messaging, task and edit history, orchestrator groups, review settings, and Jarvis chat, settings, desktop, and
+voice behavior. Provider integration tests use local fixtures. Enrollment checks validate the unconfigured
+mobile template; building it first also enables the APK personalization check. GitHub Actions runs the checks
+and publishes a Windows artifact for each push and pull request.
 
 ## Troubleshooting
 
@@ -412,7 +426,7 @@ reconciled with reported totals when available.
 **Phone installer is unavailable** - build the Android template, then publish with `-IncludeMobile`. Enable Phone
 and configure pairing on the desktop; the source template itself is deliberately unconfigured.
 
-**Something else broken?** That's expected at this stage - [open an issue](../../issues) and it gets looked at.
+**Something else broken?** That's expected at this stage - [open an issue](https://github.com/SeanDishman/vibecode/issues) and it gets looked at.
 
 ---
 

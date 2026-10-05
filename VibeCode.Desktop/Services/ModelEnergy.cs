@@ -95,25 +95,31 @@ public static class ModelEnergy
         ["claude-mythos-5"]   = 600,
         ["claude-fable-5-1"]  = 600,
         ["claude-mythos-5-1"] = 600,
+        // New versions use the same rough family estimates; active parameter counts are not public.
+        ["claude-opus-5-5"]   = 300,
         ["claude-opus-5"]     = 300,
         ["claude-opus-4-8"]   = 300,
         ["claude-opus-4-7"]   = 300,
         ["claude-opus-4-6"]   = 300,
         ["claude-opus-4-5"]   = 300,
+        ["claude-sonnet-5-5"] = 60,
         ["claude-sonnet-5"]   = 60,
         ["claude-sonnet-4-6"] = 60,
         ["claude-sonnet-4-5"] = 60,
         ["claude-haiku-4-5"]  = 15,
 
-        // OpenAI, scaled off Epoch AI's GPT-4o figure by this lineup's own output prices ($50 / $30 / $15 / $6),
-        // i.e. 5B active params per dollar of output. Astra's $50 puts it at 250 on that line - deliberately the
-        // lineup's own scale rather than the 600 the identically-priced Anthropic frontier pair carries, since
-        // those are separate per-model estimates and not price-derived.
+        // OpenAI, scaled off Epoch AI's GPT-4o figure by this lineup's own short-context output prices,
+        // i.e. 5B active params per dollar of output. Astra's $50 puts it at 250. GPT-6 Luna's $0.50 rounds to 3.
+        // Deliberately this lineup's own scale rather than the 600 the identically-priced Anthropic frontier pair
+        // carries, since those are separate per-model estimates and not price-derived.
         ["gpt-6-astra"]   = 250,
-        ["gpt-5.6-sol"]   = 150,
+        ["gpt-6.1-sol"]   = 50,
+        ["gpt-6-sol"]     = 50,
+        ["gpt-6-luna"]    = 3,
+        ["gpt-5.6-sol"]   = 100,
         ["gpt-5.5"]       = 150,
-        ["gpt-5.6-terra"] = 75,
-        ["gpt-5.6-luna"]  = 30,
+        ["gpt-5.6-terra"] = 60,
+        ["gpt-5.6-luna"]  = 6,
 
         // Moonshot. PUBLISHED: Kimi K2 activates 32B of 1.04T (8 of 384 experts). Carried forward to the later
         // Kimi ids, which have not published an architecture. The "highspeed" tiers are the same model served

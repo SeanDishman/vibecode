@@ -35,7 +35,7 @@ public sealed class KimiSessionOptions
 /// JSON-RPC 2.0 over newline-delimited stdio. This class translates ACP's session updates and
 /// reverse permission requests to the Claude-shaped stream consumed by <see cref="UI.ChatViewModel"/>.
 /// </summary>
-public sealed class KimiSession : ICodingSession
+public sealed class KimiSession : ICodingSession, ISteerableSession
 {
     private const string SystemContextOpen = "<vibecode-system-context>";
     private const string SystemContextClose = "</vibecode-system-context>";
@@ -89,6 +89,14 @@ public sealed class KimiSession : ICodingSession
     private readonly Queue<JsonNode> _earlyMessages = new();
     private readonly List<string> _tempAttachments = new();
     private readonly SemaphoreSlim _turnGate = new(1, 1);
+    // Grok steering (see SteerAsync). Guarded by _steerGate so a steer either joins the running turn or is refused.
+    private readonly object _steerGate = new();
+    private readonly Queue<Task<JsonNode?>> _steerHandoffs = new();
+    private readonly HashSet<string> _grokQueueIds = new(StringComparer.Ordinal);
+    private string? _grokRunningPromptId;
+    private TaskCompletionSource<(string Id, bool Queued)>? _steerEntry;
+    private HashSet<string>? _steerKnownIds;
+    private bool _promptRunning;
     private readonly object _usageProbeLock = new();
     private readonly object _grokUsageLock = new();
     private Process? _proc;
@@ -118,13 +126,14 @@ public sealed class KimiSession : ICodingSession
 
     public KimiSession(KimiSessionOptions options)
     {
-        _ = options.UseGrokProtocol ? GrokSession.ResolveCliPath() : ResolveCliPath();
+        _ = options.UseGrokProtocol ? GrokSession.ResolveCliPathForModel(options.Model) : ResolveCliPath();
         _options = options;
         _isGrok = options.UseGrokProtocol;
         _requestedModel = string.IsNullOrWhiteSpace(options.Model)
                           || string.Equals(options.Model, "default", StringComparison.OrdinalIgnoreCase)
             ? null
             : options.Model;
+        if (_isGrok) _requestedModel = Grok45Preset.NormalizeModel(_requestedModel);
         _model = _isGrok
             ? Grok45Preset.BackendModel(_requestedModel ?? Grok45Preset.NormalModelId)
             : _requestedModel;
@@ -267,8 +276,8 @@ public sealed class KimiSession : ICodingSession
         var provider = _isGrok ? "grok" : "kimi";
         McpCatalog.EnsureLaunchReady(_options.McpServers, provider, _options.Cwd);
         var psi = _isGrok
-            ? GrokSession.CreateCliStartInfoForAuth(_options.Cwd, _options.GrokAuthFilePath,
-                "agent", "--no-leader", "stdio")
+            ? GrokSession.CreateCliStartInfoForModel(_options.Cwd, _options.GrokAuthFilePath,
+                _requestedModel, "agent", "--no-leader", "stdio")
             : CreateCliStartInfo(_options.Cwd, "acp");
         _proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         _proc.Exited += (_, _) =>
@@ -488,6 +497,109 @@ public sealed class KimiSession : ICodingSession
         _ = PromptAsync(content.DeepClone());
     }
 
+    /// <summary>Only Grok can take a message mid-turn. Kimi Code 0.27's ACP adapter rejects any session/prompt while a
+    /// turn is active ("prompt rejected because another turn is active"), so a Kimi chat only queues.</summary>
+    public bool CanSteer
+    {
+        get { lock (_steerGate) return SteerableNow; }
+    }
+
+    private bool SteerableNow => _isGrok && _promptRunning && _steerEntry is null && !_disposed && _initialized
+                                 && SessionId is not null;
+
+    /// <summary>
+    /// Grok's own "steer" follow-up mode, over ACP. A session/prompt sent while a turn runs is queued by Grok and
+    /// announced in <c>_x.ai/queue/changed</c>; <c>_x.ai/queue/interject</c> with that entry's id then hands the turn to
+    /// it at the next tool or model gap. Grok answers the original request "cancelled" and keeps going with the work,
+    /// its context and any command still running (verified against grok 1.0.46). The steer's request is chained onto
+    /// the running prompt BEFORE anything is awaited, so the turn ends with its answer even if the original prompt
+    /// finished first and Grok simply runs the queued steer next.
+    /// </summary>
+    public async Task SteerAsync(JsonNode content)
+    {
+        TaskCompletionSource<(string Id, bool Queued)> entry;
+        // The turn's claim on this steer is taken under the gate; the request itself is written outside it, because
+        // stdin writes block and the stdout reader needs the gate to report Grok's queue.
+        var handoff = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_steerGate)
+        {
+            if (!SteerableNow) throw new InvalidOperationException($"{ProviderName} has no active turn to steer.");
+            entry = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _steerEntry = entry;
+            _steerKnownIds = new HashSet<string>(_grokQueueIds, StringComparer.Ordinal);
+            if (_grokRunningPromptId is not null) _steerKnownIds.Add(_grokRunningPromptId);
+            _steerHandoffs.Enqueue(handoff.Task);
+        }
+        var request = RequestAsync("session/prompt", new JsonObject
+        {
+            ["sessionId"] = SessionId,
+            ["prompt"] = BuildPrompt(content.DeepClone()),
+        });
+        _ = request.ContinueWith(t =>
+        {
+            if (t.IsCanceled) handoff.TrySetCanceled();
+            else if (t.Exception is { } error) handoff.TrySetException(error.InnerExceptions);
+            else handoff.TrySetResult(t.Result);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        // A turn that ended early clears its handoffs without awaiting them; keep a refusal from going unobserved.
+        _ = handoff.Task.ContinueWith(t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        try
+        {
+            var settled = await Task.WhenAny(entry.Task, request, Task.Delay(TimeSpan.FromSeconds(10))).ConfigureAwait(false);
+            if (settled == request)
+            {
+                await request.ConfigureAwait(false);   // a refusal surfaces here with Grok's own message
+                return;                                // already answered, as this turn's continuation
+            }
+            // Never announced: it is still queued behind the running prompt, which the turn waits for.
+            if (settled != entry.Task) return;
+            var (id, queued) = await entry.Task.ConfigureAwait(false);
+            if (queued) Notify("_x.ai/queue/interject", new JsonObject { ["sessionId"] = SessionId, ["id"] = id });
+        }
+        finally
+        {
+            lock (_steerGate)
+            {
+                if (ReferenceEquals(_steerEntry, entry))
+                {
+                    _steerEntry = null;
+                    _steerKnownIds = null;
+                }
+            }
+        }
+    }
+
+    /// <summary>The next steer that took this turn over, or null - which also closes the turn to new steers, so none
+    /// can be chained after the turn has decided it is finished.</summary>
+    private Task<JsonNode?>? TakeSteerHandoff()
+    {
+        lock (_steerGate)
+        {
+            if (_steerHandoffs.TryDequeue(out var next)) return next;
+            _promptRunning = false;
+            return null;
+        }
+    }
+
+    /// <summary>Track Grok's prompt queue so <see cref="SteerAsync"/> can name the entry its prompt became.</summary>
+    private void ObserveGrokQueue(JsonObject? p)
+    {
+        if (p is null) return;
+        static string? Id(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+        var ids = (p["entries"] as JsonArray)?.OfType<JsonObject>().Select(e => Id(e["id"])).OfType<string>().ToList() ?? [];
+        var running = Id(p["runningPromptId"]);
+        lock (_steerGate)
+        {
+            _grokQueueIds.Clear();
+            _grokQueueIds.UnionWith(ids);
+            _grokRunningPromptId = running;
+            if (_steerEntry is not { } entry || _steerKnownIds is not { } known) return;
+            if (ids.FirstOrDefault(id => !known.Contains(id)) is { } queued) entry.TrySetResult((queued, true));
+            else if (running is not null && !known.Contains(running)) entry.TrySetResult((running, false));
+        }
+    }
+
     private async Task PromptAsync(JsonNode content)
     {
         await _turnGate.WaitAsync();
@@ -499,11 +611,22 @@ public sealed class KimiSession : ICodingSession
             var stderrMarker = StderrMarker;
             Interlocked.Exchange(ref _turnActivity, 0);
             BeginStream();
+            lock (_steerGate) _promptRunning = true;
+            // The liveness signal Claude and Codex send, so the chat re-reads CanSteer once a steer can be taken.
+            if (_isGrok) Emit(new JsonObject { ["type"] = "system", ["subtype"] = "turn_activity", ["active"] = true });
             var response = await RequestAsync("session/prompt", new JsonObject
             {
                 ["sessionId"] = SessionId,
                 ["prompt"] = BuildPrompt(content),
             });
+            // A steer interjected into this turn takes it over: Grok answers the original request "cancelled" and runs
+            // the steer as the live prompt (or runs it next when the turn ended first). Either way the turn ends with
+            // the last steer's answer. One Grok refused leaves the answer already in hand; SteerAsync reported it.
+            while (TakeSteerHandoff() is { } handoff)
+            {
+                try { response = await handoff; }
+                catch (KimiRpcException) { }
+            }
 
             // Kimi Code 0.27.x logs non-auth provider failures (including provider.rate_limit) to stderr, but
             // resolves the ACP request as a clean, empty end_turn. Give the stderr reader a brief chance to consume
@@ -573,6 +696,11 @@ public sealed class KimiSession : ICodingSession
         }
         finally
         {
+            lock (_steerGate)
+            {
+                _promptRunning = false;
+                _steerHandoffs.Clear();
+            }
             if (_isGrok) EndGrokUsageCapture();
             _turnGate.Release();
         }
@@ -1008,6 +1136,11 @@ public sealed class KimiSession : ICodingSession
             ApplyGrokModelState(p, notify: _initialized);
             return;
         }
+        if (_isGrok && method == "_x.ai/queue/changed")
+        {
+            ObserveGrokQueue(p);
+            return;
+        }
         if (_isGrok && (method is "x.ai/session_notification" or "_x.ai/session/update")
                     && p?["update"] is JsonObject grokUpdate)
         {
@@ -1281,6 +1414,10 @@ public sealed class KimiSession : ICodingSession
 
     internal static string NormalizeToolName(string? title, string? kind, JsonObject input)
     {
+        // An ACP kind is broad presentation metadata. Keep the exact built-in MCP identity so a runtime
+        // labelling it as "edit" or "execute" cannot turn the naming permission into Write or Bash.
+        if (title is not null && BridgeMcpConnection.IsChatTitleMcpName(title)) return title;
+        if (title == "use_tool" && BridgeMcpConnection.IsChatTitlePermission("grok", title, input)) return title;
         if (string.Equals(title, "AskUserQuestion", StringComparison.OrdinalIgnoreCase)) return "AskUserQuestion";
         if (string.Equals(title, "ExitPlanMode", StringComparison.OrdinalIgnoreCase)) return "ExitPlanMode";
 
@@ -1445,33 +1582,34 @@ public sealed class KimiSession : ICodingSession
     }
 
     private void ApplyGrokModelChanged(JsonObject update)
-    {
-        var current = update["model_id"]?.GetValue<string>() ?? update["modelId"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(current)) return;
-        _model = _requestedModel = current;
-        SelectRequestedGrokRow();
-        if (update["reasoning_effort"]?.GetValue<string>() is { } effort) _effort = effort;
-        EmitInit();
-        Initialized?.Invoke();
-    }
+        {
+            var current = update["model_id"]?.GetValue<string>() ?? update["modelId"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(current)) return;
+            _model = _requestedModel = current;
+            SelectRequestedGrokRow();
+            if (update["reasoning_effort"]?.GetValue<string>() is { } effort) _effort = effort;
+            EmitInit();
+            Initialized?.Invoke();
+        }
 
     private bool SelectRequestedGrokRow()
-    {
-        var requested = _requestedModel?.Trim();
-        if (string.IsNullOrEmpty(requested)) return false;
-        var match = Models.OfType<JsonObject>().FirstOrDefault(row =>
-            string.Equals(row["value"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase))
-            ?? Models.OfType<JsonObject>().FirstOrDefault(row =>
-                string.Equals(row["resolvedModel"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase)
-                || Grok45Preset.IsGrok45(row["resolvedModel"]?.GetValue<string>()) && Grok45Preset.IsGrok45(requested));
-        if (match is null) return false;
-        foreach (var row in Models.OfType<JsonObject>()) row["isDefault"] = ReferenceEquals(row, match);
-        if (match["value"]?.GetValue<string>() is { Length: > 0 } value) _requestedModel = value;
-        return true;
-    }
+        {
+            var requested = _requestedModel?.Trim();
+            if (string.IsNullOrEmpty(requested)) return false;
+            var match = Models.OfType<JsonObject>().FirstOrDefault(row =>
+                string.Equals(row["value"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase))
+                ?? Models.OfType<JsonObject>().FirstOrDefault(row =>
+                    string.Equals(row["resolvedModel"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase)
+                    || Grok45Preset.IsGrok45(row["resolvedModel"]?.GetValue<string>()) && Grok45Preset.IsGrok45(requested));
+            if (match is null) return false;
+            foreach (var row in Models.OfType<JsonObject>()) row["isDefault"] = ReferenceEquals(row, match);
+            if (match["value"]?.GetValue<string>() is { Length: > 0 } value) _requestedModel = value;
+            return true;
+        }
 
     internal static JsonArray GrokModelsFromState(JsonObject? state, string? requestedModel = null)
     {
+        requestedModel = Grok45Preset.NormalizeModel(requestedModel);
         var result = new JsonArray();
         var current = state?["currentModelId"]?.GetValue<string>();
         if (state?["availableModels"] is JsonArray available)
@@ -1537,7 +1675,7 @@ public sealed class KimiSession : ICodingSession
     }
 
     private string? ResolveBackendModel(string? requestedModel) =>
-        _isGrok ? Grok45Preset.BackendModel(requestedModel ?? Grok45Preset.NormalModelId) : requestedModel;
+            _isGrok ? Grok45Preset.BackendModel(requestedModel ?? Grok45Preset.NormalModelId) : requestedModel;
 
     private string? CurrentModelId() => Models.OfType<JsonObject>()
         .FirstOrDefault(x => x["isDefault"]?.GetValue<bool>() == true)?["value"]?.GetValue<string>()
@@ -1850,6 +1988,10 @@ public sealed class KimiSession : ICodingSession
 
     private string FriendlyError(Exception ex)
     {
+        if (_isGrok && ex is KimiRpcException grokError)
+            return GrokRpcError.Describe(grokError.Message, grokError.RpcData, grokError.Code);
+        if (_isGrok && ex is not TaskCanceledException)
+            return GrokRpcError.Describe(ex.Message);
         if (ex is KimiRpcException { Code: -32000 }
             || ex.Message.Contains("not authenticated", StringComparison.OrdinalIgnoreCase)
             || ex.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase))

@@ -21,19 +21,19 @@ namespace VibeCode.Services;
 ///   * The transport is TLS 1.2/1.3 with a self-signed certificate that lives for the life of the install. The
 ///     phone pins its SHA-256 at pairing time and refuses any other certificate afterwards, so a device that has
 ///     paired once cannot be talked into trusting a machine impersonating this one on the same Wi-Fi.
-///   * Nothing is served without a bearer token. Tokens are 256 bits of CSPRNG output, handed out exactly once
-///     (at pairing) and stored here only as a SHA-256, compared in constant time.
+///   * Protected routes require both a 256-bit token and a signature by the single enrolled P-256 key.
+///     Signed method/target/body/token, timestamp, nonce and process epoch prevent substitution and replay.
 ///   * Pairing is the only unauthenticated write, and it is closed by default: the user has to open a window on
 ///     the desktop, which mints a 6-digit code good for five minutes, one successful use, and five wrong guesses.
-///   * Everything is scoped to the LAN. There is no relay, no cloud, no port mapping - if the phone is not on the
-///     same network as the PC, it cannot see anything.
+///   * Publicly addressed peers are rejected before TLS. LAN and private VPN address ranges are accepted;
+///     routing and firewall policy must also allow them. VibeCode creates no relay, VPN or port mapping.
 ///
 /// What a paired phone can do, stated plainly, because the endpoint list has grown well past "read my chats":
 /// it can send prompts, answer permission prompts (including "always allow"), switch the permission mode as far
 /// as bypassPermissions, change model and effort, start a new chat in any existing folder, rewind a turn, and
 /// close a pane. That is deliberate - the point of the app is to be the desktop from the sofa - and it is not a
 /// privilege escalation, because a device that can send one prompt to an agent with Bash already has arbitrary
-/// code execution on this machine. The pairing token IS the trust boundary; there is no weaker tier below it.
+/// code execution on this machine. The paired signing key and token are the trust boundary.
 /// The two things a phone deliberately cannot do are delete a chat (transcripts are not destroyable from a
 /// device the user cannot see) and pair another device.
 /// </summary>
@@ -68,6 +68,9 @@ public sealed class PhoneBridgeService : Observable
     private MainViewModel? _vm;
     private Dispatcher? _ui;
     private readonly List<PhoneDevice> _devices = new();
+    private readonly PhoneRequestProof _requestProof = new();
+    private readonly AsyncLocal<PhoneDevice?> _requestDevice = new();
+    private readonly AsyncLocal<CancellationToken> _requestCancellation = new();
     private readonly Dictionary<string, (int Failures, DateTime Until)> _lockouts = new(StringComparer.Ordinal);
     /// <summary>Per-address budget for requests that carry no valid token, refilled every minute.</summary>
     private readonly Dictionary<string, (int Count, DateTime Window)> _anonymous = new(StringComparer.Ordinal);
@@ -78,40 +81,41 @@ public sealed class PhoneBridgeService : Observable
     private string? _pairingCode;
     private DateTime _pairingExpires;
     private int _pairingAttempts;
-    private PhoneEnrolment? _enrolment;
+    /// <summary>Generated APKs, one per phone. Any number may be outstanding at once; each secret is single-use.</summary>
+    private readonly List<PhoneEnrolment> _enrolments = new();
     private int _enrolAttempts;
 
     private PhoneBridgeService()
     {
         _devices.AddRange(PhoneBridgeStore.LoadDevices());
-        _enrolment = PhoneBridgeStore.LoadEnrolment();
+        _enrolments.AddRange(PhoneBridgeStore.LoadEnrolments());
         SyncDeviceView();
     }
 
     // ---------------- observable surface (bound by PhoneBridgeWindow) ----------------
 
     private bool _running;
-    public bool Running { get => _running; private set { if (Set(ref _running, value)) { Raise(nameof(StatusText)); Raise(nameof(Address)); } } }
+    public bool Running { get => _running; private set { if (Set(ref _running, value)) { Raise(nameof(StatusText)); RefreshAddresses(); } } }
 
     private string _error = "";
     public string Error { get => _error; private set { if (Set(ref _error, value)) { Raise(nameof(HasError)); Raise(nameof(StatusText)); } } }
     public bool HasError => _error.Length > 0;
 
     private int _port = DefaultPort;
-    public int Port { get => _port; private set { if (Set(ref _port, value)) Raise(nameof(Address)); } }
+    public int Port { get => _port; private set { if (Set(ref _port, value)) RefreshAddresses(); } }
 
     private string _fingerprint = "";
     /// <summary>Full SHA-256 of the server certificate, uppercase hex.</summary>
     public string Fingerprint { get => _fingerprint; private set { if (Set(ref _fingerprint, value)) Raise(nameof(SafetyCode)); } }
 
-    /// <summary>The first four bytes of <see cref="Fingerprint"/>, formatted so a human can compare it to what the
+    /// <summary>The first eight bytes of <see cref="Fingerprint"/>, formatted so a human can compare it to what the
     /// phone shows before approving a pairing. This is the check that turns trust-on-first-use into something an
     /// attacker on the same Wi-Fi cannot quietly win.</summary>
-    public string SafetyCode => _fingerprint.Length >= 8
-        ? $"{_fingerprint[..4]}-{_fingerprint[4..8]}"
+    public string SafetyCode => _fingerprint.Length >= 16
+        ? $"{_fingerprint[..4]}-{_fingerprint[4..8]}-{_fingerprint[8..12]}-{_fingerprint[12..16]}"
         : "";
 
-    /// <summary>"192.168.1.20:8765" - what the user types into the phone.</summary>
+    /// <summary>The preferred IPv4 endpoint. Reachability still depends on the phone's network.</summary>
     public string Address
     {
         get
@@ -119,6 +123,16 @@ public sealed class PhoneBridgeService : Observable
             var ip = PhoneBridgeStore.LocalAddresses().FirstOrDefault();
             return ip is null ? $"(no network):{Port}" : $"{ip}:{Port}";
         }
+    }
+
+    /// <summary>All current IPv4 candidates, including configured private VPN adapters.</summary>
+    public string ConnectionAddresses => string.Join(Environment.NewLine,
+        PhoneBridgeStore.LocalAddresses().Select(ip => $"{ip}:{Port}"));
+
+    public void RefreshAddresses()
+    {
+        Raise(nameof(Address));
+        Raise(nameof(ConnectionAddresses));
     }
 
     private string _pairingDisplay = "";
@@ -133,9 +147,13 @@ public sealed class PhoneBridgeService : Observable
 
     public string StatusText => !_running
         ? (HasError ? $"Off — {Error}" : "Off")
-        : HasOutstandingEnrolment ? "On — waiting for the app you generated to be installed"
+        : Devices.Any(d => string.IsNullOrEmpty(d.PublicKey))
+            ? "On — a phone uses the old app: update it, revoke its entry here, then pair it again"
+        : Devices.Count == 0 && PendingEnrolmentCount > 0
+            ? $"On — waiting for the app{(PendingEnrolmentCount == 1 ? "" : "s")} you generated to be installed"
         : Devices.Count == 0 ? "On — no phones paired yet"
-        : $"On — {Devices.Count} phone{(Devices.Count == 1 ? "" : "s")} paired";
+        : $"On — {Devices.Count} phone{(Devices.Count == 1 ? "" : "s")} paired" +
+          (PendingEnrolmentCount > 0 ? $" · {PendingEnrolmentCount} generated app{(PendingEnrolmentCount == 1 ? "" : "s")} not set up yet" : "");
 
     // ---------------- extension ----------------
 
@@ -170,38 +188,49 @@ public sealed class PhoneBridgeService : Observable
         _vm = vm;
         _ui = ui;
         _mirror = new PhoneBridgeMirror(vm, ui);
-        Port = AppSettings.Current.PhoneBridgePort > 0 ? AppSettings.Current.PhoneBridgePort : DefaultPort;
+        Port = AppSettings.Current.PhoneBridgePort is > 0 and <= 65535
+            ? AppSettings.Current.PhoneBridgePort : DefaultPort;
         // The extension gate comes first: a disabled extension must not open a socket on launch even if the bridge
         // was left on before it was switched off.
         if (AppSettings.Current.PhoneEnabled && AppSettings.Current.PhoneBridgeEnabled) Start();
     }
 
-    public void Start()
+    public void Start() => Start(IPAddress.Any);
+
+    // Keep runtime tests on loopback without changing the production listener's address policy.
+    internal void Start(IPAddress listenAddress)
     {
         lock (_gate)
         {
             if (_listener is not null) return;
+            TcpListener? listener = null;
             try
             {
                 _certificate ??= PhoneBridgeStore.LoadOrCreateCertificate();
                 Fingerprint = Convert.ToHexString(SHA256.HashData(_certificate.RawData));
 
-                var listener = new TcpListener(IPAddress.Any, Port);
+                listener = new TcpListener(listenAddress, Port);
                 listener.Start();
                 _listener = listener;
                 _cancel = new CancellationTokenSource();
+                // Capture this start's token before scheduling. A quick stop/restart replaces _cancel.
+                var cancel = _cancel.Token;
                 Error = "";
                 Running = true;
-                _ = Task.Run(() => AcceptLoopAsync(listener, _cancel.Token));
+                _ = Task.Run(() => AcceptLoopAsync(listener, cancel));
 
                 // Lets a phone find this PC again after its address changes, which the baked-in address list
                 // cannot survive on its own. Best effort - the bridge is fully usable without it.
                 _beacon ??= new PhoneBeacon(this);
-                _beacon.Start(Port);
+                _beacon.Start(Port, listenAddress);
             }
             catch (Exception ex)
             {
+                _cancel?.Cancel();
+                try { listener?.Stop(); } catch { /* startup already failed */ }
+                try { _beacon?.Stop(); } catch { /* discovery is best effort */ }
                 _listener = null;
+                _cancel = null;
                 Running = false;
                 Error = ex is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }
                     ? $"port {Port} is already in use"
@@ -232,8 +261,8 @@ public sealed class PhoneBridgeService : Observable
         AppSettings.Current.Save();
     }
 
-    /// <summary>Rebinds on a different port. Every paired phone keeps working - it stores host and port separately
-    /// and the pinned fingerprint does not change.</summary>
+    /// <summary>Rebinds on a different port without changing the certificate. Phones must update their endpoint;
+    /// discovery also uses the saved port and cannot find a bridge that moved to a different one.</summary>
     public void SetPort(int port)
     {
         if (port is < 1 or > 65535 || port == Port) return;
@@ -247,7 +276,8 @@ public sealed class PhoneBridgeService : Observable
 
     // ---------------- pairing ----------------
 
-    /// <summary>Opens a five-minute window in which one phone may exchange the displayed code for a token.</summary>
+    /// <summary>Opens a five-minute window in which one phone may exchange the displayed code for a token. Phones
+    /// already paired keep working; each new phone needs its own code.</summary>
     public void OpenPairing()
     {
         if (!Running) Start();
@@ -290,68 +320,100 @@ public sealed class PhoneBridgeService : Observable
     private const int EnrolmentSecretBytes = 32;
     private const int MaxEnrolAttempts = 10;
 
-    /// <summary>True while an APK has been generated but no phone has redeemed it yet.</summary>
-    public bool HasOutstandingEnrolment { get { lock (_gate) return _enrolment?.Pending == true; } }
+    /// <summary>True while at least one generated APK has not been redeemed by a phone yet.</summary>
+    public bool HasOutstandingEnrolment => PendingEnrolmentCount > 0;
 
-    public PhoneEnrolment? Enrolment { get { lock (_gate) return _enrolment; } }
+    public int PendingEnrolmentCount { get { lock (_gate) return _enrolments.Count(e => e.Pending); } }
+
+    /// <summary>Every generated app this PC still tracks, newest first: outstanding ones and recent history.</summary>
+    public IReadOnlyList<PhoneEnrolment> Enrolments
+    {
+        get { lock (_gate) return _enrolments.OrderByDescending(e => e.IssuedAt).ToList(); }
+    }
 
     /// <summary>
     /// Mints a fresh single-use enrolment secret and returns it in the clear - the only moment it is ever
     /// readable. The caller's job is to bake it into an APK and then forget it; only the SHA-256 is kept here.
-    /// Any previously outstanding enrolment is replaced, so there is never more than one live un-redeemed APK.
+    /// Other outstanding enrolments are untouched: each APK sets up one phone, and a PC can have several phones.
     /// </summary>
-    public string IssueEnrolment()
+    public string IssueEnrolment(out string enrolmentId)
     {
         if (!Running) Start();
+        if (!Running) throw new InvalidOperationException("The phone bridge must be running before generating an app.");
         var secret = Base64Url(RandomNumberGenerator.GetBytes(EnrolmentSecretBytes));
         var enrolment = new PhoneEnrolment
         {
             Id = Guid.NewGuid().ToString("n"),
             SecretHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret))),
             IssuedAt = DateTimeOffset.Now,
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(24),
             Fingerprint = Fingerprint,
         };
         lock (_gate)
         {
-            _enrolment = enrolment;
+            if (!PhoneBridgeStore.SaveEnrolments(_enrolments.Append(enrolment)))
+                throw new IOException("Could not persist the enrollment. No app was authorized.");
+            _enrolments.Add(enrolment);
             _enrolAttempts = 0;
         }
-        PhoneBridgeStore.SaveEnrolment(enrolment);
-        Raise(nameof(HasOutstandingEnrolment));
-        Raise(nameof(Enrolment));
-        Raise(nameof(StatusText));
+        RaiseEnrolments();
+        enrolmentId = enrolment.Id;
         return secret;
     }
 
-    /// <summary>Records where the APK ended up, so the window can point at it later.</summary>
-    public void NoteEnrolmentApk(string path)
+    /// <summary>Records where an APK ended up, so the window can point at it later.</summary>
+    public void NoteEnrolmentApk(string enrolmentId, string path)
     {
-        PhoneEnrolment? snapshot;
         lock (_gate)
         {
-            if (_enrolment is null) return;
-            _enrolment.ApkPath = path;
-            snapshot = _enrolment;
+            if (_enrolments.FirstOrDefault(e => e.Id == enrolmentId) is not { } enrolment) return;
+            enrolment.ApkPath = path;
+            // Serialize the write with revocation/claiming. A delayed snapshot must not restore a revoked APK.
+            if (!PhoneBridgeStore.SaveEnrolments(_enrolments)) Error = "Could not save the generated app's location.";
         }
-        PhoneBridgeStore.SaveEnrolment(snapshot);
-        Raise(nameof(Enrolment));
+        RaiseEnrolments();
     }
 
-    /// <summary>Kills an un-redeemed APK. This is the answer to "I emailed it to myself and now I regret it".</summary>
-    public void RevokeEnrolment()
+    /// <summary>Kills one un-redeemed APK. This is the answer to "I emailed it to myself and now I regret it".</summary>
+    public void RevokeEnrolment(string enrolmentId)
     {
-        lock (_gate) _enrolment = null;
-        PhoneBridgeStore.SaveEnrolment(null);
+        lock (_gate)
+        {
+            var remaining = _enrolments.Where(e => e.Id != enrolmentId).ToList();
+            if (!PhoneBridgeStore.SaveEnrolments(remaining))
+            {
+                Stop();
+                Error = "Enrollment could not be revoked on disk. The bridge has been stopped; retry revocation.";
+                return;
+            }
+            _enrolments.RemoveAll(e => e.Id == enrolmentId);
+        }
+        RaiseEnrolments();
+    }
+
+    private void RaiseEnrolments()
+    {
         Raise(nameof(HasOutstandingEnrolment));
-        Raise(nameof(Enrolment));
+        Raise(nameof(PendingEnrolmentCount));
+        Raise(nameof(Enrolments));
         Raise(nameof(StatusText));
     }
 
-    public void Revoke(PhoneDevice device)
+    public bool Revoke(PhoneDevice device)
     {
-        lock (_gate) _devices.RemoveAll(d => d.Id == device.Id);
-        PhoneBridgeStore.SaveDevices(SnapshotDevices());
+        lock (_gate)
+        {
+            var remaining = _devices.Where(d => d.Id != device.Id).ToList();
+            if (!PhoneBridgeStore.SaveDevices(remaining))
+            {
+                Stop();
+                Error = "The phone could not be revoked on disk. The bridge has been stopped; retry revocation.";
+                return false;
+            }
+            _devices.RemoveAll(d => d.Id == device.Id);
+        }
         SyncDeviceView();
+        return true;
     }
 
     /// <summary>Throws away the TLS identity and every paired phone. The nuclear option for "someone had my
@@ -362,20 +424,22 @@ public sealed class PhoneBridgeService : Observable
         Stop(remember: false);
         lock (_gate)
         {
+            if (!PhoneBridgeStore.SaveDevices(Array.Empty<PhoneDevice>()) || !PhoneBridgeStore.SaveEnrolments(Array.Empty<PhoneEnrolment>()))
+            {
+                Error = "Could not persist the reset. The bridge remains stopped; retry before starting it.";
+                return;
+            }
             _devices.Clear();
             _certificate?.Dispose();
             _certificate = null;
             // The new identity will have a different fingerprint, so any APK generated against the old one can
-            // never connect again. Clearing it here is what stops the window offering a file that cannot work.
-            _enrolment = null;
+            // never connect again. Clearing them here is what stops the window offering files that cannot work.
+            _enrolments.Clear();
         }
-        PhoneBridgeStore.SaveDevices(Array.Empty<PhoneDevice>());
-        PhoneBridgeStore.SaveEnrolment(null);
         PhoneBridgeStore.ResetIdentity();
         SyncDeviceView();
         Fingerprint = "";
-        Raise(nameof(HasOutstandingEnrolment));
-        Raise(nameof(Enrolment));
+        RaiseEnrolments();
         if (wasRunning) Start();
     }
 
@@ -461,10 +525,14 @@ public sealed class PhoneBridgeService : Observable
                     CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
                 }, handshake.Token).ConfigureAwait(false);
 
-                var request = await ReadRequestAsync(ssl, cancel).ConfigureAwait(false);
+                using var readDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                readDeadline.CancelAfter(TimeSpan.FromSeconds(15));
+                var request = await ReadRequestAsync(ssl, readDeadline.Token).ConfigureAwait(false);
                 if (request is null) return;
                 var response = await RouteAsync(request, remote, cancel).ConfigureAwait(false);
-                await WriteAsync(ssl, response, cancel).ConfigureAwait(false);
+                using var writeDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                writeDeadline.CancelAfter(TimeSpan.FromSeconds(15));
+                await WriteAsync(ssl, response, writeDeadline.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { /* shutting down, or a phone that walked away */ }
@@ -472,7 +540,7 @@ public sealed class PhoneBridgeService : Observable
         catch (AuthenticationException) { /* a client that would not accept our certificate */ }
         catch (Exception ex)
         {
-            CrashLog.Note("PhoneBridge", $"request from {remote} failed - {ex.Message}");
+            CrashLog.Note("PhoneBridge", $"request from {remote} failed - {ex.GetType().Name}");
         }
         finally
         {
@@ -541,7 +609,7 @@ public sealed class PhoneBridgeService : Observable
     // ---------------- HTTP/1.1 (one request per connection) ----------------
 
     private sealed record Request(string Method, string Path, Dictionary<string, string> Query,
-        Dictionary<string, string> Headers, string Body);
+        Dictionary<string, string> Headers, string Body, string Target);
 
     private sealed record Response(int Status, string Body, string ContentType = "application/json; charset=utf-8");
 
@@ -560,17 +628,18 @@ public sealed class PhoneBridgeService : Observable
         }
 
         var raw = head.GetBuffer();
+        if (headerEnd > MaxHeaderBytes) return null;
         var headText = Encoding.ASCII.GetString(raw, 0, headerEnd);
         var lines = headText.Split("\r\n");
         var parts = lines[0].Split(' ');
-        if (parts.Length < 2) return null;
+        if (parts.Length != 3 || parts[2] != "HTTP/1.1" || !parts[1].StartsWith('/') ||
+            parts[1].Any(c => char.IsControl(c) || c == '#')) return null;
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (var i = 1; i < lines.Length; i++)
         {
             var colon = lines[i].IndexOf(':');
-            if (colon <= 0) continue;
-            headers[lines[i][..colon].Trim()] = lines[i][(colon + 1)..].Trim();
+            if (colon <= 0 || !headers.TryAdd(lines[i][..colon].Trim(), lines[i][(colon + 1)..].Trim())) return null;
         }
 
         var target = parts[1];
@@ -595,8 +664,8 @@ public sealed class PhoneBridgeService : Observable
         // Chunked is not optional. A client that serialises JSON straight to the socket (System.Net.Http's own
         // JsonContent is one) cannot know its length in advance and sends Transfer-Encoding: chunked - a server
         // that only understands Content-Length silently reads an empty body and rejects every POST as malformed.
-        var chunked = headers.TryGetValue("Transfer-Encoding", out var te)
-                      && te.Contains("chunked", StringComparison.OrdinalIgnoreCase);
+        var chunked = headers.TryGetValue("Transfer-Encoding", out var te);
+        if (chunked && (!string.Equals(te, "chunked", StringComparison.OrdinalIgnoreCase) || headers.ContainsKey("Content-Length"))) return null;
 
         byte[] body;
         if (chunked)
@@ -607,7 +676,8 @@ public sealed class PhoneBridgeService : Observable
         }
         else
         {
-            var length = headers.TryGetValue("Content-Length", out var cl) && int.TryParse(cl, out var n) ? n : 0;
+            var length = 0;
+            if (headers.TryGetValue("Content-Length", out var cl) && !int.TryParse(cl, out length)) return null;
             if (length is < 0 or > MaxBodyBytes) return null;
             body = new byte[length];
             var copied = Math.Min(leftover.Length, length);
@@ -621,7 +691,7 @@ public sealed class PhoneBridgeService : Observable
         }
 
         return new Request(parts[0].ToUpperInvariant(), Uri.UnescapeDataString(path), query, headers,
-            Encoding.UTF8.GetString(body));
+            new UTF8Encoding(false, true).GetString(body), target);
     }
 
     /// <summary>Decodes a chunked body. <paramref name="prefix"/> is whatever already arrived in the header read.
@@ -645,7 +715,8 @@ public sealed class PhoneBridgeService : Observable
             // chunk size line
             int eol;
             while ((eol = FindCrLf(pending)) < 0)
-                if (!await FillAsync().ConfigureAwait(false)) return null;
+                if (pending.Count > MaxHeaderBytes || !await FillAsync().ConfigureAwait(false)) return null;
+            if (eol > MaxHeaderBytes) return null;
 
             var sizeLine = Encoding.ASCII.GetString(pending.GetRange(0, eol).ToArray());
             pending.RemoveRange(0, eol + 2);
@@ -656,12 +727,15 @@ public sealed class PhoneBridgeService : Observable
 
             if (size == 0)
             {
+                var trailerBytes = 0;
                 // Trailer section, ending at the blank line. Nothing here is used, but it has to be consumed.
                 while (true)
                 {
                     while ((eol = FindCrLf(pending)) < 0)
-                        if (!await FillAsync().ConfigureAwait(false)) return body.ToArray();
+                        if (pending.Count > MaxHeaderBytes || !await FillAsync().ConfigureAwait(false)) return null;
                     var trailer = eol;
+                    trailerBytes += eol + 2;
+                    if (trailerBytes > MaxHeaderBytes) return null;
                     pending.RemoveRange(0, eol + 2);
                     if (trailer == 0) return body.ToArray();
                 }
@@ -670,6 +744,7 @@ public sealed class PhoneBridgeService : Observable
             if (body.Length + size > MaxBodyBytes) return null;
             while (pending.Count < size + 2)
                 if (!await FillAsync().ConfigureAwait(false)) return null;
+            if (pending[size] != 13 || pending[size + 1] != 10) return null;
             body.Write(pending.GetRange(0, size).ToArray(), 0, size);
             pending.RemoveRange(0, size + 2);          // chunk data plus its trailing CRLF
         }
@@ -726,7 +801,7 @@ public sealed class PhoneBridgeService : Observable
             // nothing else - not the machine name, not the version, not whether anyone is paired. The name is
             // only added while the user has explicitly opened a window for a new phone, because that is the one
             // moment it is needed (the pairing screen shows it back so the user can confirm the right PC).
-            var payload = new JsonObject { ["app"] = "vibecode" };
+            var payload = new JsonObject { ["app"] = "vibecode", ["authEpoch"] = _requestProof.Epoch };
             var open = PairingOpen || HasOutstandingEnrolment;
             if (open)
             {
@@ -743,11 +818,31 @@ public sealed class PhoneBridgeService : Observable
         if (request.Path == "/api/enroll" && request.Method == "POST")
             return Enroll(request, remote);
 
-        var device = Authenticate(request, remote);
-        if (device is null) return Fail(401, "not paired");
+        var device = Authenticate(request, remote, out var failureStatus, out var failureReason);
+        if (device is null) return Fail(failureStatus, failureReason);
+
+        _requestDevice.Value = device;
+        _requestCancellation.Value = cancel;
+        try
+        {
+            var response = await RouteAuthenticatedAsync(request, remote, device, cancel).ConfigureAwait(false);
+            // Long polls must not deliver a transcript after revocation while they were waiting.
+            lock (_gate)
+                return !cancel.IsCancellationRequested && (request.Path == "/api/unpair" || _devices.Contains(device))
+                    ? response : Fail(401, "phone revoked");
+        }
+        finally { _requestDevice.Value = null; _requestCancellation.Value = default; }
+    }
+
+    private async Task<Response> RouteAuthenticatedAsync(Request request, string remote, PhoneDevice device,
+        CancellationToken cancel)
+    {
 
         device.LastSeen = DateTimeOffset.Now;
         device.LastAddress = remote;
+
+        if (request.Path == "/api/unpair" && request.Method == "POST")
+            return Revoke(device) ? Json(new JsonObject { ["ok"] = true }) : Fail(503, "could not persist revocation");
 
         var mirror = _mirror;
         if (mirror is null || _vm is null) return Fail(503, "desktop not ready");
@@ -755,12 +850,6 @@ public sealed class PhoneBridgeService : Observable
 
         if (request.Path == "/api/chats" && request.Method == "GET")
             return await ChatListAsync(mirror, request, cancel).ConfigureAwait(false);
-
-        if (request.Path == "/api/unpair" && request.Method == "POST")
-        {
-            Revoke(device);
-            return Json(new JsonObject { ["ok"] = true });
-        }
 
         // Folders the desktop already knows about, for the phone's "start a chat here" list.
         if (request.Path == "/api/folders" && request.Method == "GET")
@@ -816,6 +905,7 @@ public sealed class PhoneBridgeService : Observable
 
         while (true)
         {
+            cancel.ThrowIfCancellationRequested();
             var json = mirror.ChatsJson(out var version);
             if (mirror.Built && version != clientVersion) return Raw($"{{\"version\":{version},\"chats\":{json}}}");
 
@@ -837,6 +927,7 @@ public sealed class PhoneBridgeService : Observable
 
         while (true)
         {
+            cancel.ThrowIfCancellationRequested();
             var payload = mirror.MessagesJson(id, clientVersion);
             if (payload is not null) return Raw(payload);
 
@@ -1124,8 +1215,13 @@ public sealed class PhoneBridgeService : Observable
         var ui = _ui;
         if (vm is null || ui is null) return Fail(503, "desktop not ready");
 
+        var device = _requestDevice.Value;
+        var requestCancellation = _requestCancellation.Value;
         var result = await ui.InvokeAsync(async () =>
         {
+            lock (_gate)
+                if (device is null || !_devices.Contains(device) || requestCancellation.IsCancellationRequested)
+                    return (Found: false, Ok: false, Message: "phone revoked");
             var chat = vm.Chats.FirstOrDefault(c => c.BridgeId == id);
             var prompt = chat?.Items.OfType<UserItem>().ElementAtOrDefault(ordinal);
             if (chat is null || prompt is null) return (Found: false, Ok: false, Message: "unknown prompt");
@@ -1156,7 +1252,7 @@ public sealed class PhoneBridgeService : Observable
     {
         var title = (Body(request)?["title"]?.GetValue<string>() ?? "").Trim();
         if (title.Length is 0 or > 200) return Fail(400, "title must be 1-200 characters");
-        var ok = await WithChatAsync(id, chat => { chat.Title = title; return true; }).ConfigureAwait(false);
+        var ok = await WithChatAsync(id, chat => { chat.RenameChat(title); return true; }).ConfigureAwait(false);
         return ok ? Json(new JsonObject { ["ok"] = true }) : Fail(404, "unknown chat");
     }
 
@@ -1164,14 +1260,16 @@ public sealed class PhoneBridgeService : Observable
     /// machine the user cannot see, and a closed chat is still resumable from the desktop's history.</summary>
     private async Task<Response> CloseAsync(string id)
     {
-        var ok = await OnUi(vm =>
+        var result = await OnUi(vm =>
         {
             var chat = vm.Chats.FirstOrDefault(c => c.BridgeId == id);
-            if (chat is null) return false;
+            if (chat is null) return 404;
+            if (chat.IsLocked) return 409;
             vm.CloseChat(chat);
-            return true;
+            return 200;
         }).ConfigureAwait(false);
-        return ok ? Json(new JsonObject { ["ok"] = true }) : Fail(404, "unknown chat");
+        return result == 200 ? Json(new JsonObject { ["ok"] = true })
+            : Fail(result, result == 409 ? "This chat is locked. Unlock it on the desktop before closing it." : "unknown chat");
     }
 
     // ---------------- starting a chat ----------------
@@ -1250,7 +1348,14 @@ public sealed class PhoneBridgeService : Observable
         var vm = _vm;
         var ui = _ui;
         if (vm is null || ui is null) return default!;
-        return await ui.InvokeAsync(() => work(vm)).Task.ConfigureAwait(false);
+        var device = _requestDevice.Value;
+        var requestCancellation = _requestCancellation.Value;
+        return await ui.InvokeAsync(() =>
+        {
+            // Revalidate at the point of action: a request queued on the UI thread can outlive its device.
+            lock (_gate)
+                return device is not null && _devices.Contains(device) && !requestCancellation.IsCancellationRequested ? work(vm) : default!;
+        }).Task.ConfigureAwait(false);
     }
 
     // ---------------- auth ----------------
@@ -1258,147 +1363,163 @@ public sealed class PhoneBridgeService : Observable
     private Response Pair(Request request, string remote)
     {
         var body = Body(request);
-        var code = (body?["code"]?.GetValue<string>() ?? "").Where(char.IsDigit).Aggregate("", (a, c) => a + c);
-        var name = (body?["name"]?.GetValue<string>() ?? "Phone").Trim();
-        if (name.Length is 0 or > 64) name = "Phone";
+        var code = (StringValue(body, "code") ?? "").Replace(" ", "");
+        var name = DeviceName(body);
+        var publicKey = PhoneRequestProof.NormalizePublicKey(StringValue(body, "devicePublicKey"));
+        if (publicKey is null) return Fail(400, "a P-256 device identity is required; update the phone app");
 
-        string? expected;
+        string token;
+        PhoneDevice device;
         lock (_gate)
         {
             if (_pairingCode is null || DateTime.UtcNow > _pairingExpires) return Fail(403, "pairing is not open");
             if (_pairingAttempts >= MaxPairingAttempts) return Fail(429, "too many attempts");
-            expected = _pairingCode;
             _pairingAttempts++;
-        }
+            if (!FixedTimeEquals(code, _pairingCode))
+            {
+                var left = MaxPairingAttempts - _pairingAttempts;
+                if (left <= 0) ClosePairing();
+                return Fail(403, left > 0 ? $"wrong code ({left} left)" : "wrong code - pairing closed");
+            }
 
-        if (!FixedTimeEquals(code, expected))
-        {
-            var left = MaxPairingAttempts - _pairingAttempts;
-            if (left <= 0) ClosePairing();
-            return Fail(403, left > 0 ? $"wrong code ({left} left)" : "wrong code - pairing closed");
+            // Consume the code and persist the device in the same critical section as its validation.
+            // Two simultaneous valid requests must never each receive a credential.
+            ClosePairing();
+            token = Base64Url(RandomNumberGenerator.GetBytes(32));
+            device = NewDevice(name, publicKey, token, remote);
+            // Outstanding APKs belong to other phones, so a manual pairing leaves them alone.
+            if (!PhoneBridgeStore.SaveDevices(_devices.Append(device))) return Fail(503, "could not persist device claim");
+            _devices.Add(device);
         }
-
-        var token = Base64Url(RandomNumberGenerator.GetBytes(32));
-        var device = new PhoneDevice
-        {
-            Id = Guid.NewGuid().ToString("n"),
-            Name = name,
-            TokenHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token))),
-            PairedAt = DateTimeOffset.Now,
-            LastSeen = DateTimeOffset.Now,
-            LastAddress = remote,
-        };
-        lock (_gate) _devices.Add(device);
-        PhoneBridgeStore.SaveDevices(SnapshotDevices());
         SyncDeviceView();
-        ClosePairing();   // one code, one phone
-
-        return Json(new JsonObject
-        {
-            ["token"] = token,
-            ["deviceId"] = device.Id,
-            ["host"] = Environment.MachineName,
-            ["fingerprint"] = Fingerprint,
-        });
+        return PairedResponse(device, token);
     }
 
-    /// <summary>
-    /// Trades a generated APK's one-time secret for a real device token.
-    ///
-    /// This is the whole point of the generated-APK flow: the secret inside the APK is not a credential you can
-    /// keep using, it is a coupon. It works exactly once, it can only be redeemed by something that already
-    /// trusts this machine's certificate (the fingerprint is baked into the same APK), and the moment it is
-    /// redeemed it is stamped used and the APK becomes inert. A copy of the APK that leaks after the real phone
-    /// has enrolled buys an attacker nothing at all.
-    /// </summary>
     private Response Enroll(Request request, string remote)
     {
         var body = Body(request);
-        var secret = body?["secret"]?.GetValue<string>() ?? "";
-        var name = (body?["name"]?.GetValue<string>() ?? "Phone").Trim();
-        if (name.Length is 0 or > 64) name = "Phone";
+        var secret = StringValue(body, "secret") ?? "";
+        var name = DeviceName(body);
+        var publicKey = PhoneRequestProof.NormalizePublicKey(StringValue(body, "devicePublicKey"));
+        if (publicKey is null) return Fail(400, "a P-256 device identity is required; update the phone app");
         if (secret.Length is 0 or > 512) return Fail(400, "missing secret");
+        var presented = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
 
-        string expected;
+        string token;
+        PhoneDevice device;
         lock (_gate)
         {
-            if (_enrolment is null) return Fail(403, "this PC is not expecting a new phone");
-            if (!_enrolment.Pending) return Fail(403, "that app has already been used to set up a phone");
+            if (_enrolments.Count == 0) return Fail(403, "this PC is not expecting a new phone");
+            // Nothing left to claim is not an attempt: say so before the attempt budget is touched, as before.
+            if (!_enrolments.Any(e => e.Pending))
+                return Fail(403, "that app enrollment was used or expired; generate a new app on the PC");
             if (_enrolAttempts >= MaxEnrolAttempts) return Fail(429, "too many attempts");
             _enrolAttempts++;
-            expected = _enrolment.SecretHash;
-        }
-
-        var presented = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
-        if (!FixedTimeEquals(expected, presented)) return Fail(403, "that app was not built by this PC");
-
-        var token = Base64Url(RandomNumberGenerator.GetBytes(32));
-        var device = new PhoneDevice
-        {
-            Id = Guid.NewGuid().ToString("n"),
-            Name = name,
-            TokenHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token))),
-            PairedAt = DateTimeOffset.Now,
-            LastSeen = DateTimeOffset.Now,
-            LastAddress = remote,
-        };
-
-        PhoneEnrolment? snapshot;
-        lock (_gate)
-        {
-            // Re-checked under the lock: two phones racing the same APK must not both come away with a token.
-            if (_enrolment is null || !_enrolment.Pending) return Fail(403, "that app has already been used to set up a phone");
-            _enrolment.UsedAt = DateTimeOffset.Now;
-            _enrolment.DeviceName = name;
-            // The coupon is now spent AND named. Nothing reopens it: a second phone running the same APK file gets
-            // the 403 above, and revoking this device later does not resurrect it.
-            _enrolment.BoundDeviceId = device.Id;
-            _enrolment.BoundAddress = remote;
-            snapshot = _enrolment;
+            // Every generated app has its own secret. Compare against all of them (each in constant time) and only
+            // then decide, so the answer does not depend on how far down the list the match sat.
+            PhoneEnrolment? enrolment = null;
+            foreach (var candidate in _enrolments)
+                if (FixedTimeEquals(candidate.SecretHash, presented)) enrolment = candidate;
+            if (enrolment is null) return Fail(403, "that app was not built by this PC");
+            if (!enrolment.Pending) return Fail(403, "that app enrollment was used or expired; generate a new app on the PC");
+            token = Base64Url(RandomNumberGenerator.GetBytes(32));
+            device = NewDevice(name, publicKey, token, remote);
+            SpendEnrolment(enrolment, device, remote);
+            // Persist the spent coupon BEFORE issuing/persisting the device. A failure can strand an enrollment
+            // (recoverable on the desktop), but must never resurrect it or issue an unrecorded credential.
+            if (!PhoneBridgeStore.SaveEnrolments(_enrolments)) return Fail(503, "could not persist enrollment claim");
+            if (!PhoneBridgeStore.SaveDevices(_devices.Append(device))) return Fail(503, "could not persist device claim");
             _devices.Add(device);
         }
-
-        PhoneBridgeStore.SaveEnrolment(snapshot);
-        PhoneBridgeStore.SaveDevices(SnapshotDevices());
         SyncDeviceView();
-        Raise(nameof(HasOutstandingEnrolment));
-        Raise(nameof(Enrolment));
-
-        return Json(new JsonObject
-        {
-            ["token"] = token,
-            ["deviceId"] = device.Id,
-            ["host"] = Environment.MachineName,
-            ["fingerprint"] = Fingerprint,
-        });
+        RaiseEnrolments();
+        return PairedResponse(device, token);
     }
 
-    private PhoneDevice? Authenticate(Request request, string remote)
+    private static void SpendEnrolment(PhoneEnrolment enrolment, PhoneDevice device, string remote)
     {
+        enrolment.UsedAt = DateTimeOffset.UtcNow;
+        enrolment.DeviceName = device.Name;
+        enrolment.BoundDeviceId = device.Id;
+        enrolment.BoundAddress = remote;
+    }
+
+    private static PhoneDevice NewDevice(string name, string publicKey, string token, string remote) => new()
+    {
+        Id = Guid.NewGuid().ToString("n"),
+        Name = name,
+        TokenHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token))),
+        PublicKey = publicKey,
+        PairedAt = DateTimeOffset.UtcNow,
+        LastSeen = DateTimeOffset.UtcNow,
+        LastAddress = remote,
+    };
+
+    private Response PairedResponse(PhoneDevice device, string token) => Json(new JsonObject
+    {
+        ["token"] = token,
+        ["deviceId"] = device.Id,
+        ["host"] = Environment.MachineName,
+        ["fingerprint"] = Fingerprint,
+        ["authEpoch"] = _requestProof.Epoch,
+    });
+
+    private static string DeviceName(JsonObject? body)
+    {
+        var name = (StringValue(body, "name") ?? "Phone").Trim();
+        return name.Length is 0 or > 64 ? "Phone" : name;
+    }
+
+    private static string? StringValue(JsonObject? body, string name) =>
+        body?[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private PhoneDevice? Authenticate(Request request, string remote, out int failureStatus, out string failureReason)
+    {
+        failureStatus = 401;
+        failureReason = "This phone is not paired. Revoke its old entry on the PC, then pair the updated app again.";
         lock (_gate)
         {
-            if (_lockouts.TryGetValue(remote, out var state) && DateTime.UtcNow < state.Until) return null;
-        }
-
-        if (!request.Headers.TryGetValue("Authorization", out var header) ||
-            !header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
+            if (_lockouts.TryGetValue(remote, out var state) && DateTime.UtcNow < state.Until)
+            {
+                failureStatus = 429;
+                failureReason = "Too many authentication attempts. Wait one minute and retry.";
+                return null;
+            }
+            if (request.Headers.TryGetValue("Authorization", out var header) &&
+                header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                var token = header[7..].Trim();
+                if (token.Length is > 0 and <= 128)
+                {
+                    // Several phones may be paired; the token says which one is asking. Every stored hash is compared
+                    // (constant time each) before choosing, and the request must then carry THAT phone's signature.
+                    var presented = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+                    PhoneDevice? device = null;
+                    foreach (var candidate in _devices)
+                        if (FixedTimeEquals(candidate.TokenHash, presented)) device = candidate;
+                    if (device is not null && !string.IsNullOrEmpty(device.PublicKey))
+                    {
+                        if (_requestProof.Verify(device.PublicKey, token, request.Method, request.Target, request.Body,
+                                request.Headers, DateTimeOffset.UtcNow))
+                        {
+                            _lockouts.Remove(remote);
+                            return device;
+                        }
+                        // An epoch mismatch is safely retried after a pinned ping. Other proof failures (including
+                        // clock skew) must not make the app erase an otherwise valid pairing.
+                        if (request.Headers.TryGetValue("X-VibeCode-Epoch", out var epoch) && epoch != _requestProof.Epoch)
+                            failureReason = "The PC restarted. Refresh its authentication challenge and retry.";
+                        else
+                        {
+                            failureStatus = 403;
+                            failureReason = "Device signature rejected. Check automatic date and time on both devices. If this persists, revoke this phone on the PC and pair again.";
+                        }
+                    }
+                }
+            }
             NoteAuthFailure(remote);
             return null;
         }
-
-        var presented = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(header[7..].Trim())));
-        lock (_gate)
-        {
-            foreach (var device in _devices)
-            {
-                if (!FixedTimeEquals(device.TokenHash, presented)) continue;
-                _lockouts.Remove(remote);
-                return device;
-            }
-        }
-        NoteAuthFailure(remote);
-        return null;
     }
 
     /// <summary>Spends one unit of an address's anonymous request budget. False once it is empty.</summary>

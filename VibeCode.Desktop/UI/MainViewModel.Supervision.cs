@@ -68,9 +68,7 @@ public sealed partial class MainViewModel
 
     private static SupervisionSettings SupervisionConfig => SupervisionSettings.Current;
 
-    /// <summary>Supervision is unconditional in Demon Mode — a locked read-only worker has no other way to be rescued,
-    /// since the user cannot reach into its pane and unstick it by hand.</summary>
-    private bool SupervisionAllowed => IsDemonMode || AppSettings.Current.AgentSupervisionEnabled;
+    private bool SupervisionAllowed => AppSettings.Current.AgentSupervisionEnabled;
 
     // ---------------------------------------------------------------- lifecycle
 
@@ -287,6 +285,12 @@ public sealed partial class MainViewModel
             }
 
             if (!a.HasAssignment) { UpdatePaneSupervisionStatus(a); continue; }
+            if (a.Pane.WaitingForLimitReset)
+            {
+                a.LastActivityAt = now;
+                UpdatePaneSupervisionStatus(a);
+                continue;
+            }
 
             var health = AgentSupervisionPolicy.Diagnose(
                 hasAssignment: true,
@@ -295,8 +299,7 @@ public sealed partial class MainViewModel
                 secondsSinceActivity: (now - a.LastActivityAt).TotalSeconds,
                 secondsSinceAssigned: (now - a.AssignedAt).TotalSeconds,
                 repeatCount: a.RepeatCount,
-                cfg,
-                blockedOnUser: IsBlockedOnUser(a.Pane));
+                cfg);
 
             if (health == SupervisionHealth.Healthy) { UpdatePaneSupervisionStatus(a); continue; }
 
@@ -326,7 +329,6 @@ public sealed partial class MainViewModel
             UpdatePaneSupervisionStatus(a);
         }
 
-        RefreshDemonActivity();
         MaybeReconcile();
     }
 
@@ -339,16 +341,6 @@ public sealed partial class MainViewModel
         SupervisionHealth.Blocked => "blocked on an approval nobody can give it",
         _ => "unresponsive",
     };
-
-    /// <summary>True when the pane is sitting on an unanswered question, plan review or permission card. For a Demon
-    /// Mode worker that is a hard deadlock — its pane is read-only, so the card can never be answered.</summary>
-    private static bool IsBlockedOnUser(ChatViewModel pane)
-    {
-        if (!pane.InputLocked) return false;   // an interactive pane's prompt is the user's to answer, not a fault
-        for (var i = pane.Items.Count - 1; i >= 0 && i >= pane.Items.Count - 12; i--)
-            if (pane.Items[i] is PermItem { IsPending: true }) return true;
-        return false;
-    }
 
     // ---------------------------------------------------------------- the ladder
 
@@ -394,7 +386,7 @@ public sealed partial class MainViewModel
         var old = a.Pane;
         var paneIndex = BridgePanes.IndexOf(old);
         // The orchestrator is never restarted from under the user: it holds the plan and the conversation.
-        if (paneIndex < 0 || old.IsBridgeManager || old.IsDemonOrchestrator)
+        if (paneIndex < 0 || old.IsBridgeManager)
         {
             Resolve(a, AgentResolution.Failed, "cannot restart this session");
             TakeOverTask(a, Describe(health));
@@ -415,11 +407,8 @@ public sealed partial class MainViewModel
             Title = old.Title,
             ExcludeFromMemory = old.ExcludeFromMemory,
         };
-        replacement.IsDemonWorker = old.IsDemonWorker;
-        // Both Demon roles have to survive a restart. The orchestrator's flag is what the demon wall features and
-        // what keeps its pane typable; a replacement without it silently demotes the one session the user can reach.
-        replacement.IsDemonOrchestrator = old.IsDemonOrchestrator;
         replacement.BridgeLabel = old.BridgeLabel;
+        replacement.RestoreChatMetadata(old.Metadata);
         replacement.SetMode(old.Mode);
         replacement.Model = old.Model;
         replacement.Effort = old.Effort;
@@ -551,12 +540,6 @@ public sealed partial class MainViewModel
             _ => pane.IsWorking ? $"working · {elapsed}" : $"assigned · {elapsed}",
         };
         pane.SupervisionAlert = a.Stage is SupervisionStage.Intervened or SupervisionStage.Restarted;
-    }
-
-    private void RefreshDemonActivity()
-    {
-        if (!IsDemonMode) return;
-        Raise(nameof(DemonSummary));
     }
 
     private static List<int> ParseDependencies(string? attributes) =>

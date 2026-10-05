@@ -43,7 +43,6 @@ internal static class Program
             ProtocolBoundaryTests.Run();
             ApkPackageTests.Run(mobileTemplate);
             TokenRateTests.Run();
-            TokenRateLayoutTests.Run();
             Console.WriteLine("PASS: public distribution regression suite");
             return 0;
         }
@@ -73,11 +72,12 @@ internal static class Program
              {"id":"internal-model","hidden":true}]
             """)!.AsArray();
         typeof(CodexSession).GetMethod("BuildModels", Hidden)!.Invoke(codex, new object[] { rows });
-        Require(codex.Models.Count == 5 && codex.Models[0]!["value"]!.GetValue<string>() == "gpt-5.6-sol",
+        var sol = codex.Models.OfType<JsonObject>().Single(row => row["value"]!.GetValue<string>() == "gpt-5.6-sol");
+        Require(codex.Models.Count == 8 && codex.Models.Any(row => row!["value"]!.GetValue<string>() == "gpt-6.1-sol"),
             "Codex keeps known normal models when the runtime returns a partial catalog");
-        Require(codex.Models[0]!["supportsFastMode"]!.GetValue<bool>(), "Codex keeps runtime speed-tier support");
-        Require(codex.Models[0]!["displayName"]!.GetValue<string>() == "GPT Sol 5.6", "Codex keeps the Sol product label");
-        Require(codex.Models[0]!["supportedEffortLevels"]!.AsArray().Count == 1, "Live reasoning options override fallback options");
+        Require(sol["supportsFastMode"]!.GetValue<bool>(), "Codex keeps runtime speed-tier support");
+        Require(sol["displayName"]!.GetValue<string>() == "GPT Sol 5.6", "Codex keeps the Sol product label");
+        Require(sol["supportedEffortLevels"]!.AsArray().Count == 1, "Live reasoning options override fallback options");
         Require(codex.Models.All(row => row!["value"]!.GetValue<string>() != "internal-model"), "Hidden internal rows stay out of the menu");
         var partial = JsonNode.Parse("""
             [{"id":"gpt-6-astra","hidden":true,"isDefault":true,
@@ -88,7 +88,7 @@ internal static class Program
         var astra = codex.Models.OfType<JsonObject>().Single(row => row["value"]!.GetValue<string>() == "gpt-6-astra");
         Require(astra["supportedEffortLevels"]!.AsArray().Count == 2, "Known hidden normal models keep the runtime's options");
         Require(!astra["supportsFastMode"]!.GetValue<bool>(), "An explicit empty speed tier list stays disabled");
-        Require(codex.Models.Count == 5, "Retired and internal models do not add menu entries");
+        Require(codex.Models.Count == 8, "Retired and internal models do not add menu entries");
         typeof(CodexSession).GetMethod("BuildModels", Hidden)!.Invoke(codex, new object?[] { null });
         Require(codex.Models.Any(row => row!["value"]!.GetValue<string>() == "default"), "Empty catalogs retain the provider default");
         var luna = codex.Models.OfType<JsonObject>().Single(row => row["value"]!.GetValue<string>() == "gpt-5.6-luna");

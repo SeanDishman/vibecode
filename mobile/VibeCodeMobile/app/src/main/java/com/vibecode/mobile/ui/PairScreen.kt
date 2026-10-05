@@ -12,15 +12,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -43,6 +47,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,16 +71,16 @@ fun PairScreen(
     onCodeChanged: (String) -> Unit,
     onSubmitCode: () -> Unit,
 ) {
+    Box(Modifier.fillMaxSize().background(VibeColors.Bg0).safeDrawingPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
-            .background(VibeColors.Bg0)
+            .widthIn(max = 600.dp)
+            .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .imePadding()
-            .padding(horizontal = 26.dp),
+            .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(64.dp))
+        Spacer(Modifier.height(24.dp))
         BrandMark()
         Spacer(Modifier.height(18.dp))
         Text("VibeCode", style = MaterialTheme.typography.headlineSmall, color = VibeColors.Text)
@@ -107,6 +112,7 @@ fun PairScreen(
         }
         Spacer(Modifier.height(48.dp))
     }
+    }
 }
 
 @Composable
@@ -136,16 +142,19 @@ private fun AddressStep(state: PairState, onAddressChanged: (String) -> Unit, on
         OutlinedTextField(
             value = state.address,
             onValueChange = onAddressChanged,
+            enabled = !state.busy,
             singleLine = true,
+            label = { Text("PC address") },
             placeholder = { Text("192.168.1.20:8765", color = VibeColors.Faint) },
             textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 16.sp),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { if (!state.busy && state.address.isNotBlank()) onDiscover() }),
             colors = fieldColors(),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(16.dp))
-        PrimaryAction("Connect", state.busy, onDiscover)
+        PrimaryAction("Connect", state.busy, onDiscover, enabled = state.address.isNotBlank())
     }
 }
 
@@ -177,11 +186,13 @@ private fun ConfirmStep(state: PairState, onConfirm: () -> Unit, onBack: () -> U
                 state.safetyCode,
                 style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 30.sp, fontWeight = FontWeight.Bold),
                 color = VibeColors.Accent,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp),
             )
         }
         Spacer(Modifier.height(16.dp))
         PrimaryAction("It matches — continue", state.busy, onConfirm)
-        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+        TextButton(onClick = onBack, enabled = !state.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
             Text("Use a different address", color = VibeColors.Muted)
         }
     }
@@ -206,56 +217,24 @@ private fun CodeStep(
             modifier = Modifier.padding(top = 8.dp, bottom = 18.dp),
         )
 
-        // One real text field behind six drawn boxes: the keyboard, selection and IME all behave normally, and
-        // the boxes are decoration rather than six fields fighting over focus.
-        BasicTextField(
+        // A native field keeps tapping, pasting, selection, TalkBack and IME submission working together.
+        OutlinedTextField(
             value = state.code,
             onValueChange = onCodeChanged,
+            enabled = !state.busy,
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            cursorBrush = SolidColor(VibeColors.Accent),
-            textStyle = TextStyle(color = VibeColors.Text),
+            label = { Text("Six-digit pairing code") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { if (!state.busy && state.code.length == 6) onSubmit() }),
+            colors = fieldColors(),
+            shape = RoundedCornerShape(10.dp),
+            textStyle = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            decorationBox = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    repeat(6) { index ->
-                        val char = state.code.getOrNull(index)
-                        val filled = char != null
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(58.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(VibeColors.CodeBg)
-                                .border(
-                                    width = if (filled) 1.5.dp else 1.dp,
-                                    color = if (filled) VibeColors.Accent else VibeColors.Border,
-                                    shape = RoundedCornerShape(10.dp),
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                char?.toString() ?: "",
-                                style = TextStyle(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 22.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    textAlign = TextAlign.Center,
-                                ),
-                                color = VibeColors.Text,
-                            )
-                        }
-                    }
-                }
-            },
         )
 
         Spacer(Modifier.height(18.dp))
-        PrimaryAction("Pair this phone", state.busy, onSubmit)
-        TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+        PrimaryAction("Pair this phone", state.busy, onSubmit, enabled = state.code.length == 6)
+        TextButton(onClick = onBack, enabled = !state.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
             Text("Start over", color = VibeColors.Muted)
         }
     }
@@ -284,10 +263,10 @@ private fun StepLabel(text: String) {
 }
 
 @Composable
-private fun PrimaryAction(label: String, busy: Boolean, onClick: () -> Unit) {
+private fun PrimaryAction(label: String, busy: Boolean, onClick: () -> Unit, enabled: Boolean = true) {
     Button(
         onClick = onClick,
-        enabled = !busy,
+        enabled = enabled && !busy,
         shape = RoundedCornerShape(10.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = VibeColors.Accent,
@@ -295,7 +274,7 @@ private fun PrimaryAction(label: String, busy: Boolean, onClick: () -> Unit) {
             disabledContainerColor = VibeColors.AccentDim,
             disabledContentColor = VibeColors.OnAccent,
         ),
-        modifier = Modifier.fillMaxWidth().height(48.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
     ) {
         if (busy) {
             CircularProgressIndicator(

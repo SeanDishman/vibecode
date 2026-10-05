@@ -1,92 +1,108 @@
 package com.vibecode.mobile.data
 
+import android.app.Activity
+import android.app.KeyguardManager
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 
-/**
- * The screen lock in front of a paired app.
- *
- * The pairing token is a standing credential that can make an agent run arbitrary commands on someone's PC, so
- * an unattended unlocked phone is the weakest link in the whole design — weaker than the TLS pinning it sits
- * behind. This gates the app behind the same credential that protects the device itself.
- *
- * Every failure path here lets the user IN rather than keeping them out. That is deliberate: this lock is
- * defence in depth on top of a token that is already encrypted at rest, and the alternative failure mode — a
- * phone that can never open the app again because its fingerprint sensor broke — is far worse than the risk.
- */
+/** A failed, cancelled or unavailable authenticator must never unlock desktop control. */
 object AppLock {
-
     private const val COMBINED =
         BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-    private const val BIOMETRIC_ONLY = BiometricManager.Authenticators.BIOMETRIC_WEAK
+    private const val STRONG = BiometricManager.Authenticators.BIOMETRIC_STRONG
+    private const val CREDENTIAL_TAG = "vibecode.credential.confirm"
 
-    /**
-     * Whether this device can actually challenge the user.
-     *
-     * False on a phone with no screen lock set at all. In that case the app deliberately does not lock: there is
-     * no secret to check against, and a lock screen with no way past it would be a door with no key.
-     */
-    fun isAvailable(activity: FragmentActivity): Boolean = authenticators(activity) != null
+    fun isAvailable(activity: FragmentActivity): Boolean =
+        activity.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
 
-    /** The strongest authenticator set this device will actually accept, or null if it has no lock configured. */
-    private fun authenticators(activity: FragmentActivity): Int? {
-        val manager = BiometricManager.from(activity)
-        // Device credential is included first so a wet or broken fingerprint sensor is never the only way in.
-        if (manager.canAuthenticate(COMBINED) == BiometricManager.BIOMETRIC_SUCCESS) return COMBINED
-        if (manager.canAuthenticate(BIOMETRIC_ONLY) == BiometricManager.BIOMETRIC_SUCCESS) return BIOMETRIC_ONLY
-        return null
-    }
-
-    /**
-     * Shows the system prompt.
-     *
-     * @param onSuccess called on the main thread once the user proves who they are.
-     * @param onUnavailable called when the device turned out to have no usable credential — or when the prompt
-     *        itself could not be shown — so the caller can let the user through instead of stranding them.
-     */
-    fun prompt(
-        activity: FragmentActivity,
-        onSuccess: () -> Unit,
-        onUnavailable: () -> Unit,
-    ) {
-        val allowed = authenticators(activity)
-        if (allowed == null) {
+    /** onUnavailable is an error notification only: the caller must leave the app locked. */
+    fun prompt(activity: FragmentActivity, onSuccess: () -> Unit, onUnavailable: () -> Unit) {
+        if (!isAvailable(activity)) {
             onUnavailable()
             return
         }
-
-        val prompt = BiometricPrompt(
-            activity,
-            ContextCompat.getMainExecutor(activity),
+        val manager = BiometricManager.from(activity)
+        val allowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) COMBINED else STRONG
+        if (manager.canAuthenticate(allowed) != BiometricManager.BIOMETRIC_SUCCESS) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                credential(activity, onSuccess, onUnavailable)
+            } else onUnavailable()
+            return
+        }
+        val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onSuccess()
-
                 override fun onAuthenticationError(code: Int, message: CharSequence) {
-                    // A cancelled or failed prompt leaves the app locked; the lock screen keeps its own Unlock
-                    // button for another attempt. The exception is a device that has no usable credential after
-                    // all, which must not become a permanent lockout.
-                    if (code == BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL ||
-                        code == BiometricPrompt.ERROR_HW_NOT_PRESENT ||
-                        code == BiometricPrompt.ERROR_NO_BIOMETRICS
-                    ) onUnavailable()
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
+                        (code == BiometricPrompt.ERROR_NEGATIVE_BUTTON || code == BiometricPrompt.ERROR_HW_UNAVAILABLE ||
+                            code == BiometricPrompt.ERROR_LOCKOUT || code == BiometricPrompt.ERROR_LOCKOUT_PERMANENT)) {
+                        credential(activity, onSuccess, onUnavailable)
+                    } else onUnavailable()
                 }
-            },
-        )
+            })
+        runCatching {
+            val info = BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Unlock VibeCode")
+                .setSubtitle("This phone can control your PC.")
+                .setAllowedAuthenticators(allowed)
+                .apply { if (allowed == STRONG) setNegativeButtonText("Use screen lock") }
+                .build()
+            prompt.authenticate(info)
+        }.onFailure { onUnavailable() }
+    }
 
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock VibeCode")
-            .setSubtitle("This phone can control your PC.")
-            .setAllowedAuthenticators(allowed)
-            .apply {
-                // A biometric-only prompt is required to offer a negative button; a combined one is forbidden
-                // from having it, because the credential path IS the fallback.
-                if (allowed == BIOMETRIC_ONLY) setNegativeButtonText("Cancel")
-            }
-            .build()
+    private fun credential(activity: FragmentActivity, success: () -> Unit, unavailable: () -> Unit) {
+        val manager = activity.supportFragmentManager
+        if (manager.isStateSaved) { unavailable(); return }
+        if (manager.findFragmentByTag(CREDENTIAL_TAG) != null) return
+        runCatching {
+            manager.beginTransaction().add(CredentialFragment().apply {
+                onSuccess = success
+                onUnavailable = unavailable
+            }, CREDENTIAL_TAG).commitNow()
+        }.onFailure { unavailable() }
+    }
+}
 
-        // Older platform versions reject some authenticator combinations at show time rather than at query time.
-        runCatching { prompt.authenticate(info) }.onFailure { onUnavailable() }
+/** API 26-29 cannot use STRONG | DEVICE_CREDENTIAL in BiometricPrompt. Use the OS credential screen. */
+class CredentialFragment : Fragment() {
+    var onSuccess: (() -> Unit)? = null
+    var onUnavailable: (() -> Unit)? = null
+    private var launched = false
+    private val confirmation = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val accepted = it.resultCode == Activity.RESULT_OK
+        finish(accepted)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Callbacks deliberately do not survive process death/recreation; the app stays locked and can retry.
+        launched = savedInstanceState != null
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onResume() {
+        super.onResume()
+        if (onSuccess == null) { finish(false); return }
+        if (launched) return
+        launched = true
+        val keyguard = requireContext().getSystemService(KeyguardManager::class.java)
+        val intent = keyguard?.createConfirmDeviceCredentialIntent("Unlock VibeCode", "Confirm your screen lock to control your PC.")
+        if (intent == null) { finish(false); return }
+        runCatching { confirmation.launch(intent) }.onFailure { finish(false) }
+    }
+
+    private fun finish(accepted: Boolean) {
+        val callback = if (accepted) onSuccess else onUnavailable
+        onSuccess = null
+        onUnavailable = null
+        if (isAdded) parentFragmentManager.beginTransaction().remove(this).commitAllowingStateLoss()
+        callback?.invoke()
     }
 }

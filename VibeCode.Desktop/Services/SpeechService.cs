@@ -98,7 +98,22 @@ public sealed class SpeechService
     // doesn't spend more on thread sync than it wins back.
     private static readonly int InferenceThreads = Math.Clamp(Environment.ProcessorCount, 4, 16);
 
-    public SpeechState State { get; private set; } = SpeechState.Idle;
+    private SpeechState _state = SpeechState.Idle;
+    public SpeechState State
+    {
+        get => _state;
+        private set
+        {
+            if (_state == value) return;
+            _state = value;
+            if (value == SpeechState.Idle) RecordingOwner = null;
+            // Visual listeners never run on the capture thread and cannot break dictation.
+            if (StateChanged is { } handlers)
+                foreach (EventHandler handler in handlers.GetInvocationList())
+                    try { handler(this, EventArgs.Empty); } catch { /* a view may be closing */ }
+        }
+    }
+    public event EventHandler? StateChanged;
     public bool IsBusy => State is not SpeechState.Idle;
     public bool ModelReady => File.Exists(ModelPath);
 
@@ -183,11 +198,39 @@ public sealed class SpeechService
         public required MemoryStream Buffer;
         public required WaveFileWriter Writer;
         public required TaskCompletionSource<byte[]> Tcs;
+        public object? RecordingOwner;
+        public MicLevelFrame? LevelFrame;
+        public MicLevelHistory? LevelHistory;
         public Action<byte[], int>? OnData;
     }
 
     private Capture? _current;
     private int _captureGeneration;          // 0 is never issued, so token 0 always means "owns nothing"
+
+    /// <summary>The composer whose dictation is in progress, including transcription; null when idle.</summary>
+    public object? RecordingOwner { get; private set; }
+
+    /// <summary>Latest real PCM measurement. No WPF work is posted from the capture thread.</summary>
+    public MicLevelFrame? LevelFrame
+    {
+        get
+        {
+            var cap = _current;
+            return State == SpeechState.Recording && cap is not null && Owns(cap.Gen)
+                ? Volatile.Read(ref cap.LevelFrame) : null;
+        }
+    }
+
+    /// <summary>Recent real audio history for the active capture, including actual silence buffers.</summary>
+    public MicHistorySnapshot? LevelHistory
+    {
+        get
+        {
+            var cap = _current;
+            return State == SpeechState.Recording && cap is not null && Owns(cap.Gen)
+                ? cap.LevelHistory?.Snapshot() : null;
+        }
+    }
 
     // ===================================== ARMING THE MICROPHONE =====================================
     // waveInOpen measured 38-184 ms depending on how busy the machine is, and it used to be paid on the click
@@ -399,8 +442,9 @@ public sealed class SpeechService
 
     /// <summary>Begin capturing the default microphone. Returns false with a human message if it can't start
     /// (no device, access denied). Call on the UI thread. <paramref name="token"/> is the capture's ownership token;
-    /// pass it back to <see cref="StopAndTranscribeAsync"/> and use it with <see cref="Owns"/>.</summary>
-    public bool StartRecording(out string? error, out int token)
+    /// pass it back to <see cref="StopAndTranscribeAsync"/> and use it with <see cref="Owns"/>.
+    /// <paramref name="recordingOwner"/> identifies the composer to live meters and other dictation controls.</summary>
+    public bool StartRecording(out string? error, out int token, object? recordingOwner = null)
     {
         error = null;
         token = 0;
@@ -414,16 +458,32 @@ public sealed class SpeechService
             var mic = Mic();
             var writer = new WaveFileWriter(buffer, new WaveFormat(MicCapture.SampleRate, MicCapture.Bits, MicCapture.Channels));
             var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
-            cap = new Capture { Gen = gen, Mic = mic, Buffer = buffer, Writer = writer, Tcs = tcs };
+            cap = new Capture { Gen = gen, Mic = mic, Buffer = buffer, Writer = writer, Tcs = tcs,
+                RecordingOwner = recordingOwner, LevelHistory = new MicLevelHistory(gen) };
 
             // The handler closes over THIS capture's locals — never over fields — so a callback still in flight when
             // a newer capture starts writes into its OWN wav. Unsubscribed by StopCapture, which returns only once
             // the capture thread is done, so there is no window where a stale handler can fire.
-            void OnData(byte[] buf, int count) { try { writer.Write(buf, 0, count); } catch { /* stopped */ } }
+            var recording = cap;
+            void OnData(byte[] buf, int count)
+            {
+                // Save the audio first. Measurement reads the same reused bytes synchronously,
+                // after the WAV write, and has no dispatcher wait or device-start work.
+                try { writer.Write(buf, 0, count); } catch { /* stopped */ }
+                if (!Owns(gen) || !ReferenceEquals(_current, recording)) return;
+                try
+                {
+                    var pcm = buf.AsSpan(0, count);
+                    recording.LevelHistory?.AppendPcm16(pcm);
+                    Volatile.Write(ref recording.LevelFrame, MicLevelFrame.FromPcm16(gen, pcm));
+                }
+                catch { /* metering must never interrupt saving speech */ }
+            }
             cap.OnData = OnData;
             mic.DataAvailable += OnData;
 
             _current = cap;
+            RecordingOwner = recordingOwner;
             mic.Start();
             State = SpeechState.Recording;
             token = gen;
@@ -448,6 +508,7 @@ public sealed class SpeechService
                 if (ReferenceEquals(_current, cap)) _current = null;
             }
             State = SpeechState.Idle;            // nothing is live, so State must say so
+            RecordingOwner = null;               // Start may fail before State ever left Idle
             ReleaseMicIfIdle();                  // a device that cannot record must not stay open
             return false;
         }

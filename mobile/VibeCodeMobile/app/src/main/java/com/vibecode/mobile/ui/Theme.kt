@@ -13,9 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * The desktop's palette, byte for byte (VibeCode.Desktop/Themes/Dark.xaml). The point of the phone app is that it
- * feels like the same program in your hand, and colour is most of that — so these are not "close enough" values,
- * they are the same ones.
+ * The desktop's dark palette, with readable secondary text and button labels at phone sizes.
  *
  * There is no light scheme. VibeCode has never had one, and inventing one here would make the phone the odd one
  * out on every screenshot.
@@ -30,12 +28,12 @@ object VibeColors {
     val BorderSoft = Color(0xFF2C2D32)
     val Text = Color(0xFFECEDF1)
     val Muted = Color(0xFF9EA0A8)
-    val Faint = Color(0xFF6C6E77)
+    val Faint = Color(0xFF9597A1)
     val Accent = Color(0xFF4C8DF5)
     val AccentHover = Color(0xFF6BA0F7)
     val AccentSoft = Color(0x244C8DF5)
     val AccentDim = Color(0x664C8DF5)
-    val OnAccent = Color(0xFFFFFFFF)
+    val OnAccent = Color(0xFF141518)
     val Green = Color(0xFF7ED0A6)
     val GreenSoft = Color(0x1E7ED0A6)
     val Red = Color(0xFFE86A78)

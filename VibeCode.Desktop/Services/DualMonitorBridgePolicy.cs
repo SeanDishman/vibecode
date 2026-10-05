@@ -8,32 +8,16 @@ public static class DualMonitorBridgePolicy
 {
     public const int MinimumAgentCount = 3;
 
-    /// <summary>
-    /// Demon Mode and the dual-monitor layout are mutually exclusive, and the refusal belongs here rather than in an
-    /// early return at the call site — it is a rule about the feature, and a rule spread across two windows is a rule
-    /// that gets forgotten in one of them. A Demon wall is a single arrangement: the orchestrator holds a 2x2 block
-    /// with its workers around it, and cutting that down the middle would put the only pane the user can type into on
-    /// whichever display the partition happened to pick.
-    /// <para>
-    /// It is deliberately the ON-SCREEN wall that refuses, not the mere existence of a team: a Demon team parked
-    /// behind another chat's Bridge is not being laid out at all, and has no business dictating how the Bridge the
-    /// user IS looking at is arranged.
-    /// </para>
-    /// </summary>
-    public const string DemonRefusal =
-        "Dual-monitor is off while Demon Mode is running — the wall keeps the orchestrator and its workers on one screen.";
-
-    public static bool ShouldSplit(bool enabled, bool bridgeVisible, int agentCount, int monitorCount,
-        bool demonWallOnScreen) =>
-        !demonWallOnScreen && enabled && bridgeVisible && agentCount >= MinimumAgentCount && monitorCount >= 2;
+    public static bool ShouldSplit(bool enabled, bool bridgeVisible, int agentCount, int monitorCount) =>
+        enabled && bridgeVisible && agentCount >= MinimumAgentCount && monitorCount >= 2;
 
     /// <summary>A double-session shell stays available whenever a second display exists; otherwise retain the
-    /// original three-agent Bridge threshold. Neither is offered while a Demon wall is on screen.</summary>
+    /// original three-agent Bridge threshold.</summary>
     public static bool ShouldOpenCompanion(bool bridgeSplitEnabled, bool doubleSessionsEnabled,
-        bool bridgeVisible, int agentCount, int monitorCount, bool demonWallOnScreen) =>
-        !demonWallOnScreen && monitorCount >= 2
+        bool bridgeVisible, int agentCount, int monitorCount) =>
+        monitorCount >= 2
         && (doubleSessionsEnabled
-            || ShouldSplit(bridgeSplitEnabled, bridgeVisible, agentCount, monitorCount, demonWallOnScreen));
+            || ShouldSplit(bridgeSplitEnabled, bridgeVisible, agentCount, monitorCount));
 
     /// <summary>In double-session mode, only partition a roster while both shells show it. If either shell navigates
     /// to another chat, the remaining Bridge surface must retain every pane instead of hiding half off-screen.

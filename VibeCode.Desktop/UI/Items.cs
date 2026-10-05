@@ -23,7 +23,12 @@ public abstract class Observable : INotifyPropertyChanged
     }
 }
 
-public abstract class ItemVm : Observable;
+public abstract class ItemVm : Observable
+{
+    private static long _nextDisplaySequence;
+    // Keeps interleaved bridge activity in arrival order without copying or re-owning transcript items.
+    internal long DisplaySequence { get; } = Interlocked.Increment(ref _nextDisplaySequence);
+}
 
 /// <summary>Backing collection for a chat transcript. A plain Add lands ABOVE the pinned tail — the live
 /// <see cref="PendingItem"/> orb and then any <see cref="QueuedItem"/> — so the greyed
@@ -384,8 +389,9 @@ public sealed class QueuedItem : ItemVm
     public required string Text
     {
         get => _text;
-        set { if (Set(ref _text, value)) Raise(nameof(HasText)); }
+        set { if (Set(ref _text, value)) { Raise(nameof(HasText)); Raise(nameof(IsGoalCommand)); } }
     }
+    public bool IsGoalCommand => GoalPolicy.TryParseCommand(Text, out _);
     /// <summary>The chat or Bridge pane that owns this queue entry. Shared item templates must not infer ownership
     /// from their visual ancestors because the normal transcript and Bridge panes have different trees.</summary>
     public required ChatViewModel Owner { get; init; }
@@ -433,7 +439,7 @@ public sealed class QueuedItem : ItemVm
                 : "Queued · sends when the agent finishes";
     public string QueueActionText => Extended
         ? Owner.ExtendedQueuePaused ? "Resume queue" : "Send next chunk now"
-        : "Send prompt now";
+        : Owner.IsCodex ? "Send message now" : "Send prompt now";
     public string QueueActionToolTip => Extended
         ? Owner.ExtendedQueuePaused
             ? "Resume the extended queue now instead of waiting for the next usage check"
@@ -513,6 +519,13 @@ public sealed class TextItem : ItemVm
     }
 
     private readonly HashSet<string> _hiddenVerbs = new(StringComparer.Ordinal);
+    private string? _hiddenGoalStatus;
+
+    public void HideGoalStatus(string marker)
+    {
+        _hiddenGoalStatus = marker;
+        Publish(force: true);
+    }
 
     public bool HasText => !string.IsNullOrWhiteSpace(_text);
 
@@ -541,6 +554,8 @@ public sealed class TextItem : ItemVm
         // Never while streaming: a half-written block does not parse, so the text would reflow the moment its
         // terminator arrived. The flag is only set once the turn has ended anyway.
         var text = _hiddenVerbs.Count > 0 && !_streaming ? AgentDirectiveParser.Strip(_text, _hiddenVerbs) : _text;
+        if (!_streaming && _hiddenGoalStatus is { } marker && GoalPolicy.EndsWithMarker(text, marker))
+            text = text.TrimEnd()[..^marker.Length].TrimEnd();
         return !_streaming ? text : IsFenceOpen(text) ? text + Cursor + "\n```" : text + Cursor;
     }
 
@@ -577,21 +592,73 @@ public sealed class ThinkingItem : ItemVm
 {
     private string _text = "";
     private bool _streaming;
-    public string Text { get => _text; set { if (Set(ref _text, value)) Raise(nameof(HasText)); } }
-    public bool Streaming { get => _streaming; set { if (Set(ref _streaming, value)) Raise(nameof(Header)); } }
+    private List<ThinkingItem>? _folded;   // later blocks shown in this row, oldest first
+    private ThinkingItem? _row;            // on a folded block: the row that shows it
+
+    /// <summary>What the row shows: this block, then each block folded into it, a blank line apart. Setting it -
+    /// like <see cref="Append"/> and setting <see cref="Streaming"/> - changes this block alone, so the ingest code
+    /// keeps finishing every block through the item it streamed into, folded or not.</summary>
+    public string Text
+    {
+        get => _folded is null ? _text
+            : string.Join("\n\n", _folded.Prepend(this).Select(block => block._text).Where(text => text.Length > 0));
+        set
+        {
+            if (_text == value) return;
+            _text = value;
+            RowTextChanged();
+        }
+    }
+
+    /// <summary>True while any block in the row is still arriving.</summary>
+    public bool Streaming
+    {
+        get => _streaming || _folded?.Any(block => block._streaming) == true;
+        set
+        {
+            if (_streaming == value) return;
+            _streaming = value;
+            RowStreamingChanged();
+        }
+    }
+
     public string Header => Streaming ? "Thinking…" : "Thought process";
     // HasText gates the expander in the template: real reasoning text -> clickable card that expands to the
     // body; no text -> a static "Thought process" marker (never a dead expander that opens an empty box).
     // Claude: newer models default thinking.display to "omitted" (empty thinking + signature only). We launch
     // with --thinking-display summarized so thinking_delta carries plaintext summaries like interactive
     // Claude Code. Codex/Kimi/Grok already stream thinking text into this field.
-    public bool HasText => _text.Length > 0;
+    public bool HasText => Text.Length > 0;
     public void Append(string delta)
     {
         if (string.IsNullOrEmpty(delta)) return;
         _text += delta;
-        Raise(nameof(Text));
-        Raise(nameof(HasText));
+        RowTextChanged();
+    }
+
+    /// <summary>Show <paramref name="next"/> in this row rather than a row of its own. Models often think in two or
+    /// three blocks before acting, which stacked identical "Thought process" rows. The block stays its own object,
+    /// so it streams and finishes exactly as before; this row only displays it.</summary>
+    public void Fold(ThinkingItem next)
+    {
+        next._row = this;
+        (_folded ??= []).Add(next);
+        RowTextChanged();
+        RowStreamingChanged();
+    }
+
+    private void RowTextChanged()
+    {
+        var row = _row ?? this;
+        row.Raise(nameof(Text));
+        row.Raise(nameof(HasText));
+    }
+
+    private void RowStreamingChanged()
+    {
+        var row = _row ?? this;
+        row.Raise(nameof(Streaming));
+        row.Raise(nameof(Header));
     }
 }
 
@@ -639,12 +706,12 @@ public sealed class ToolItem : ItemVm
 {
     public required string Id { get; init; }
     public required string Name { get; init; }
-    public string DisplayName => Name == "CodexEdit" ? Str(Input?["kind"]) switch
+    public string DisplayName => BridgeToolPresentation.DisplayName(Name) ?? (Name == "CodexEdit" ? Str(Input?["kind"]) switch
     {
         "add" => "Create",
         "delete" => "Delete",
         _ => "Edit",
-    } : Name;
+    } : Name);
 
     private JsonNode? _input;
     private string _status = "running";  // running | done | error
@@ -765,6 +832,7 @@ public sealed class ToolItem : ItemVm
         get
         {
             if (_summaryOverride is not null) return _summaryOverride;
+            if (BridgeToolPresentation.Summary(Name, _input) is { } bridgeSummary) return Trunc(bridgeSummary, 90);
             var i = _input;
             if (i is null) return "";
             return Name switch
@@ -1058,10 +1126,17 @@ public sealed class CompactToolGroupItem : ItemVm
         WebKind => $"{Tools.Count} action{(Tools.Count == 1 ? "" : "s")}",
         _ => $"{Tools.Count} item{(Tools.Count == 1 ? "" : "s")}",
     };
+    public int SuccessCount => Tools.Count(t => t.Status == "done" && !t.IsError);
+    public int FailureCount => Tools.Count(t => t.Status == "error" || t.IsError);
+    public string SuccessText => SuccessCount == 0 ? "" : $"{SuccessCount} success{(SuccessCount == 1 ? "" : "es")}";
+    public string FailureText => FailureCount == 0 ? "" : $"{FailureCount} failure{(FailureCount == 1 ? "" : "s")}";
+    public bool HasMixedShellOutcomes => SuccessCount > 0 && FailureCount > 0;
+    public bool HasShellOutcomeCounts => Kind == BashKind && SuccessCount + FailureCount > 0;
     public string Status => Tools.Any(t => t.IsRunning) ? "running"
-        : Tools.Any(t => t.Status == "error" || t.IsError) ? "error"
+        : Kind == BashKind ? FailureCount > SuccessCount ? "error" : "done"
+        : FailureCount > 0 ? "error"
         : "done";
-    public bool IsError => Tools.Any(t => t.Status == "error" || t.IsError);
+    public bool IsError => Kind == BashKind ? FailureCount > SuccessCount : FailureCount > 0;
     public int Added => Tools.Sum(t => t.Added);
     public int Removed => Tools.Sum(t => t.Removed);
     public bool HasDiffStat => Kind == EditKind && (Added > 0 || Removed > 0);
@@ -1092,6 +1167,12 @@ public sealed class CompactToolGroupItem : ItemVm
     {
         Raise(nameof(Status));
         Raise(nameof(IsError));
+        Raise(nameof(SuccessCount));
+        Raise(nameof(FailureCount));
+        Raise(nameof(SuccessText));
+        Raise(nameof(FailureText));
+        Raise(nameof(HasMixedShellOutcomes));
+        Raise(nameof(HasShellOutcomeCounts));
         Raise(nameof(Added));
         Raise(nameof(Removed));
         Raise(nameof(HasDiffStat));
@@ -1132,6 +1213,8 @@ public sealed class QuestionOption : Observable
 
 public sealed class QuestionEntry
 {
+    /// <summary>Codex's request_user_input question id; its answers are keyed by this rather than by the text.</summary>
+    public string? Id { get; init; }
     public required string Question { get; init; }
     public bool MultiSelect { get; init; }
     public ObservableCollection<QuestionOption> Options { get; } = new();

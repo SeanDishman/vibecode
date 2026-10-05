@@ -103,6 +103,8 @@ public partial class UsageHudWindow : Window
     private DateTime _lastRefresh = DateTime.MinValue;
     private bool _hooked;
     private bool _ready;
+    private IDisposable? _liveWatch;
+    private bool _hadLiveTurns;
 
     public UsageHudWindow()
     {
@@ -113,17 +115,18 @@ public partial class UsageHudWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         _ready = true;
+        _liveWatch ??= LiveTurnTelemetry.Instance.Watch();
         Refresh();
 
         UsageLog.Instance.Changed += OnUsageChanged;
         _hooked = true;
 
-        // The clock ticks every second; the data only rebuilds when a turn lands or the hour rolls over, so an
-        // idle HUD costs a string format per second and nothing else.
+        // Refresh active Bridge/chat usage every second; idle history only needs the minute refresh.
         _tick.Tick += (_, _) =>
         {
             HudClock.Text = DateTime.Now.ToString("ddd dd MMM · HH:mm:ss").ToUpperInvariant();
-            if ((DateTime.Now - _lastRefresh).TotalSeconds >= 60) Refresh();
+            if (LiveTurnTelemetry.Instance.StreamingCount > 0 || _hadLiveTurns
+                || (DateTime.Now - _lastRefresh).TotalSeconds >= 60) Refresh();
         };
         _tick.Start();
 
@@ -139,7 +142,10 @@ public partial class UsageHudWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _ready = false;
         _tick.Stop();
+        _liveWatch?.Dispose();
+        _liveWatch = null;
         if (_hooked) UsageLog.Instance.Changed -= OnUsageChanged;
         if (ReferenceEquals(_open, this)) _open = null;
         SavePlacement();
@@ -173,7 +179,8 @@ public partial class UsageHudWindow : Window
     private void Refresh()
     {
         _lastRefresh = DateTime.Now;
-        var hours = UsageAnalytics.BuildHours(UsageLog.Instance.Entries(), WindowHours, DateTimeOffset.Now);
+        var hours = UsageAnalytics.BuildHours(LiveTurnTelemetry.Instance.Merge(UsageLog.Instance.Entries()), WindowHours, DateTimeOffset.Now);
+        _hadLiveTurns = LiveTurnTelemetry.Instance.StreamingCount > 0;
         HudGraph.Hours = hours;
         HudGraph.Metric = SelectedMetric;
 

@@ -55,7 +55,7 @@ public sealed class GroqSpeechService : Observable
     private string _masked = "";
 
     /// <summary>Use Groq instead of the offline model for dictation. Mirrors AppSettings so the Settings card can
-    /// bind straight to it, exactly like <see cref="GamesService.Enabled"/>.</summary>
+    /// bind straight to it, exactly like <see cref="WeatherService.Enabled"/>.</summary>
     public bool Enabled
     {
         get => AppSettings.Current.GroqSpeechEnabled;

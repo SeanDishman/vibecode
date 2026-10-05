@@ -11,7 +11,7 @@
     <!-- THE version number. MSBuild stamps it onto the assembly and Settings > About reads it back through
          AppVersion.Current. Keep it Major.Minor.Patch - AppVersion parses a leading 'v' and a 4th part, but
          nothing else. -->
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <Deterministic>true</Deterministic>
     <PathMap>$(MSBuildProjectDirectory)=/src/VibeCode.Desktop</PathMap>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -26,6 +26,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Desktop embeds the MCP assembly and owns the self-contained single-file host. The standalone MCP
+         executable intentionally has UseAppHost=false; forwarding Desktop's publish flags makes it fail NETSDK1067. -->
+    <ProjectReference Include="..\VibeCode.AgentStatus.Mcp\VibeCode.AgentStatus.Mcp.csproj"
+                      GlobalPropertiesToRemove="SelfContained;PublishSingleFile">
+      <!-- The embedded helper uses Desktop's runtime/dependency metadata. Its own standalone metadata would
+           otherwise be copied beside VibeCode.exe and break the installer's single-file contract. -->
+      <AdditionalProperties Condition="'$(PublishSingleFile)' == 'true'">GenerateDependencyFile=false;GenerateRuntimeConfigurationFiles=false</AdditionalProperties>
+    </ProjectReference>
     <PackageReference Include="MdXaml" Version="1.27.0" />
     <!-- Already arrives with MdXaml, which renders every fenced code block as an AvalonEdit editor. Named here
          because UI/MarkdownView.cs matches on that type by name to swap those editors back into plain text. -->
@@ -39,15 +47,28 @@
     <PackageReference Include='Microsoft.Web.WebView2' Version='1.0.4022.49' />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
-    <!-- Optional Vulkan acceleration with a CPU fallback. -->
+    <!-- The GPU whisper build. Measured on this box (Ryzen 3600 + GTX 1660 SUPER) with a 4.6 s clip: 1.33 s on the
+         CPU build vs 0.19 s on Vulkan idle, and 1.4 s vs 0.22 s with all 12 hardware threads saturated by other
+         processes — 6-7x either way. Costs ~17 MB in the compressed single-file exe. Vulkan rather than CUDA
+         deliberately: it needs only a normal GPU driver, where Whisper.net's CUDA runtime needs a CUDA toolkit
+         install the user does not have. A machine with no usable Vulkan device falls back to the CPU build on its
+         own — see WhisperNativeRuntime. -->
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- Local natural British stock voice; engine MIT, Kokoro model/voices Apache-2.0. -->
+    <PackageReference Include="KokoroSharp.CPU" Version="0.8.4" />
     <!-- DPAPI for API-key accounts: keys are sealed to the current Windows user, never stored in the clear. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Assets\background.gif" />
+    <!-- Embed stock British voices so the single-file app needs no loose package content folder. -->
+    <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\b*.npy"
+                      LogicalName="VibeCode.JarvisVoices.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\LICENSE"
+                      LogicalName="VibeCode.JarvisVoices.LICENSE" />
+    <EmbeddedResource Include="Assets\Jarvis.NOTICES.txt" LogicalName="VibeCode.Jarvis.NOTICES.txt" />
     <EmbeddedResource Include="Assets\bridge-peer-chats\**\*"
                       LogicalName="VibeCode.Assets.BridgePeerChats.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
     <Resource Include="..\assets\logo.png" Link="Assets\logo.png" />
@@ -67,19 +88,6 @@
     <EmbeddedResource Include="Assets\vibecode-mobile.apk"
                       LogicalName="VibeCode.Assets.vibecode-mobile.apk"
                       Condition="Exists('Assets\vibecode-mobile.apk')" />
-    <EmbeddedResource Include="Assets\Games\SurviveTheShapes.html"
-                      LogicalName="VibeCode.Assets.Games.SurviveTheShapes.html" />
-    <!-- Tower Defense is a multi-file game: every file is embedded under a logical name that mirrors its
-         path (src\hud.js -> VibeCode.Assets.Games.TowerDefense.src.hud.js) so GameCatalog.Asset() can
-         derive the resource name from the relative path. The whole folder is seeded to disk and served
-         from there, which is what lets the ES module imports resolve. -->
-    <EmbeddedResource Include="Assets\Games\TowerDefense\**\*.*"
-                      LogicalName="VibeCode.Assets.Games.TowerDefense.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
-    <!-- Tiny Empires is multi-file too, and embeds the same way. -->
-    <EmbeddedResource Include="Assets\Games\TinyEmpires\**\*.*"
-                      LogicalName="VibeCode.Assets.Games.TinyEmpires.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
-    <EmbeddedResource Include="Assets\Games\FishingTycoon\**\*.*"
-                      LogicalName="VibeCode.Assets.Games.FishingTycoon.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- Whisper.net.Runtime.Vulkan copies its Linux .so payload unconditionally - its win-x64 item group is guarded by
@@ -101,6 +109,15 @@
     <ItemGroup>
       <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
                              Condition="'%(Extension)' == '.xml' And $([System.String]::Copy('%(Filename)').StartsWith('Microsoft.Web.WebView2'))" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Microsoft.ML.OnnxRuntime (pulled in by KokoroSharp for the Jarvis voice) ships C++ import libraries beside its
+       native DLLs. Nothing loads a .lib at runtime, but they ride into the publish folder and trip the installer's
+       single-file check ("Publish still requires sidecar files: onnxruntime.lib, ..."). -->
+  <Target Name="PruneNativeImportLibsFromPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.lib'" />
     </ItemGroup>
   </Target>
 

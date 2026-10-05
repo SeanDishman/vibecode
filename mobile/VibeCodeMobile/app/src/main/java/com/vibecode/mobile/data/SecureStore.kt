@@ -5,6 +5,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import org.json.JSONObject
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -26,16 +27,22 @@ data class Pairing(
  * Where the pairing lives on the phone.
  *
  * The bearer token is a standing credential for someone's desktop, so it is not written to preferences in the
- * clear. It is sealed with an AES-GCM key generated inside the Android Keystore, which means the key material
- * never enters the app's process and cannot be lifted off the device even with root on most hardware. The host,
- * port and certificate fingerprint are stored plainly — none of them is a secret, and the fingerprint being
- * readable is exactly the point of a pin.
+ * clear. AES-GCM protects the whole pairing, including its pin, against metadata substitution. Android Keystore
+ * keeps the encryption key out of preferences; a compromised OS can still invoke keys and read app memory.
+ * Request authentication additionally requires the separate non-exportable DeviceIdentity signing key.
  */
 class SecureStore(context: Context) {
 
     private val prefs = context.getSharedPreferences("vibecode.pairing", Context.MODE_PRIVATE)
 
     fun load(): Pairing? {
+        prefs.getString(KEY_SEALED, null)?.let { stored ->
+            return runCatching {
+                val o = JSONObject(decrypt(stored) ?: return null)
+                Pairing(o.getString("host"), o.getInt("port"), o.getString("fingerprint"),
+                    o.getString("token"), o.optString("pc"))
+            }.getOrNull()
+        }
         val host = prefs.getString(KEY_HOST, null) ?: return null
         val fingerprint = prefs.getString(KEY_FINGERPRINT, null) ?: return null
         val token = decrypt(prefs.getString(KEY_TOKEN, null) ?: return null) ?: return null
@@ -49,17 +56,15 @@ class SecureStore(context: Context) {
     }
 
     fun save(pairing: Pairing) {
-        prefs.edit()
-            .putString(KEY_HOST, pairing.host)
-            .putInt(KEY_PORT, pairing.port)
-            .putString(KEY_FINGERPRINT, pairing.fingerprint)
-            .putString(KEY_TOKEN, encrypt(pairing.token))
-            .putString(KEY_PC, pairing.pcName)
-            .apply()
+        val plain = JSONObject().put("host", pairing.host).put("port", pairing.port)
+            .put("fingerprint", pairing.fingerprint).put("token", pairing.token).put("pc", pairing.pcName)
+        check(prefs.edit().clear().putString(KEY_SEALED, encrypt(plain.toString())).commit()) {
+            "The phone could not save its pairing. Revoke the phone on the PC and pair again."
+        }
     }
 
     fun clear() {
-        prefs.edit().clear().apply()
+        prefs.edit().clear().commit()
         runCatching { keyStore().deleteEntry(KEY_ALIAS) }
     }
 
@@ -113,6 +118,7 @@ class SecureStore(context: Context) {
 
     private fun decrypt(stored: String): String? = runCatching {
         val payload = Base64.decode(stored, Base64.NO_WRAP)
+        require(payload.size >= GCM_NONCE_BYTES + 16)
         val iv = payload.copyOfRange(0, GCM_NONCE_BYTES)
         val sealed = payload.copyOfRange(GCM_NONCE_BYTES, payload.size)
         val cipher = Cipher.getInstance(TRANSFORMATION).apply {
@@ -123,6 +129,7 @@ class SecureStore(context: Context) {
 
     private companion object {
         const val KEY_ALIAS = "vibecode.pairing.key"
+        const val KEY_SEALED = "sealed_pairing_v2"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_NONCE_BYTES = 12
         const val KEY_HOST = "host"

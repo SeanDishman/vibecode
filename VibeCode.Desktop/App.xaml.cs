@@ -176,6 +176,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        AppSettings.Changed -= RefreshThinkingOrbStyle;
         // Say WHY we are exiting. When nothing in VibeCode asked for it, WPF closed the app on its own - which under
         // the default ShutdownMode means the last window just closed - and that is worth seeing in the log.
         CrashLog.Note("Exit",
@@ -213,6 +214,23 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // A stdio server is a separate, headless role: never acquire the shell lease, load settings,
+        // create a window, start memory/browser services, or disturb the running desktop instance.
+        if (e.Args.Contains("--second-brain-mcp", StringComparer.Ordinal))
+        {
+            Environment.Exit(Task.Run(() => AgentStatus.Mcp.Memory.SecondBrainMcpHost.RunConsoleAsync()).GetAwaiter().GetResult());
+            return;
+        }
+        if (e.Args.Contains("--bridge-mcp", StringComparer.Ordinal))
+        {
+            Environment.Exit(Task.Run(() => AgentStatus.Mcp.Bridge.BridgeMcpClient.RunConsoleAsync()).GetAwaiter().GetResult());
+            return;
+        }
+        if (e.Args.Contains("--agent-status-mcp", StringComparer.Ordinal))
+        {
+            Environment.Exit(Task.Run(() => AgentStatus.Mcp.AgentStatusMcpHost.RunConsoleAsync()).GetAwaiter().GetResult());
+            return;
+        }
         PortableEnvironment.Configure();
         base.OnStartup(e);
 
@@ -259,6 +277,8 @@ public partial class App : Application
         // borderless look is on, the overlay that empties out the chrome's surfaces).
         if (AppSettings.IsCliMode || AppSettings.IsBorderless) ApplyThemeDictionaries(Resources);
 
+        InitializeThinkingOrbs();
+
         ApplyWineCompatibility();
 
         // Hand every text control a VibeCode right-click menu. Must run before the first window is created:
@@ -266,8 +286,8 @@ public partial class App : Application
         // stock light-themed editing popup (white text on white, on every surface in this app).
         TextEditMenu.Install();
 
-        // The Games menu owns a richer session-aware presenter than the original inline placeholder. Attach it
-        // when the StartupUri-created main window finishes loading; class handling also covers a recreated window.
+        // Smoke runs open their window once the StartupUri-created main window finishes loading; class handling
+        // also covers a recreated window.
         EventManager.RegisterClassHandler(
             typeof(MainWindow),
             FrameworkElement.LoadedEvent,
@@ -344,8 +364,6 @@ public partial class App : Application
     private static void OnMainWindowLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not MainWindow owner) return;
-        GamesPopupCard.AttachTo(owner);
-        GameWindow.MaybeAutoOpenForSmoke(owner);
         UsageDashboardWindow.MaybeAutoOpenForSmoke(owner);
     }
 

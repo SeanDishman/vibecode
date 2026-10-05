@@ -159,7 +159,7 @@ public sealed class UsageService : Observable
     }
 
     /// <summary>Probe the live ~/.claude login (no account explicitly selected) and return the CLI's report text.</summary>
-    private static async Task<string> ProbeSharedLoginAsync()
+    internal static async Task<string> ProbeSharedLoginAsync()
     {
         var psi = new ProcessStartInfo
         {
@@ -193,6 +193,14 @@ public sealed class UsageService : Observable
 
         try { return JsonNode.Parse(stdout)?["result"]?.GetValue<string>() ?? stdout; }
         catch { return stdout; }
+    }
+
+    internal static UsageRecoverySnapshot RecoverySnapshot(string text, string? model)
+    {
+        var limits = Parse(text).Limits.Where(limit => !limit.Label.StartsWith("This week - ", StringComparison.Ordinal)
+            || model?.Contains(limit.Label[12..], StringComparison.OrdinalIgnoreCase) == true);
+        return UsageRecoverySnapshot.FromWindows(limits.Select(limit =>
+            ((double)limit.Percent, UsageLimitRecovery.ParseReset(limit.ResetText, DateTimeOffset.Now))));
     }
 
     private sealed class Parsed

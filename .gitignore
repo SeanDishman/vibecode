@@ -23,6 +23,8 @@ build/
 .gradle/
 .kotlin/
 .vibecode/
+.impeccable/
+*_wpftmp.csproj
 .env
 .env.*
 !.env.example

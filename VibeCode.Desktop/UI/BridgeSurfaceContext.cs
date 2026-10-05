@@ -33,6 +33,9 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
 
     // ---- the roster this window is showing ----
     public BridgePaneCollection BridgePanes => _vm.SecondaryBridgePanes;
+    public bool IsSingleTerminalBridge => _vm.SecondaryIsSingleTerminalBridge;
+    public string BridgeTerminalsText => _vm.SecondaryBridgeTerminalsText;
+    public BridgeSharedTerminalViewModel SharedBridgeTerminal => _vm.SecondarySharedBridgeTerminal;
     public bool IsBridge => _vm.SecondaryIsBridge;
     public string BridgeSummary => _vm.SecondaryBridgeSummary;
     public string BridgeProjectPath => _vm.SecondaryBridgeProjectPath;
@@ -56,8 +59,6 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
         "Fork runs on the main window — open this bridge there to branch it";
 
     // ---- not roster-scoped: the same answer in either window ----
-    public bool IsDemonSurface => _vm.IsDemonSurface;
-    public string DemonSummary => _vm.DemonSummary;
     public bool IsCodexSignedIn => _vm.IsCodexSignedIn;
     public bool HasCodexAccountUsage => _vm.HasCodexAccountUsage;
     public bool CodexAtLimit => _vm.CodexAtLimit;
@@ -87,8 +88,6 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
 
         switch (name)
         {
-            case nameof(MainViewModel.IsDemonSurface):
-            case nameof(MainViewModel.DemonSummary):
             case nameof(MainViewModel.IsCodexSignedIn):
             case nameof(MainViewModel.HasCodexAccountUsage):
             case nameof(MainViewModel.CodexAtLimit):

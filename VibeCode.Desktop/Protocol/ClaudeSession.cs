@@ -120,6 +120,8 @@ internal static class ProcessJob
 
 public sealed class ClaudeSessionOptions
 {
+    /// <summary>Isolated conversational planning with all native tools removed.</summary>
+    public bool DialogueOnly { get; init; }
     public required string Cwd { get; init; }
     public string? Resume { get; init; }
     public bool ForkSession { get; init; }
@@ -163,7 +165,7 @@ public sealed class PermissionRequest
 /// (the same wire protocol the official Agent SDK speaks). Spawns `claude` with
 /// --input-format/--output-format stream-json and exchanges NDJSON on stdio.
 /// </summary>
-public sealed class ClaudeSession : ICodingSession
+public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompactableSession
 {
     public event Action<JsonNode>? MessageReceived;       // SDK messages: system/assistant/user/stream_event/result/...
     public event Action<PermissionRequest>? PermissionRequested;
@@ -177,6 +179,8 @@ public sealed class ClaudeSession : ICodingSession
     public bool HasExited => _proc is null || _proc.HasExited;
 
     private readonly ClaudeSessionOptions _options;
+    /// <summary>Cancelled by Dispose, ending background work such as the bridge MCP watchdog.</summary>
+    private readonly CancellationTokenSource _lifetime = new();
     private Process? _proc;
     private StreamWriter? _stdin;
     // Same stall-proofing as CodexSession: stdin writes are queued and drained by a background task instead of
@@ -229,12 +233,34 @@ public sealed class ClaudeSession : ICodingSession
             if (string.IsNullOrWhiteSpace(dir)) continue;
             candidates.Add(Path.Combine(dir.Trim(), "claude.exe"));
         }
-        foreach (var c in candidates)
+        var available = candidates.Where(c =>
         {
-            try { if (File.Exists(c)) return c; } catch { /* bad PATH entry */ }
+            try { return File.Exists(c); } catch { return false; }
+        }).ToList();
+        if (available.Count > 0)
+        {
+            var preferred = available[0];
+            // A launcher can pin an older versioned Anthropic binary even after npm updates Claude.
+            // New sessions need the minimum SDK for the current models. Custom wrappers and test overrides
+            // retain their priority; if no compatible runtime is installed, keep the existing resolution.
+            if (OfficialCliVersion(preferred) is { } version && version < ClaudeModelCatalog.MinimumCliVersion)
+                return available.FirstOrDefault(path => OfficialCliVersion(path) is { } candidateVersion
+                    && candidateVersion >= ClaudeModelCatalog.MinimumCliVersion) ?? preferred;
+            return preferred;
         }
         throw new FileNotFoundException(
             "Could not find the Claude Code CLI (claude.exe). Install it with `npm install -g @anthropic-ai/claude-code` and sign in with /login.");
+    }
+
+    internal static Version? OfficialCliVersion(string path)
+    {
+        try
+        {
+            var info = FileVersionInfo.GetVersionInfo(path);
+            return string.Equals(info.ProductName, "Claude Code", StringComparison.OrdinalIgnoreCase)
+                   && Version.TryParse(info.ProductVersion, out var version) ? version : null;
+        }
+        catch { return null; }
     }
 
     /// <summary>
@@ -326,6 +352,15 @@ public sealed class ClaudeSession : ICodingSession
         args.Add(settings.ToJsonString());
         var mcpConfigPath = McpCatalog.WriteClaudeLaunchConfig(options.McpServers, options.McpConfigDirectory);
         if (mcpConfigPath is not null) { args.Add("--mcp-config"); args.Add(mcpConfigPath); }
+        // App-owned label metadata needs no user approval, including in Ask/Plan mode. Approve only our
+        // exact naming and bridge task-title tools; this is not a blanket permission for bridge tools or other MCP servers.
+        if (!options.DialogueOnly && options.McpServers?.Any(server => server.Id == BridgeMcpConnection.ManagedId
+                && server.Enabled && server.UseClaude) == true)
+        {
+            args.Add("--allowedTools");
+            args.Add(BridgeMcpConnection.ChatTitleToolName);
+            args.Add(BridgeMcpConnection.TaskTitleToolName);
+        }
         if (options.SwarmsEnabled)
         {
             // Without this flag Claude emits child tool calls but not the child's own text/thinking, leaving the
@@ -339,6 +374,7 @@ public sealed class ClaudeSession : ICodingSession
             args.Add("Agent");
             args.Add("Task"); // legacy Claude Code releases exposed the same child-agent tool under this alias
         }
+        if (options.DialogueOnly) { args.Add("--tools"); args.Add(""); }
         if (!string.IsNullOrEmpty(options.AppendSystemPrompt)) { args.Add("--append-system-prompt"); args.Add(options.AppendSystemPrompt!); }
         if (!string.IsNullOrEmpty(options.Resume)) args.Add($"--resume={options.Resume}");
         if (options.ForkSession) args.Add("--fork-session");
@@ -765,61 +801,23 @@ public sealed class ClaudeSession : ICodingSession
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..(max - 1)] + "â€¦";
 
     /// <summary>
-    /// Claude models Anthropic has shipped that the local Claude Code CLI may not yet advertise in
-    /// <c>initialize.models</c>. Kept in sync with <see cref="VibeCode.UI.ProviderModelCatalog"/> fallbacks.
-    /// <para><c>Fast</c> is per-row: fast mode is an Opus 4.8-and-newer tier, so a blanket true advertised it
-    /// on Opus 4.6 too. The API runs <c>speed:fast</c> on 4.6 at standard speed, so the effort popup must not
-    /// claim 4.6 can do Fast; it switches to Opus 5 instead, matching Claude Code's <c>/fast</c>.</para>
-    /// </summary>
-    private static readonly (string Value, string Display, string Description, bool Fast)[] KnownModelExtras =
-    [
-        ("claude-opus-5", "Opus 5",
-            "Near-Fable intelligence for complex agentic coding and enterprise work, at half Fable price.", true),
-        ("claude-opus-4-8", "Opus 4.8",
-            "Previous flagship Opus. Highly autonomous on long-horizon agentic and knowledge work.", true),
-        ("claude-opus-4-6", "Opus 4.6",
-            "Older Opus. Still accepts temperature and a fixed thinking budget that 4.7+ dropped.", false),
-    ];
-
-    /// <summary>
-    /// Insert known model IDs the CLI omitted. Placed after the default/alias rows when possible so
-    /// "Opus 5" appears near the top of the picker instead of buried under Haiku.
+    /// Insert current model IDs the CLI omitted, using each model's own effort and fast-mode capabilities.
+    /// Live aliases and account-specific rows retain the metadata and resolution supplied by the CLI.
     /// </summary>
     internal static void EnsureKnownModels(JsonArray models)
     {
-        if (models.Count == 0) return;
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var row in models.OfType<JsonObject>())
         {
-            if (row["value"]?.GetValue<string>() is { Length: > 0 } v) existing.Add(v);
-            if (row["resolvedModel"]?.GetValue<string>() is { Length: > 0 } r)
-            {
-                existing.Add(r);
-                // Strip "[1m]"-style variant tags so claude-opus-5 matches claude-opus-5[1m].
-                var bracket = r.IndexOf('[');
-                if (bracket > 0) existing.Add(r[..bracket]);
-            }
+            if (row["value"]?.GetValue<string>() is { Length: > 0 } v)
+                existing.Add(ClaudeModelCatalog.CanonicalId(v));
+            // Default is a policy row, not a selectable version. It must not hide an explicit current model.
+            if (!string.Equals(row["value"]?.GetValue<string>(), "default", StringComparison.OrdinalIgnoreCase)
+                && row["resolvedModel"]?.GetValue<string>() is { Length: > 0 } r)
+                existing.Add(ClaudeModelCatalog.CanonicalId(r));
         }
 
-        // Clone effort tiers from the live "opus" alias (or any opus-tier row) so the new row has real levels.
-        JsonArray? effortTemplate = null;
-        bool supportsEffort = false, supportsAuto = false;
-        foreach (var row in models.OfType<JsonObject>())
-        {
-            var value = row["value"]?.GetValue<string>() ?? "";
-            var resolved = row["resolvedModel"]?.GetValue<string>() ?? "";
-            if (value.Equals("opus", StringComparison.OrdinalIgnoreCase)
-                || value.Contains("opus", StringComparison.OrdinalIgnoreCase)
-                || resolved.Contains("opus", StringComparison.OrdinalIgnoreCase))
-            {
-                if (row["supportedEffortLevels"] is JsonArray levels) effortTemplate = levels;
-                supportsEffort = row["supportsEffort"]?.GetValue<bool>() ?? (effortTemplate?.Count > 0);
-                supportsAuto = row["supportsAutoMode"]?.GetValue<bool>() ?? false;
-                break;
-            }
-        }
-
-        // Insert right after "default" (or at index 0) so it sits above the legacy Opus 4.8 alias.
+        // Insert after default; the presentation layer applies the same order to live and offline menus.
         int insertAt = 0;
         for (int i = 0; i < models.Count; i++)
         {
@@ -831,26 +829,25 @@ public sealed class ClaudeSession : ICodingSession
             }
         }
 
-        foreach (var (value, display, description, fast) in KnownModelExtras)
+        var available = models.OfType<JsonObject>().SelectMany(row => new[]
+            { row["value"]?.GetValue<string>(), row["resolvedModel"]?.GetValue<string>() }).ToArray();
+        foreach (var model in ClaudeModelCatalog.ForAvailable(available))
         {
-            if (existing.Contains(value)) continue;
-            var levels = effortTemplate is null
-                ? new JsonArray("low", "medium", "high", "xhigh", "max")
-                : (JsonArray)effortTemplate.DeepClone();
+            if (existing.Contains(model.Id)) continue;
+            var levels = new JsonArray(model.EffortLevels.Select(level => (JsonNode?)JsonValue.Create(level)).ToArray());
             models.Insert(insertAt++, new JsonObject
             {
-                ["value"] = value,
-                ["displayName"] = display,
-                ["description"] = description,
-                ["resolvedModel"] = value,
+                ["value"] = model.Id,
+                ["displayName"] = model.Name,
+                ["description"] = model.Description,
+                ["resolvedModel"] = model.Id,
                 ["supportedEffortLevels"] = levels,
-                ["supportsEffort"] = supportsEffort || levels.Count > 0,
-                ["supportsAutoMode"] = supportsAuto,
-                // Opus 5 and 4.8 ship Fast mode; 4.6 does not (API no-op at standard speed). The UI switches.
-                ["supportsFastMode"] = fast,
+                ["supportsEffort"] = levels.Count > 0,
+                ["supportsAutoMode"] = levels.Count > 0,
+                ["supportsFastMode"] = model.Fast,
                 ["isDefault"] = false,
             });
-            existing.Add(value);
+            existing.Add(model.Id);
         }
     }
 
@@ -869,6 +866,7 @@ public sealed class ClaudeSession : ICodingSession
             }
             _initTcs.TrySetResult();
             Initialized?.Invoke();
+            _ = Task.Run(KeepBridgeMcpConnectedAsync);
         }
         catch (Exception ex)
         {
@@ -876,6 +874,65 @@ public sealed class ClaudeSession : ICodingSession
             _initTcs.TrySetResult(); // don't block sends; CLI works without capabilities
             Initialized?.Invoke();
         }
+    }
+
+    /// <summary>Back-to-back reconnects before backing off to one try every few minutes.</summary>
+    private const int QuickBridgeReconnects = 5;
+
+    /// <summary>
+    /// Keeps VibeCode's own bridge MCP server connected for the life of the session. Claude Code drops a stdio server
+    /// that misses its connect timeout and never retries it, so one slow helper launch - several Bridge agents starting
+    /// at once - left that agent without any bridge tools until it was restarted ("bridge disconnected"). The CLI's
+    /// mcp_status reports each server as pending, connected or failed, and mcp_reconnect starts a failed one again
+    /// (both verified against claude 2.1.286); a server that connects mid-session reaches the model as newly
+    /// available tools.
+    /// </summary>
+    private async Task KeepBridgeMcpConnectedAsync()
+    {
+        if (_options.DialogueOnly || _options.McpServers?.Any(s => s.Id == BridgeMcpConnection.ManagedId && s.Enabled && s.UseClaude) != true)
+            return;
+        var name = BridgeMcpConnection.RuntimeName;
+        var attempts = 0;
+        var delay = TimeSpan.FromSeconds(2);
+        try
+        {
+            while (!_lifetime.IsCancellationRequested && !HasExited)
+            {
+                await Task.Delay(delay, _lifetime.Token).ConfigureAwait(false);
+                string? status;
+                try
+                {
+                    var response = await RequestAsync(new JsonObject { ["subtype"] = "mcp_status" })
+                        .WaitAsync(TimeSpan.FromSeconds(30), _lifetime.Token).ConfigureAwait(false);
+                    status = (response?["response"]?["mcpServers"] as JsonArray)?.OfType<JsonObject>()
+                        .FirstOrDefault(server => server["name"]?.ToString() == name)?["status"]?.ToString();
+                }
+                catch (InvalidOperationException) { return; }   // a CLI without mcp_status: nothing to watch with
+                catch (TimeoutException) { delay = TimeSpan.FromSeconds(30); continue; }   // busy; ask again later
+                switch (status)
+                {
+                    case null: return;   // the CLI does not list our server, so there is nothing to heal
+                    case "connected":
+                        attempts = 0;
+                        delay = TimeSpan.FromSeconds(60);
+                        continue;
+                    case "pending":
+                        delay = TimeSpan.FromSeconds(2);
+                        continue;
+                }
+                // failed, disconnected, or any state that leaves the agent without bridge tools
+                attempts++;
+                Services.CrashLog.Note("BridgeMcp", $"{name} is {status} in Claude session {SessionId}; reconnect attempt {attempts}.");
+                try
+                {
+                    await RequestAsync(new JsonObject { ["subtype"] = "mcp_reconnect", ["serverName"] = name })
+                        .WaitAsync(TimeSpan.FromSeconds(BridgeMcpConnection.StartupTimeoutSeconds + 15), _lifetime.Token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or TimeoutException) { }
+                delay = attempts < QuickBridgeReconnects ? TimeSpan.FromSeconds(2) : TimeSpan.FromMinutes(3);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private Task<JsonNode?> RequestAsync(JsonObject request)
@@ -914,6 +971,14 @@ public sealed class ClaudeSession : ICodingSession
         catch (Exception ex) { Debug.WriteLine($"vibecode: stdin loop ended: {ex.Message}"); }
     }
 
+    public Task CompactAsync(string? instructions = null)
+    {
+        if (HasExited) throw new InvalidOperationException("Claude is no longer connected.");
+        // A command must be the complete user message. App prompt preludes turn it into model prose.
+        SendUser(JsonValue.Create(string.IsNullOrWhiteSpace(instructions) ? "/compact" : "/compact " + instructions.Trim())!);
+        return Task.CompletedTask;
+    }
+
     /// <summary>content: string or array of content blocks (text/image).</summary>
     public void SendUser(JsonNode content)
     {
@@ -927,6 +992,29 @@ public sealed class ClaudeSession : ICodingSession
         if (SessionId is not null) msg["session_id"] = SessionId;
         WriteJson(msg);
         EmitTurnActivity();
+    }
+
+    /// <summary>
+    /// Claude Code folds a user message that arrives during a turn into that same turn at its next step - interactive
+    /// Claude Code's "send messages while it works". Verified against claude 2.1.286: a follow-up written to stdin
+    /// during the first of three Bash calls changed that turn's final answer, and no second turn ran. So steering is
+    /// one more user line, sent while the root turn is live. If the turn ends in the instant before the CLI reads it,
+    /// the CLI simply runs it as the next turn, which the turn_activity tracking already reports as running.
+    /// </summary>
+    public bool CanSteer => !HasExited && _rootTurnActive;
+
+    public Task SteerAsync(JsonNode content)
+    {
+        if (!CanSteer) throw new InvalidOperationException("Claude has no active turn to steer.");
+        var msg = new JsonObject
+        {
+            ["type"] = "user",
+            ["message"] = new JsonObject { ["role"] = "user", ["content"] = content.DeepClone() },
+            ["parent_tool_use_id"] = null,
+        };
+        if (SessionId is not null) msg["session_id"] = SessionId;
+        WriteJson(msg);
+        return Task.CompletedTask;
     }
 
     public void RespondPermission(string requestId, JsonObject result, string? toolUseId)
@@ -996,6 +1084,7 @@ public sealed class ClaudeSession : ICodingSession
 
     public void Dispose()
     {
+        _lifetime.Cancel();
         _writeQueue.Writer.TryComplete();
         try { _stdin?.Close(); } catch { /* broken pipe */ }   // EOF → the CLI exits on its own
         ProcessJob.ReapDetached(_proc);   // wait/kill/dispose off the UI thread so closing a pane never freezes it

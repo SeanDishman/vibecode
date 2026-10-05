@@ -1,0 +1,9 @@
+<Window x:Class="VibeCode.BridgeOrchestratorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:VibeCode.UI"
+        Title="Advanced Bridge" Width="980" Height="820" MinWidth="680" MinHeight="480"
+        Background="{DynamicResource Bg1}" Foreground="{DynamicResource Text}" FontFamily="{DynamicResource Ui}"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" UseLayoutRounding="True">
+    <ui:BridgeSetupPanel x:Name="SetupPanel" />
+</Window>

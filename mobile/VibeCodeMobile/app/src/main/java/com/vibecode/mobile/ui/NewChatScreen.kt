@@ -4,6 +4,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -19,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -38,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,7 +62,7 @@ private val Providers = listOf(
     "grok" to "Grok",
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun NewChatScreen(
     state: NewChatState,
@@ -63,6 +74,7 @@ fun NewChatScreen(
 ) {
     Scaffold(
         containerColor = VibeColors.Bg0,
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -82,19 +94,17 @@ fun NewChatScreen(
                 Modifier
                     .fillMaxWidth()
                     .background(VibeColors.Bg1)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                     .imePadding()
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
-                if (state.error.isNotBlank()) {
-                    Text(state.error, style = MaterialTheme.typography.bodySmall, color = VibeColors.Red)
-                    Spacer(Modifier.height(8.dp))
-                }
                 TextButton(
                     onClick = onCreate,
                     enabled = !state.busy && state.cwd.isNotBlank(),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(11.dp))
                         .background(
                             if (!state.busy && state.cwd.isNotBlank()) VibeColors.Accent else VibeColors.Bg3
@@ -126,21 +136,24 @@ fun NewChatScreen(
         }
 
         LazyColumn(
-            Modifier.fillMaxSize().padding(padding),
+            Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            if (state.error.isNotBlank()) {
+                item { Text(state.error, style = MaterialTheme.typography.bodySmall, color = VibeColors.Red) }
+            }
             item {
                 Label("Agent")
-                Row(
+                FlowRow(
                     Modifier.fillMaxWidth().padding(bottom = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Providers.forEach { (value, label) ->
                         val selected = state.provider == value
                         Box(
                             Modifier
-                                .weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(
                                     if (selected) VibeColors.provider(value).copy(alpha = 0.16f)
@@ -151,8 +164,9 @@ fun NewChatScreen(
                                     if (selected) VibeColors.provider(value) else VibeColors.BorderSoft,
                                     RoundedCornerShape(10.dp),
                                 )
-                                .clickable { onProvider(value) }
-                                .padding(vertical = 11.dp),
+                                .selectable(selected = selected, enabled = !state.busy, role = Role.RadioButton) { onProvider(value) }
+                                .heightIn(min = 48.dp)
+                                .padding(horizontal = 18.dp, vertical = 11.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
@@ -171,6 +185,8 @@ fun NewChatScreen(
                 OutlinedTextField(
                     value = state.title,
                     onValueChange = onTitle,
+                    enabled = !state.busy,
+                    label = { Text("Chat name") },
                     placeholder = { Text("Untitled", color = VibeColors.Faint) },
                     colors = fieldColors(),
                     shape = RoundedCornerShape(10.dp),
@@ -206,7 +222,8 @@ fun NewChatScreen(
                             if (selected) VibeColors.Accent else VibeColors.BorderSoft,
                             RoundedCornerShape(10.dp),
                         )
-                        .clickable { onFolder(folder.cwd) }
+                        .selectable(selected = selected, enabled = !state.busy, role = Role.RadioButton) { onFolder(folder.cwd) }
+                        .heightIn(min = 48.dp)
                         .padding(horizontal = 12.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

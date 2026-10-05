@@ -21,8 +21,8 @@ public class ExtensionCard : ContentControl
     public static readonly DependencyProperty GlyphProperty =
         DependencyProperty.Register(nameof(Glyph), typeof(string), typeof(ExtensionCard), new PropertyMetadata(""));
 
-    /// <summary>Face the glyph is drawn in. Defaults to the icon font; Games overrides it because the card
-    /// describes a titlebar button that is itself an emoji, and the two must match.</summary>
+    /// <summary>Face the glyph is drawn in. Defaults to the icon font; set it when the card describes a titlebar
+    /// button that is itself an emoji, so the two match.</summary>
     public static readonly DependencyProperty GlyphFontProperty =
         DependencyProperty.Register(nameof(GlyphFont), typeof(FontFamily), typeof(ExtensionCard), new PropertyMetadata(null));
 

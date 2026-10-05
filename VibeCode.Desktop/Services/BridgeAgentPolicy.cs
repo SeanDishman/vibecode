@@ -8,9 +8,7 @@ public static class BridgeAgentPolicy
 {
     public const int MinimumAgentLimit = 4;
     public const int DefaultAgentLimit = 9;
-    /// <summary>Seventeen rather than a round sixteen because Demon Mode fills the roster to this ceiling and its wall
-    /// is a 4x5 grid whose top-left 2x2 block is the orchestrator: that leaves exactly sixteen worker cells, so a
-    /// sixteen-session team drew one permanently empty hole in the bottom-right corner.</summary>
+    /// <summary>Maximum root sessions supported by a Bridge.</summary>
     public const int MaximumAgentLimit = 17;
 
     public static int ClampLimit(int value) => Math.Clamp(value, MinimumAgentLimit, MaximumAgentLimit);

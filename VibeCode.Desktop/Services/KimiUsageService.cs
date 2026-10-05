@@ -85,6 +85,20 @@ public sealed class KimiUsageService : Observable
     public bool HasStatus => !string.IsNullOrWhiteSpace(_detail);
     public bool AtLimit => Limits.Any(limit => limit.Percent >= 100);
 
+    internal async Task<UsageRecoverySnapshot> ReadRecoveryUsageAsync()
+    {
+        // Await this request's result. The visible panel intentionally retains old numbers after failures.
+        if (ReadAccessToken() is not { Expired: false } token) return UsageRecoverySnapshot.Unknown;
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl().TrimEnd('/')}/usages");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Value);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var response = await Http.SendAsync(request).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode) return UsageRecoverySnapshot.Unknown;
+        var parsed = Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+        Post(parsed, "");
+        return UsageRecoverySnapshot.FromWindows(parsed.Limits.Select(limit => ((double)limit.Percent, limit.ResetsAt)));
+    }
+
     public void Refresh(bool force = false)
     {
         lock (_gate)

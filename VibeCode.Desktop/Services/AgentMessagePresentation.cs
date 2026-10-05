@@ -40,8 +40,25 @@ public static class AgentMessagePresentation
 
     public static bool TryParse(string? text, out AgentMessageCard card)
     {
+        if (text is not null && GoalPolicy.TryReadCheckGoal(text, out var goal))
+        {
+            card = new AgentMessageCard("", "Goal", "Goal check", "Did you finish your goal?\n\n" + goal);
+            return true;
+        }
         card = default;
         if (string.IsNullOrEmpty(text)) return false;
+        const string coordinationHeader = "👑 [MANAGER UPDATE] ";
+        const string goalHeader = "[BRIDGE ORCHESTRATOR] ";
+        if (text.StartsWith(coordinationHeader, StringComparison.Ordinal))
+        {
+            card = new AgentMessageCard("👑", "Bridge", "Coordination update", text[coordinationHeader.Length..].Trim());
+            return card.Body.Length > 0;
+        }
+        if (text.StartsWith(goalHeader, StringComparison.Ordinal))
+        {
+            card = new AgentMessageCard("👑", "Orchestrator setup", "Goal", text[goalHeader.Length..].Trim());
+            return card.Body.Length > 0;
+        }
         var match = WireHeader.Match(text);
         if (!match.Success) return false;
 

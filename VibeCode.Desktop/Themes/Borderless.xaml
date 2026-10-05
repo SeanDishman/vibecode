@@ -6,12 +6,12 @@
          (Application.Resources resolves a key through its merged dictionaries last-one-wins, so every
          SurfaceX below beats the base theme's copy for anything that asks for it from outside that file.)
 
-         It redefines only the structural surface keys: the chrome stops painting itself, so the background
+         It redefines structural and tool activity surface keys: the chrome stops painting itself, so the background
          art - which MainWindow stretches behind the whole window in this mode - IS the app's background, and
          each region is told apart by a thin black outline instead of a filled grey card.
 
          Deliberately NOT touched: Bg0/Bg1/Bg2/Bg3, Card, CodeBg, Overlay, GlassBar. Buttons, popups, menus,
-         your own messages, tool cards and code blocks keep their fills, because a transcript still has to be
+         your own messages and code blocks keep their fills, because a transcript still has to be
          readable over somebody's wallpaper.
 
          Never merged in CLI mode - a flat black terminal has no art to reveal (AppSettings.IsBorderless).
@@ -30,6 +30,22 @@
          keeps its outline (and its accent focus ring), so it is still a box you type into; and it sits in the
          darkest band of the backdrop scrim, which is where the pane composer already reads fine. -->
     <SolidColorBrush x:Key="SurfaceComposer" Color="Transparent" />
+
+    <!-- Individual tools, compact groups and their expanded rows reveal the same backdrop as the transcript.
+         Status dots and outcome text carry errors; a subtle hover wash still identifies clickable headers. -->
+    <SolidColorBrush x:Key="SurfaceToolCard" Color="Transparent" />
+    <SolidColorBrush x:Key="SurfaceToolBody" Color="Transparent" />
+    <SolidColorBrush x:Key="ToolOutline" Color="Transparent" />
+    <SolidColorBrush x:Key="ToolErrorOutline" Color="Transparent" />
+    <SolidColorBrush x:Key="ToolSeparator" Color="Transparent" />
+    <SolidColorBrush x:Key="ToolHover" Color="#10FFFFFF" />
+    <SolidColorBrush x:Key="ToolErrorFill" Color="Transparent" />
+
+    <!-- Keep the idle thumb visible as the same black outline as the panes; fill it on rail hover or drag. -->
+    <SolidColorBrush x:Key="ScrollThumbFill" Color="Transparent" />
+    <SolidColorBrush x:Key="ScrollThumbRailHoverFill" Color="#4C4941" />
+    <SolidColorBrush x:Key="ScrollThumbOutline" Color="#D9000000" />
+    <Thickness x:Key="ScrollThumbOutlineThickness">1</Thickness>
 
     <!-- the one thing that survives: a thin black line around and between every region. Without it the panes
          lose their edges entirely against a busy wallpaper and the layout stops reading as panes at all.

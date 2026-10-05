@@ -93,7 +93,8 @@ public sealed class ModelSpeedBoard
     /// The models on the board, in reading order. Ids verified against OpenRouter's catalogue rather than guessed —
     /// an id it does not carry silently yields no figures at all.
     ///
-    /// Each row uses its provider's base model ID for measurements.
+    /// These are the BASE model ids, not presentation aliases: a wrapper only changes the system
+    /// prompt, and asking OpenRouter about "grok-4.5" would find nothing.
     ///
     /// A method rather than a static field on purpose. As a field it would have to be declared above
     /// <see cref="Instance"/> to be initialised first, and a later tidy-up that reordered the two would leave the
@@ -101,13 +102,16 @@ public sealed class ModelSpeedBoard
     /// </summary>
     private static ModelSpeedRow[] CreateRows() =>
     [
-        new("Opus 5",        "Anthropic", "anthropic/claude-opus-5",   "claude-opus-5"),
-        new("Sonnet 5",      "Anthropic", "anthropic/claude-sonnet-5", "claude-sonnet-5"),
-        new("Fable 5.1",     "Anthropic", "anthropic/claude-fable-5-1", "claude-fable-5-1"),
+        new("Opus 5.5",      "Anthropic", "anthropic/claude-opus-5.5",   "claude-opus-5-5"),
+        new("Sonnet 5.5",    "Anthropic", "anthropic/claude-sonnet-5.5", "claude-sonnet-5-5"),
+        new("Fable 5.1",     "Anthropic", "anthropic/claude-fable-5.1", "claude-fable-5-1"),
         new("Grok 4.5",      "xAI",       "x-ai/grok-4.5",             "grok-4.5"),
         // Astra shipped 2026-09-03 and OpenRouter had not listed openai/gpt-6-astra yet when this row was added,
         // so it reads "no data" until they do — Apply() keeps that tidy rather than printing a fake zero.
         new("GPT-6 Astra",   "OpenAI",    "openai/gpt-6-astra",        "gpt-6-astra"),
+        new("GPT-6.1 Sol",   "OpenAI",    "openai/gpt-6.1-sol",      "gpt-6.1-sol"),
+        new("GPT-6 Sol",     "OpenAI",    "openai/gpt-6-sol",          "gpt-6-sol"),
+        new("GPT-6 Luna",    "OpenAI",    "openai/gpt-6-luna",         "gpt-6-luna"),
         new("GPT 5.6 Sol",   "OpenAI",    "openai/gpt-5.6-sol",        "gpt-5.6-sol"),
         new("GPT 5.6 Terra", "OpenAI",    "openai/gpt-5.6-terra",      "gpt-5.6-terra"),
         new("GPT 5.6 Luna",  "OpenAI",    "openai/gpt-5.6-luna",       "gpt-5.6-luna"),

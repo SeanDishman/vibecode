@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using VibeCode.UI;   // Observable (INotifyPropertyChanged base), as used by the other account types
+using VibeCode.Protocol;
 
 namespace VibeCode.Services;
 
@@ -18,6 +19,8 @@ public sealed class ApiKeyAccount : Observable
     public required string Id { get; init; }
     /// <summary>claude | codex | grok | kimi | glm - matches AppSettings.DefaultProvider.</summary>
     public required string Provider { get; init; }
+    /// <summary>GLM service identity. Old accounts without this field remain on Baseten.</summary>
+    public string GlmBackend { get; init; } = GlmPreset.Baseten;
     public string Label { get; set; } = "";
     /// <summary>Base64 DPAPI ciphertext. Never logged, never shown, never written in the clear.</summary>
     public string Secret { get; set; } = "";
@@ -25,10 +28,16 @@ public sealed class ApiKeyAccount : Observable
     public string Masked { get; set; } = "";
     public DateTime AddedAt { get; set; } = DateTime.UtcNow;
 
+    private GlmAccountUsage? _glmUsage;
+    [JsonIgnore] public GlmAccountUsage GlmUsage => LazyInitializer.EnsureInitialized(ref _glmUsage, () => new(GlmBackend));
+
     [JsonIgnore] public string ProviderDisplay => ApiKeyAccountService.ProviderName(Provider);
     [JsonIgnore] public string Initial => ProviderDisplay.Length > 0 ? ProviderDisplay[..1] : "?";
-    [JsonIgnore] public string Title => string.IsNullOrWhiteSpace(Label) ? $"{ProviderDisplay} API key" : Label;
-    [JsonIgnore] public string Subtitle => $"{ProviderDisplay} · {Masked}";
+    [JsonIgnore] public string ConnectionDisplay => GlmPreset.Is(Provider) ? GlmPreset.BackendName(GlmBackend) : ProviderDisplay;
+    [JsonIgnore] public string Title => string.IsNullOrWhiteSpace(Label)
+        ? GlmPreset.Is(Provider) ? $"{ConnectionDisplay} account" : $"{ProviderDisplay} API key"
+        : Label;
+    [JsonIgnore] public string Subtitle => $"{ConnectionDisplay} · {Masked}";
     /// <summary>True when this key is the account VibeCode will actually use for its provider.</summary>
     [JsonIgnore]
     public bool IsSelected =>
@@ -44,7 +53,7 @@ public sealed class ApiKeyAccount : Observable
     /// </summary>
     [JsonIgnore]
     public bool IsPreferred =>
-        string.Equals(ApiKeyAccountService.Instance.SelectedId(Provider), Id, StringComparison.Ordinal);
+        string.Equals(ApiKeyAccountService.Instance.SelectedFor(Provider)?.Id, Id, StringComparison.Ordinal);
 
     public void RefreshSelection() { Raise(nameof(IsSelected)); Raise(nameof(IsPreferred)); }
 }
@@ -126,18 +135,22 @@ public sealed class ApiKeyAccountService : Observable
     public ApiKeyAccount? SelectedFor(string provider)
     {
         var id = SelectedId(provider);
-        return id is null ? null : _accounts.FirstOrDefault(a => a.Id == id);
+        var selected = id is null ? null : For(provider).FirstOrDefault(a => a.Id == id);
+        return selected ?? (GlmPreset.Is(provider) ? For(provider).FirstOrDefault() : null);
     }
+
+    public string SelectedGlmBackend => GlmPreset.NormalizeBackend(SelectedFor(GlmPreset.ProviderId)?.GlmBackend);
 
     /* ── mutation ─────────────────────────────────────────────────────────── */
 
-    public ApiKeyAccount Add(string provider, string key, string? label = null)
+    public ApiKeyAccount Add(string provider, string key, string? label = null, string? glmBackend = null)
     {
         key = (key ?? "").Trim();
         var account = new ApiKeyAccount
         {
             Id = Guid.NewGuid().ToString("n"),
             Provider = provider.ToLowerInvariant(),
+            GlmBackend = GlmPreset.Is(provider) ? GlmPreset.NormalizeBackend(glmBackend) : GlmPreset.Baseten,
             Label = label?.Trim() ?? "",
             Secret = Protect(key),
             Masked = Mask(key),
@@ -241,16 +254,23 @@ public sealed class ApiKeyAccountService : Observable
     /// user picked is always tried first, and the rest are a fallback rather than a pool to round-robin, so
     /// normal use stays on one key and stays predictable.
     /// </summary>
-    public IReadOnlyList<string> KeysFor(string provider)
+    public IReadOnlyList<string> KeysFor(string provider) => CredentialsFor(provider).Select(c => c.Key).ToList();
+
+    /// <summary>Capture keys and account IDs together so a running chat's quota follows credential failover.</summary>
+    public IReadOnlyList<(string AccountId, string Key)> CredentialsFor(string provider, string? accountId = null)
     {
-        var selected = SelectedFor(provider);
-        var ordered = new List<string>();
-        if (selected is not null && Reveal(selected) is { Length: > 0 } first) ordered.Add(first);
+        var selected = accountId is null ? SelectedFor(provider) : For(provider).FirstOrDefault(a => a.Id == accountId);
+        var ordered = new List<(string AccountId, string Key)>();
+        if (accountId is not null && selected is null) return ordered;
+        var backend = GlmPreset.Is(provider) ? GlmPreset.NormalizeBackend(selected?.GlmBackend) : null;
+        if (selected is not null && Reveal(selected) is { Length: > 0 } first) ordered.Add((selected.Id, first));
         foreach (var account in For(provider))
         {
             if (selected is not null && account.Id == selected.Id) continue;
-            if (Reveal(account) is { Length: > 0 } key && !ordered.Contains(key, StringComparer.Ordinal))
-                ordered.Add(key);
+            // Never send a Z.ai key to Baseten, or spend API balance after exhausting Coding Plan quota.
+            if (GlmPreset.Is(provider) && GlmPreset.NormalizeBackend(account.GlmBackend) != backend) continue;
+            if (Reveal(account) is { Length: > 0 } key && !ordered.Any(c => c.Key == key))
+                ordered.Add((account.Id, key));
         }
         return ordered;
     }
@@ -258,13 +278,16 @@ public sealed class ApiKeyAccountService : Observable
     /* ── validation ───────────────────────────────────────────────────────── */
 
     /// <summary>
-    /// Confirm a key works before saving it. Every one of these vendors exposes a free GET /v1/models,
-    /// so this proves the credential without generating a single billable token.
+    /// Confirm a key works before saving it. Z.ai uses a one-token completion on the chosen endpoint;
+    /// the other services use their model-list endpoint.
     /// </summary>
-    public static async Task<ApiKeyValidation> ValidateAsync(string provider, string key, CancellationToken ct = default)
+    public static async Task<ApiKeyValidation> ValidateAsync(string provider, string key, CancellationToken ct = default,
+        string? glmBackend = null)
     {
         key = (key ?? "").Trim();
         if (key.Length < 8) return ApiKeyValidation.Bad("That key looks too short.");
+        if (GlmPreset.Is(provider) && GlmPreset.IsZai(glmBackend))
+            return await GlmAccountValidator.ValidateAsync(Http, glmBackend!, key, ct);
 
         var (url, apply) = provider.ToLowerInvariant() switch
         {

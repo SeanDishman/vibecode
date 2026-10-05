@@ -2,6 +2,7 @@ package com.vibecode.mobile.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 
 /** One chat as it appears in the list. Mirrors PhoneBridgeMirror.SummaryJson on the desktop. */
 data class ChatSummary(
@@ -301,13 +302,16 @@ data class TranscriptUpdate(
 ) {
     fun applyTo(existing: List<Message>): List<Message> {
         if (unchanged) return existing
-        val kept = if (base <= 0) emptyList() else existing.take(minOf(base, existing.size))
-        // A splice can only be trusted when the prefix we are keeping is actually as long as the server assumed.
-        // If it is short (the app was killed and restarted mid-transcript), fall back to what we were sent.
-        if (kept.size < base) return items
-        return kept + items
+        // Never accept a tail as a complete transcript. The caller must ask for a fresh snapshot instead of
+        // advancing its version after a lost prefix or a malformed response.
+        if (base < 0 || base > existing.size || total < base || items.size != total - base) {
+            throw TranscriptOutOfSyncException()
+        }
+        return existing.take(base) + items
     }
 }
+
+class TranscriptOutOfSyncException : IOException("Refreshing the chat after an incomplete update.")
 
 // ---------------- small JSON helpers ----------------
 

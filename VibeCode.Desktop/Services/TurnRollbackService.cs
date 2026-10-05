@@ -23,7 +23,7 @@ public sealed class TurnRollbackCheckpoint
 
     private static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", ".idea", ".vs", ".agents", ".codex", ".claude", ".vibecode",
+        ".git", ".idea", ".vs", ".agents", ".codex", ".claude", ".vibecode", ".tools",
         "bin", "obj", "node_modules", "publish", "dist", "build", "target",
         ".next", "coverage", ".cache", ".venv", "venv", "__pycache__",
         // Shelves, not the working tree: dated backup copies and source deliberately moved out of the way. An agent
@@ -44,6 +44,16 @@ public sealed class TurnRollbackCheckpoint
     // bin-*/obj-* family, not just the two exact names.
     private static bool IsIgnoredDirectory(string name) =>
         IgnoredDirectories.Contains(name)
+        || name.StartsWith(".tmp-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".transfer-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".import-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".cve-install-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".mcp-audit-", StringComparison.OrdinalIgnoreCase)
+        || (name.StartsWith('.')
+            && (name.EndsWith("-bin", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("-obj", StringComparison.OrdinalIgnoreCase)))
+        || name.StartsWith(".obj-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".bin-", StringComparison.OrdinalIgnoreCase)
         || name.StartsWith("bin-", StringComparison.OrdinalIgnoreCase)
         || name.StartsWith("bin_", StringComparison.OrdinalIgnoreCase)
         || name.StartsWith("obj-", StringComparison.OrdinalIgnoreCase)
@@ -70,7 +80,7 @@ public sealed class TurnRollbackCheckpoint
     {
         ".dll", ".exe", ".pdb", ".so", ".dylib", ".lib", ".a", ".o", ".resources", ".winmd", ".ilk", ".exp",
         ".nupkg", ".snupkg", ".msi", ".cab", ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz",
-        ".jar", ".class", ".pyc", ".pyd",
+        ".jar", ".class", ".pyc", ".pyd", ".log",
     };
 
     private static readonly object TimelineGate = new();
@@ -85,6 +95,7 @@ public sealed class TurnRollbackCheckpoint
     private long _sequence;
     private readonly string _root;
     private readonly string _rootPrefix;
+    private readonly HashSet<string> _projectIgnoredDirectories = new(StringComparer.OrdinalIgnoreCase);
     private readonly DateTime _startedUtc = DateTime.UtcNow;
     private readonly HashSet<string> _touched = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _observedDuringTools = new(StringComparer.OrdinalIgnoreCase);
@@ -123,6 +134,7 @@ public sealed class TurnRollbackCheckpoint
         {
             using var lease = WorkspaceLease.Acquire(_root, TimeSpan.FromSeconds(5));
             if (!lease.Acquired) throw new IOException("Another VibeCode process is restoring this workspace.");
+            LoadProjectIgnoredDirectories();
             RecoverPendingJournals();
             _before = CaptureWorkspace();
             foreach (var pair in CaptureControlState()) _controlStateBefore[pair.Key] = pair.Value;
@@ -130,6 +142,39 @@ public sealed class TurnRollbackCheckpoint
         }
         catch (Exception ex) { _failureReason = "Couldn't create a safe pre-prompt checkpoint: " + ex.Message; }
         if (activate) Activate();
+    }
+
+    // A project can keep large generated or archived trees beside its source. The exact directories in this file
+    // are excluded from checkpoint scans; names are relative to the chat folder and never treated as glob patterns.
+    // An explicitly reported edit inside one still disables undo, so a model cannot silently claim to restore it.
+    private void LoadProjectIgnoredDirectories()
+    {
+        var config = Path.Combine(_root, ".vibecode-undoignore");
+        if (!File.Exists(config)) return;
+        foreach (var raw in File.ReadLines(config))
+        {
+            var entry = raw.Trim();
+            if (entry.Length == 0 || entry.StartsWith('#')) continue;
+            entry = entry.TrimEnd('/', '\\').Replace('/', Path.DirectorySeparatorChar);
+            if (entry.Length == 0 || Path.IsPathRooted(entry))
+                throw new IOException($"Invalid directory in .vibecode-undoignore: {raw}");
+            var full = Path.GetFullPath(Path.Combine(_root, entry));
+            if (!full.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"Directory escapes the chat folder in .vibecode-undoignore: {raw}");
+            _projectIgnoredDirectories.Add(full);
+        }
+    }
+
+    private bool IsProjectIgnoredPath(string full) =>
+        _projectIgnoredDirectories.Any(directory =>
+            string.Equals(full, directory, StringComparison.OrdinalIgnoreCase)
+            || full.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+
+    private bool IsExcludedWorkspacePath(string full)
+    {
+        var relative = Path.GetRelativePath(_root, full);
+        return relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsIgnoredDirectory)
+               || IsProjectIgnoredPath(full);
     }
 
     public event Action? StateChanged;
@@ -307,6 +352,35 @@ public sealed class TurnRollbackCheckpoint
         {
             if (_completedUtc is not null) return;
             _touched.Add(full);
+        }
+    }
+
+    /// <summary>What the pre-prompt snapshot knows about one file, for the Bridge edit log's shell-edit diffs.</summary>
+    internal enum TurnStartState { Unknown, Captured, Absent, Excluded }
+
+    /// <summary>
+    /// Read-only peek at the pre-prompt snapshot. Captured returns the file's text at turn start; Absent means an
+    /// eligible file did not exist then; Excluded means it is generated/ignored output; Unknown means the snapshot
+    /// cannot say (capture failed, turn sealed, binary or oversized). Nothing about undo changes.
+    /// </summary>
+    internal TurnStartState GetTurnStartText(string path, out string? text, out DateTime capturedUtc)
+    {
+        text = null;
+        capturedUtc = _startedUtc;
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return TurnStartState.Unknown; }
+        lock (_gate)
+        {
+            if (!full.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase)) return TurnStartState.Unknown;
+            if (IsExcludedWorkspacePath(full) || IsIgnoredWorkspaceFile(Path.GetRelativePath(_root, full))) return TurnStartState.Excluded;
+            if (_before is null || _failureReason is not null || _uncapturedExisting.Contains(full)) return TurnStartState.Unknown;
+            if (!_before.TryGetValue(full, out var captured))
+                return HasReparsePointBetweenRootAnd(full) ? TurnStartState.Unknown : TurnStartState.Absent;
+            if (Array.IndexOf(captured.Content, (byte)0, 0, Math.Min(captured.Content.Length, 8192)) >= 0) return TurnStartState.Unknown;
+            using var reader = new StreamReader(new MemoryStream(captured.Content), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            text = reader.ReadToEnd();
+            return TurnStartState.Captured;
         }
     }
 
@@ -559,7 +633,7 @@ public sealed class TurnRollbackCheckpoint
             {
                 if (entry is DirectoryInfo child)
                 {
-                    if (IsIgnoredDirectory(child.Name)) continue;
+                    if (IsIgnoredDirectory(child.Name) || IsProjectIgnoredPath(child.FullName)) continue;
                     if (child.Attributes.HasFlag(FileAttributes.ReparsePoint))
                     {
                         _reparseBefore[Path.GetFullPath(child.FullName)] = ReparseFingerprint(child);
@@ -627,7 +701,7 @@ public sealed class TurnRollbackCheckpoint
             {
                 if (entry is DirectoryInfo child)
                 {
-                    if (IsIgnoredDirectory(child.Name)) continue;
+                    if (IsIgnoredDirectory(child.Name) || IsProjectIgnoredPath(child.FullName)) continue;
                     if (child.Attributes.HasFlag(FileAttributes.ReparsePoint))
                     {
                         reparses[Path.GetFullPath(child.FullName)] = ReparseFingerprint(child);
@@ -826,11 +900,17 @@ public sealed class TurnRollbackCheckpoint
                 return;
             }
             var relative = Path.GetRelativePath(_root, full);
-            if (IsIgnoredWorkspaceFile(relative)) return;
             var parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (parts.Any(part => string.Equals(part, ".git", StringComparison.OrdinalIgnoreCase))
-                || parts.Any(IsIgnoredDirectory)
-                || HasReparsePointBetweenRootAnd(full))
+            if (parts.Any(part => string.Equals(part, ".git", StringComparison.OrdinalIgnoreCase)))
+            {
+                _unsupportedToolMutation = true;
+                return;
+            }
+            if (IsIgnoredWorkspaceFile(relative)) return;
+            // Generated/cache paths were never captured. Normal builds write there during a shell tool; that does
+            // not make a source-file rewind unsafe. A provider-reported edit there still fails in NormalizePath.
+            if (IsExcludedWorkspacePath(full)) return;
+            if (HasReparsePointBetweenRootAnd(full))
             {
                 _unsupportedToolMutation = true;
                 return;
@@ -855,10 +935,9 @@ public sealed class TurnRollbackCheckpoint
         if (!full.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("a tool changed a file outside the chat folder");
         var relative = Path.GetRelativePath(_root, full);
-        if (IsIgnoredWorkspaceFile(relative)) return null;
-        if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(IsIgnoredDirectory))
+        if (IsExcludedWorkspacePath(full))
             throw new InvalidOperationException($"{relative} is inside an excluded generated/cache directory");
+        if (IsIgnoredWorkspaceFile(relative)) return null;
         if (HasReparsePointBetweenRootAnd(full))
             throw new InvalidOperationException($"{relative} crosses a symlink or junction");
         if (Directory.Exists(full) && !File.Exists(full))
@@ -892,7 +971,13 @@ public sealed class TurnRollbackCheckpoint
                 throw new IOException($"{Relative(path)} grew beyond the {MaxFileBytes / 1024 / 1024:N0} MB per-file checkpoint limit.");
             var written = before.LastWriteTimeUtc;
             var attributes = before.Attributes;
-            var bytes = File.ReadAllBytes(path);
+            byte[] bytes;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan))
+            {
+                bytes = new byte[checked((int)length)];
+                stream.ReadExactly(bytes);
+            }
             var after = new FileInfo(path);
             if (after.Exists && after.Length == length && after.LastWriteTimeUtc == written)
                 return new(bytes, Hash(bytes), attributes, before.CreationTimeUtc, before.LastWriteTimeUtc);

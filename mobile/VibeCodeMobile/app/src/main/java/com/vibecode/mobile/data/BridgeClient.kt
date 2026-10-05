@@ -6,8 +6,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.HttpsURLConnection
 
 /** A request the desktop refused, carried with the status so the UI can say something specific. */
@@ -32,6 +33,7 @@ class BridgeClient(
         const val POLL_SECONDS = 25
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val READ_TIMEOUT_MS = 45_000
+        private val authEpochs = ConcurrentHashMap<String, String>()
     }
 
     // ---------------- discovery and pairing ----------------
@@ -39,14 +41,16 @@ class BridgeClient(
     suspend fun ping(): JSONObject = request("GET", "/api/ping", auth = false)
 
     suspend fun pair(code: String, deviceName: String): JSONObject =
-        request("POST", "/api/pair", auth = false, body = JSONObject().put("code", code).put("name", deviceName))
+        request("POST", "/api/pair", auth = false, body = JSONObject().put("code", code).put("name", deviceName)
+            .put("devicePublicKey", DeviceIdentity.publicKey()))
 
     /**
      * Trades the secret baked into a generated APK for a real device token. Works exactly once per generated
      * APK; after that the desktop answers 403 and this app has to be regenerated on the PC.
      */
     suspend fun enroll(secret: String, deviceName: String): JSONObject =
-        request("POST", "/api/enroll", auth = false, body = JSONObject().put("secret", secret).put("name", deviceName))
+        request("POST", "/api/enroll", auth = false, body = JSONObject().put("secret", secret).put("name", deviceName)
+            .put("devicePublicKey", DeviceIdentity.publicKey()))
 
     suspend fun unpair() {
         request("POST", "/api/unpair", body = JSONObject())
@@ -207,18 +211,59 @@ class BridgeClient(
         auth: Boolean = true,
         body: JSONObject? = null,
     ): JSONObject = withContext(Dispatchers.IO) {
-        val connection = URL("https://$host:$port$path").openConnection() as HttpsURLConnection
+        val bytes = body?.toString()?.toByteArray(Charsets.UTF_8)
+        val pin = fingerprint?.uppercase(Locale.ROOT)
+        if (!auth) {
+            return@withContext exchange(method, path, bytes, null).also { rememberEpoch(pin, it) }
+        }
+        require(pin != null && pin.matches(Regex("[0-9A-F]{64}")) && !token.isNullOrBlank()) {
+            "Pair this phone with the PC before sending a request."
+        }
+        val epoch = authEpochs[pin] ?: refreshEpoch(pin)
+        try {
+            exchange(method, path, bytes, epoch)
+        } catch (e: BridgeException) {
+            if (e.status != HttpURLConnection.HTTP_UNAUTHORIZED) throw e
+            // The PC rejects an old process epoch before dispatching an action, so only that failure is safe
+            // to retry. A timeout or any other response may already have applied a send or settings change.
+            val fresh = refreshEpoch(pin)
+            if (fresh == epoch) throw e
+            exchange(method, path, bytes, fresh)
+        }
+    }
+
+    private fun rememberEpoch(pin: String?, response: JSONObject) {
+        val epoch = response.optString("authEpoch")
+        if (pin != null && epoch.isNotBlank()) authEpochs[pin] = epoch
+    }
+
+    private fun refreshEpoch(pin: String): String {
+        val response = exchange("GET", "/api/ping", null, null)
+        val epoch = response.optString("authEpoch")
+        if (epoch.isBlank()) throw IOException("Update VibeCode on the PC to use secure phone access.")
+        authEpochs[pin] = epoch
+        return epoch
+    }
+
+    private fun exchange(method: String, path: String, bytes: ByteArray?, epoch: String?): JSONObject {
+        val connection = BridgeAddress(host, port).url(path).openConnection() as HttpsURLConnection
         connection.sslSocketFactory = PinnedTls.socketFactory(fingerprint, onCertificateSeen)
         connection.hostnameVerifier = PinnedTls.hostnameVerifier
         connection.requestMethod = method
         connection.connectTimeout = CONNECT_TIMEOUT_MS
         connection.readTimeout = READ_TIMEOUT_MS
+        // A paired PC is an origin, not a starting point for credential-bearing redirects.
+        connection.instanceFollowRedirects = false
+        connection.useCaches = false
         connection.setRequestProperty("Accept", "application/json")
-        if (auth && token != null) connection.setRequestProperty("Authorization", "Bearer $token")
+        if (epoch != null) {
+            connection.setRequestProperty("Authorization", "Bearer $token")
+            DeviceIdentity.headers(method, path, bytes ?: byteArrayOf(), token!!, epoch)
+                .forEach { (name, value) -> connection.setRequestProperty(name, value) }
+        }
 
         try {
-            if (body != null) {
-                val bytes = body.toString().toByteArray()
+            if (bytes != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 connection.setFixedLengthStreamingMode(bytes.size)
@@ -232,7 +277,7 @@ class BridgeClient(
                 val reason = runCatching { JSONObject(text).optString("error") }.getOrNull()
                 throw BridgeException(status, reason?.takeIf { it.isNotBlank() } ?: describe(status))
             }
-            if (text.isBlank()) JSONObject() else JSONObject(text)
+            return if (text.isBlank()) JSONObject() else JSONObject(text)
         } finally {
             connection.disconnect()
         }

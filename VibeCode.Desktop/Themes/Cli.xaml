@@ -40,6 +40,17 @@
     <SolidColorBrush x:Key="SurfaceBar" Color="#F2101010" />
     <SolidColorBrush x:Key="SurfaceOutline" Color="#2A2A2A" />
     <SolidColorBrush x:Key="SurfaceComposer" Color="{StaticResource Bg2Color}" />
+    <!-- Tool activity keys match Dark.xaml; CLI keeps its existing card and output surfaces. -->
+    <SolidColorBrush x:Key="SurfaceToolCard" Color="{StaticResource Bg1Color}" />
+    <SolidColorBrush x:Key="SurfaceToolBody" Color="#060606" />
+    <SolidColorBrush x:Key="ToolOutline" Color="#2A2A2A" />
+    <SolidColorBrush x:Key="ToolErrorOutline" Color="#44E0808B" />
+    <SolidColorBrush x:Key="ToolSeparator" Color="#1F1F1F" />
+    <SolidColorBrush x:Key="ToolHover" Color="{StaticResource Bg2Color}" />
+    <SolidColorBrush x:Key="ToolErrorFill" Color="#18E0808B" />
+    <SolidColorBrush x:Key="ScrollThumbFill" Color="#333333" />
+    <SolidColorBrush x:Key="ScrollThumbRailHoverFill" Color="#333333" />
+    <SolidColorBrush x:Key="ScrollThumbHoverFill" Color="#4A4A4A" />
     <!-- composer send button; see the note in Dark.xaml. The terminal keeps its filled key. -->
     <SolidColorBrush x:Key="SendButtonFill" Color="{StaticResource AccentColor}" />
     <SolidColorBrush x:Key="SendButtonFillHover" Color="{StaticResource AccentHoverColor}" />
@@ -113,10 +124,6 @@
     </Style>
     <Style x:Key="StatusDot" TargetType="Ellipse" BasedOn="{StaticResource StatusDotBase}">
         <Style.Triggers>
-            <!-- Demon Mode: RED marks the one session that takes your input, the accent dot marks read-only workers. -->
-            <DataTrigger Binding="{Binding IsDemonOrchestrator}" Value="True">
-                <Setter Property="Fill" Value="{StaticResource Red}" />
-            </DataTrigger>
             <DataTrigger Binding="{Binding IsWorking}" Value="True">
                 <DataTrigger.EnterActions>
                     <BeginStoryboard x:Name="StatusDotPulse">
@@ -224,10 +231,16 @@
                                 <Thumb>
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
-                                            <Border x:Name="th" Background="#333333" Margin="2,2" />
+                                            <Border x:Name="th" Background="{DynamicResource ScrollThumbFill}" Margin="2,2" />
                                             <ControlTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="True">
+                                                    <Setter TargetName="th" Property="Background" Value="{DynamicResource ScrollThumbRailHoverFill}" />
+                                                </DataTrigger>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="th" Property="Background" Value="#4A4A4A" />
+                                                    <Setter TargetName="th" Property="Background" Value="{DynamicResource ScrollThumbHoverFill}" />
+                                                </Trigger>
+                                                <Trigger Property="IsDragging" Value="True">
+                                                    <Setter TargetName="th" Property="Background" Value="{DynamicResource ScrollThumbHoverFill}" />
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -255,10 +268,16 @@
                                         <Thumb>
                                             <Thumb.Template>
                                                 <ControlTemplate TargetType="Thumb">
-                                                    <Border x:Name="th" Background="#333333" Margin="2,2" />
+                                                    <Border x:Name="th" Background="{DynamicResource ScrollThumbFill}" Margin="2,2" />
                                                     <ControlTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="True">
+                                                            <Setter TargetName="th" Property="Background" Value="{DynamicResource ScrollThumbRailHoverFill}" />
+                                                        </DataTrigger>
                                                         <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="th" Property="Background" Value="#4A4A4A" />
+                                                            <Setter TargetName="th" Property="Background" Value="{DynamicResource ScrollThumbHoverFill}" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsDragging" Value="True">
+                                                            <Setter TargetName="th" Property="Background" Value="{DynamicResource ScrollThumbHoverFill}" />
                                                         </Trigger>
                                                     </ControlTemplate.Triggers>
                                                 </ControlTemplate>
@@ -873,27 +892,55 @@
         <Setter Property="Foreground" Value="{StaticResource Text}" />
         <Setter Property="FontSize" Value="12.5" />
         <Setter Property="Padding" Value="11,6" />
+        <Setter Property="ItemContainerStyle" Value="{DynamicResource DarkMenuItem}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
-                    <Border x:Name="bd" Background="Transparent" CornerRadius="{StaticResource Rad7}"
-                            Padding="{TemplateBinding Padding}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <ContentPresenter Grid.Column="0" ContentSource="Header" VerticalAlignment="Center"
-                                              RecognizesAccessKey="True" />
-                            <!-- shortcut hint: an empty InputGestureText simply measures to nothing -->
-                            <TextBlock x:Name="gesture" Grid.Column="1" Text="{TemplateBinding InputGestureText}"
-                                       Foreground="{StaticResource Faint}" FontSize="11" Margin="22,0,2,0"
-                                       VerticalAlignment="Center" />
-                        </Grid>
-                    </Border>
+                    <Grid>
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="{StaticResource Rad7}"
+                                Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="check" Text="&#xE73E;" FontFamily="{StaticResource Icons}"
+                                           FontSize="10" Width="14" Margin="0,0,7,0" VerticalAlignment="Center"
+                                           Visibility="Collapsed" />
+                                <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center"
+                                                  RecognizesAccessKey="True" />
+                                <TextBlock x:Name="gesture" Grid.Column="2" Text="{TemplateBinding InputGestureText}"
+                                           Foreground="{StaticResource Faint}" FontSize="11" Margin="22,0,2,0"
+                                           VerticalAlignment="Center" />
+                                <TextBlock x:Name="arrow" Grid.Column="3" Text="&#xE76C;" FontFamily="{StaticResource Icons}"
+                                           FontSize="9" Margin="22,0,2,0" VerticalAlignment="Center"
+                                           Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="-1" AllowsTransparency="True"
+                               Focusable="False" IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}">
+                            <Border Background="{StaticResource Overlay}" BorderBrush="{StaticResource Border}"
+                                    BorderThickness="1" CornerRadius="{StaticResource Rad10}" Padding="4">
+                                <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"
+                                                KeyboardNavigation.TabNavigation="Cycle" />
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="bd" Property="Background" Value="{StaticResource Bg3}" />
+                        </Trigger>
+                        <Trigger Property="IsCheckable" Value="True">
+                            <Setter TargetName="check" Property="Visibility" Value="Hidden" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="check" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="HasItems" Value="True">
+                            <Setter TargetName="arrow" Property="Visibility" Value="Visible" />
+                            <Setter TargetName="gesture" Property="Visibility" Value="Collapsed" />
                         </Trigger>
                         <!-- Cut/Paste go dim rather than vanishing when the command can't run -->
                         <Trigger Property="IsEnabled" Value="False">

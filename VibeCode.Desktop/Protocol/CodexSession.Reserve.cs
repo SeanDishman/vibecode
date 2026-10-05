@@ -41,7 +41,11 @@ public sealed partial class CodexSession
     {
         var id = response?["result"]?["turn"]?["id"]?.GetValue<string>();
         // A fast failure/completion can precede its turn/start response; do not resurrect that old turn id.
-        if (id is not null && id != _lastCompletedRootTurnId) _turnId = id;
+        if (id is not null && id != _lastCompletedRootTurnId)
+        {
+            _turnId = id;
+            EmitTurnActivity();
+        }
     }
 
     private bool BeginReserveRecovery(JsonObject? turn, JsonObject? rejectedRequest)
@@ -100,6 +104,7 @@ public sealed partial class CodexSession
                 Emit(new JsonObject { ["type"] = "system", ["subtype"] = "codex_usage_checkpoint",
                     ["model"] = previous, ["usage"] = _lastUsage.DeepClone() });
             _turnUsage = default;
+            _turnEstimatedCost = 0;
             _lastUsage = null;
             _lastError = null;
             _lastTurnError = null;
@@ -118,6 +123,7 @@ public sealed partial class CodexSession
             // Once sent, do not cancel the RPC wait: its acceptance is uncertain until it replies. Stop stays
             // latched and interrupts the replacement as soon as turn/started supplies the new turn id.
             cancellation.Token.ThrowIfCancellationRequested();
+            RememberTurnPricing(p);
             var started = await RequestAsync("turn/start", p).ConfigureAwait(false);
             submitted = true;
             TrackAcceptedTurn(started);

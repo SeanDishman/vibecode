@@ -7,10 +7,9 @@ plugins {
 
 // Release signing. keystore.properties is gitignored; without it the release build still runs and simply comes
 // out unsigned, which is better than a build that fails on a machine that has never seen the key.
-val buildTemplate = providers.gradleProperty("vibecodeTemplate").orNull == "true"
 val keystoreProperties = Properties().apply {
     val file = rootProject.file("keystore.properties")
-    if (!buildTemplate && file.exists()) file.inputStream().use { load(it) }
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -23,6 +22,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -104,4 +104,10 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.biometric)
+    // Biometric 1.1 brings Fragment 1.2 transitively; credential confirmation uses Activity Result APIs.
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

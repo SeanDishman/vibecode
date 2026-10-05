@@ -1,9 +1,9 @@
 namespace VibeCode.Protocol;
 
 /// <summary>
-/// GLM served through Baseten's OpenAI-compatible inference API, as an in-app provider.
+/// GLM served through Baseten or Z.ai's official API, as an in-app provider.
 ///
-/// Everything here was measured against the live endpoint rather than taken from documentation:
+/// The existing Baseten configuration was measured against its live endpoint:
 ///
 ///   * <c>POST /v1/chat/completions</c> does real tool calling. It returns <c>finish_reason: "tool_calls"</c>
 ///     with a proper <c>tool_calls[]</c> array (streamed as incremental <c>arguments</c> deltas keyed by
@@ -19,6 +19,8 @@ namespace VibeCode.Protocol;
 ///
 /// None of the four CLIs VibeCode drives can carry this transport, so the provider is spoken natively by
 /// <see cref="GlmSession"/>.
+/// Official Z.ai configuration follows https://docs.z.ai/devpack/tool/others and
+/// https://docs.z.ai/api-reference/introduction; its Coding Plan and standard API routes remain separate.
 /// </summary>
 public static class GlmPreset
 {
@@ -27,6 +29,16 @@ public static class GlmPreset
 
     /// <summary>What the user sees. The menu calls it GLM; Baseten is the host, not the model.</summary>
     public const string DisplayName = "GLM";
+
+    // Missing backend metadata on an existing account MUST continue to mean Baseten.
+    public const string Baseten = "baseten";
+    public const string ZaiCodingPlan = "zai-coding";
+    public const string ZaiApi = "zai-api";
+    public const string ZaiCodingBaseUrl = "https://api.z.ai/api/coding/paas/v4";
+    public const string ZaiApiBaseUrl = "https://api.z.ai/api/paas/v4";
+    public const string ZaiDefaultModelId = "glm-5.3-flash";
+    public const string ZaiAccountUrl = "https://z.ai/manage-apikey/apikey-list";
+    public const string BasetenAccountUrl = "https://app.baseten.co";
 
     public const string DefaultBaseUrl = "https://inference.baseten.co/v1";
 
@@ -87,28 +99,81 @@ public static class GlmPreset
             "Previous generation, 200K context ($0.60/$2.20 per Mtok)."),
     ];
 
+    // Official model identifiers differ from Baseten's zai-org/... identifiers.
+    // https://docs.z.ai/devpack/overview and /guides/vlm/glm-5.3-flash
+    public static readonly (string Value, string Display, string Description)[] ZaiModels =
+    [
+        (ZaiDefaultModelId, "GLM 5.3 Flash", "1M context, 128K output. Official Z.ai."),
+        ("glm-5.3", "GLM 5.3", "1M context, 128K output. Official Z.ai flagship."),
+    ];
+
+    public static readonly (string Value, string Display, string Description)[] ZaiApiModels =
+    [
+        .. ZaiModels,
+        ("glm-5.3-flashx", "GLM 5.3 FlashX", "Faster inference on the official Z.ai standard API."),
+    ];
+
+    public static string NormalizeBackend(string? backend) => backend?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or Baseten => Baseten,
+        ZaiCodingPlan => ZaiCodingPlan,
+        ZaiApi => ZaiApi,
+        _ => throw new ArgumentException("Unknown GLM service. Add the account again and select its service.", nameof(backend)),
+    };
+
+    public static bool IsZai(string? backend) => NormalizeBackend(backend) != Baseten;
+
+    public static string BackendName(string? backend) => NormalizeBackend(backend) switch
+    {
+        ZaiCodingPlan => "Z.ai Coding Plan",
+        ZaiApi => "Z.ai API",
+        _ => "Baseten",
+    };
+
+    public static string BaseUrlFor(string? backend) => NormalizeBackend(backend) switch
+    {
+        ZaiCodingPlan => ZaiCodingBaseUrl,
+        ZaiApi => ZaiApiBaseUrl,
+        _ => DefaultBaseUrl,
+    };
+
+    public static string AuthSchemeFor(string? backend) => IsZai(backend) ? "Bearer" : AuthScheme;
+
+    public static IReadOnlyList<(string Value, string Display, string Description)> ModelsFor(string? backend) =>
+        NormalizeBackend(backend) switch
+        {
+            ZaiCodingPlan => ZaiModels,
+            ZaiApi => ZaiApiModels,
+            _ => Models,
+        };
+
+    public static IReadOnlyList<string> EffortsFor(string? backend) => IsZai(backend) ? ["low", "high", "max"] : [];
+
+    public static string NormalizeEffort(string? effort) => effort?.Trim().ToLowerInvariant() switch
+    {
+        "low" => "low",
+        "high" => "high",
+        _ => "max",
+    };
+
     /// <summary>True when this provider id is ours, whatever casing it arrived in.</summary>
     public static bool Is(string? provider) =>
         string.Equals(provider, ProviderId, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// The model id to put on the wire. This provider has a fixed catalog, and another provider's id arriving here
-    /// - which is exactly what a shared settings default used to do - has to become something Baseten can serve,
-    /// or the turn dies on a 404.
-    /// </summary>
-    public static string NormalizeModel(string? model)
+    public static string NormalizeModel(string? model, string? backend = null)
     {
         var value = model?.Trim();
-        if (string.IsNullOrEmpty(value) || string.Equals(value, "default", StringComparison.OrdinalIgnoreCase))
-            return DefaultModelId;
-        foreach (var known in Models)
+        var fallback = IsZai(backend) ? ZaiDefaultModelId : DefaultModelId;
+        if (string.IsNullOrEmpty(value) || string.Equals(value, "default", StringComparison.OrdinalIgnoreCase)) return fallback;
+        foreach (var known in ModelsFor(backend))
             if (string.Equals(known.Value, value, StringComparison.OrdinalIgnoreCase)) return known.Value;
-        return DefaultModelId;
+        return fallback;
     }
 
     /// <summary>True when a model id belongs to this provider. Used to keep GLM ids out of Claude's slots.</summary>
     public static bool IsGlmModelId(string? id) =>
         !string.IsNullOrWhiteSpace(id)
         && (id.StartsWith("zai-org/", StringComparison.OrdinalIgnoreCase)
+            || id.StartsWith("vibecode:zai-org/", StringComparison.OrdinalIgnoreCase)
             || id.Contains("glm", StringComparison.OrdinalIgnoreCase));
 }

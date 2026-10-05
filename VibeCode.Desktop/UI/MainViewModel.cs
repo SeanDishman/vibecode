@@ -72,6 +72,9 @@ public sealed class SavedBridgeVm
 
 public sealed partial class MainViewModel : Observable
 {
+    public bool SecondBrainExtensionEnabled => AppSettings.Current.SecondBrainEnabled;
+    public void RefreshSecondBrainExtensionVisibility() => Raise(nameof(SecondBrainExtensionEnabled));
+
     public ObservableCollection<ChatViewModel> Chats { get; } = new();
     /// <summary>The sidebar's grouped projection: pinned chats first, then regular chats, without duplicating state.</summary>
     public ICollectionView ChatGroups { get; }
@@ -81,6 +84,8 @@ public sealed partial class MainViewModel : Observable
 
     public MainViewModel()
     {
+        foreach (var root in AppSettings.Current.BridgeMailboxWorkspaces.Concat(AppSettings.Current.SavedBridges.Select(b => b.Cwd)).Where(System.IO.Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+            BridgeMailboxStore.ScheduleCleanup(root);
         ChatListDragBehavior.Register();
         var chats = new ListCollectionView(Chats);
         chats.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ChatViewModel.SidebarSection)));
@@ -92,6 +97,10 @@ public sealed partial class MainViewModel : Observable
         _sidebarCollapsed = AppSettings.Current.SidebarCollapsed;   // field, not property: restoring is not a change
         // Quota reads land on the dispatcher after each fetch; the account rows mirror them without polling.
         KimiUsageService.Instance.PropertyChanged += OnKimiUsageChanged;
+        // A restored "No directory" chat starts its provider in that folder; recreate it if the user cleared it, or
+        // the chat would come back unable to launch.
+        try { NoDirectoryWorkspace.Ensure(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     private void OnKimiUsageChanged(object? sender, PropertyChangedEventArgs e)
@@ -237,13 +246,16 @@ public sealed partial class MainViewModel : Observable
     private bool CodexProviderSelected => string.Equals(AppSettings.Current.DefaultProvider, "codex", StringComparison.OrdinalIgnoreCase);
     private bool KimiProviderSelected => string.Equals(AppSettings.Current.DefaultProvider, "kimi", StringComparison.OrdinalIgnoreCase);
     private bool GrokProviderSelected => string.Equals(AppSettings.Current.DefaultProvider, "grok", StringComparison.OrdinalIgnoreCase);
-    public string AccountInitial => CodexProviderSelected
+    private bool GlmProviderSelected => Protocol.GlmPreset.Is(AppSettings.Current.DefaultProvider);
+    public ApiKeyAccount? CurrentGlmAccount => GlmProviderSelected
+        ? ApiKeyAccountService.Instance.SelectedFor(Protocol.GlmPreset.ProviderId) : null;
+    public string AccountInitial => GlmProviderSelected ? "Z" : CodexProviderSelected
         ? CodexAccountInitial
         : KimiProviderSelected ? KimiAccountInitial : GrokProviderSelected ? GrokAccountInitial : _currentAccount?.Initial ?? "?";
-    public string AccountLabel => CodexProviderSelected
+    public string AccountLabel => GlmProviderSelected ? CurrentGlmAccount?.Title ?? "Connect GLM" : CodexProviderSelected
         ? CodexAccountLabel
         : KimiProviderSelected ? KimiAccountLabel : GrokProviderSelected ? GrokAccountLabel : _currentAccount?.Label ?? "Sign in";
-    public string AccountSub => CodexProviderSelected
+    public string AccountSub => GlmProviderSelected ? CurrentGlmAccount?.ConnectionDisplay ?? "GLM · Not connected" : CodexProviderSelected
         ? CodexAccountSub
         : KimiProviderSelected
             ? KimiAccountSub
@@ -252,13 +264,13 @@ public sealed partial class MainViewModel : Observable
             : _currentAccount is { } a
                 ? a.ProviderLine
                 : "Claude Code · Not signed in";
-    public bool IsSignedIn => CodexProviderSelected
+    public bool IsSignedIn => GlmProviderSelected ? CurrentGlmAccount is not null : CodexProviderSelected
         ? IsCodexSignedIn
         : KimiProviderSelected ? IsKimiSignedIn : GrokProviderSelected ? IsGrokSignedIn : _currentAccount is not null;
     public bool HasMultipleAccounts => Accounts.Count > 1;
     /// <summary>True when the shown account is just the live ~/.claude login because no selection was stored - i.e. a
     /// guess, not the user's choice. Shown as a hint so a lost selection can't pass for correct state.</summary>
-    public bool AccountIsFallback => !CodexProviderSelected && !KimiProviderSelected && !GrokProviderSelected && AccountService.Instance.ActiveIsFallback;
+    public bool AccountIsFallback => !GlmProviderSelected && !CodexProviderSelected && !KimiProviderSelected && !GrokProviderSelected && AccountService.Instance.ActiveIsFallback;
 
     private string? _codexAccountEmail;
     private string? _codexAccountName;
@@ -488,14 +500,14 @@ public sealed partial class MainViewModel : Observable
         foreach (var account in Accounts) account.RefreshProviderSelection();
         foreach (var account in CodexAccounts) account.RefreshProviderSelection();
         foreach (var account in GrokAccounts) account.RefreshProviderSelection();
-        // Account/provider selection is presentation state for already-open chats. Their pills and processes remain
-        // session-owned; only the rows revealed by opening the model popup follow the newly selected provider.
+        // New-chat account/provider selection leaves existing chats bound to their own accounts and model catalogs.
         foreach (var chat in Chats.Concat(LiveBridgePeers).Distinct())
-            chat.RefreshModelPicker(AppSettings.Current.DefaultProvider);
+            chat.RefreshModelPicker();
         Raise(nameof(IsCodexSelected));
         Raise(nameof(IsKimiSelected));
         Raise(nameof(IsGrokSelected));
         Raise(nameof(AccountInitial));
+        Raise(nameof(CurrentGlmAccount));
         Raise(nameof(AccountLabel));
         Raise(nameof(AccountSub));
         Raise(nameof(IsSignedIn));
@@ -622,16 +634,19 @@ public sealed partial class MainViewModel : Observable
         var moved = new ChatViewModel(chat.Cwd, resume: sid, fork: false, title: chat.Title,
             accountId: accountId, provider: "claude")
             { Pinned = chat.Pinned, ExcludeFromMemory = chat.ExcludeFromMemory };
+        moved.RestoreGoal(chat.Goal);
         moved.Items.Add(new DividerItem { Label = $"→ moved to {accountLabel ?? "the active Claude account"}" });
         // Bridge identity must survive the respawn or a moved pane loses its role in the roster.
         moved.BridgeLabel = chat.BridgeLabel;
         moved.IsBridgeHost = chat.IsBridgeHost;
+        moved.IsAdvancedBridgeHost = chat.IsAdvancedBridgeHost;
         moved.IsBridgeManager = chat.IsBridgeManager;   // the crown moves with the conversation
         moved.Prelude = chat.Prelude;
         moved.AppendSystemPrompt = chat.AppendSystemPrompt;
         if (chat.Mode is { } mode) moved.SetMode(mode);
         moved.Model = chat.Model;
         moved.Effort = chat.Effort;
+        moved.FastMode = chat.FastMode;   // its own, not the new-chat seed another pane's toggle last wrote
 
         var wasActive = ReferenceEquals(ActiveChat, chat);
         var wasSecondaryActive = ReferenceEquals(SecondaryActiveChat, chat);
@@ -713,16 +728,19 @@ public sealed partial class MainViewModel : Observable
         var moved = new ChatViewModel(chat.Cwd, resume: sid, fork: false, title: chat.Title,
             accountId: accountId, provider: "codex")
             { Pinned = chat.Pinned, ExcludeFromMemory = chat.ExcludeFromMemory };
+        moved.RestoreGoal(chat.Goal);
         moved.Items.Add(new DividerItem { Label = $"→ moved to {accountLabel ?? "the active Codex account"}" });
         // Bridge identity must survive the respawn or a moved pane loses its role in the roster.
         moved.BridgeLabel = chat.BridgeLabel;
         moved.IsBridgeHost = chat.IsBridgeHost;
+        moved.IsAdvancedBridgeHost = chat.IsAdvancedBridgeHost;
         moved.IsBridgeManager = chat.IsBridgeManager;   // the crown moves with the conversation
         moved.Prelude = chat.Prelude;
         moved.AppendSystemPrompt = chat.AppendSystemPrompt;
         if (chat.Mode is { } mode) moved.SetMode(mode);
         moved.Model = chat.Model;
         moved.Effort = chat.Effort;
+        moved.FastMode = chat.FastMode;   // its own, not the new-chat seed another pane's toggle last wrote
 
         var wasActive = ReferenceEquals(ActiveChat, chat);
         var wasSecondaryActive = ReferenceEquals(SecondaryActiveChat, chat);
@@ -809,6 +827,8 @@ public sealed partial class MainViewModel : Observable
         // Model and effort are provider-specific ids (a Codex model id means nothing to Claude), so the replacement
         // keeps the defaults its own constructor loaded. Only provider-neutral state travels.
         var moved = new ChatViewModel(chat.Cwd, title: chat.Title, provider: provider) { Pinned = chat.Pinned };
+        moved.RestoreChatMetadata(chat.Metadata);
+        moved.RestoreGoal(chat.Goal);
         moved.Items.Add(new DividerItem
         {
             Label = $"→ switched to {moved.ProviderDisplay} — new conversation " +
@@ -816,6 +836,7 @@ public sealed partial class MainViewModel : Observable
         });
         moved.Prelude = chat.Prelude;
         if (chat.Mode is { } mode) moved.SetMode(mode);
+        moved.FastMode = chat.FastMode;   // a per-chat preference, not the new-chat seed another pane's toggle last wrote
 
         var wasActive = ReferenceEquals(ActiveChat, chat);
         var wasSecondaryActive = ReferenceEquals(SecondaryActiveChat, chat);
@@ -831,6 +852,7 @@ public sealed partial class MainViewModel : Observable
         {
             // The pane keeps its roster number; only the agent behind it changes, so re-label and re-brief it.
             moved.IsBridgeHost = chat.IsBridgeHost;
+            moved.IsAdvancedBridgeHost = chat.IsAdvancedBridgeHost;
             moved.IsBridgeManager = chat.IsBridgeManager;   // a provider swap must not silently fire the manager
             moved.BridgeLabel = number > 0 ? AgentLabel(moved, number) : chat.BridgeLabel;
             if (number > 0) moved.Title = $"Bridge · {moved.AgentDisplay} {number}";
@@ -900,9 +922,13 @@ public sealed partial class MainViewModel : Observable
         // Opening Home can request a fresh scan while an older startup/settings scan is still running. Only the last
         // request may publish, or a slower stale result can put an older folder back above the chat just created.
         var version = Interlocked.Increment(ref _projectLoadVersion);
+        var onlyOwnedForScan = AppSettings.Current.ShowOnlyOwnedSessions;
+        var ownedForScan = onlyOwnedForScan
+            ? AppSettings.Current.OwnedSessions.ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
         Task.Run(() =>
         {
-            var projects = SessionCatalog.ListProjects();
+            var projects = SessionCatalog.ListProjects(allowedSessionIds: ownedForScan);
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
             {
                 if (version != Volatile.Read(ref _projectLoadVersion)) return;
@@ -920,12 +946,12 @@ public sealed partial class MainViewModel : Observable
                     var sessions = p.Sessions.Where(Keep).ToList();
                     if (onlyOwned && sessions.Count == 0) continue;   // hide projects with no VibeCode chats
                     var vm = new ProjectVm { Cwd = p.Cwd, Name = p.Name, LastModified = p.LastModified };
-                    foreach (var sess in sessions) vm.Sessions.Add(sess);
+                    foreach (var sess in sessions) vm.Sessions.Add(WithChatTitle(sess));
                     Projects.Add(vm);
                 }
                 foreach (var sess in projects.Where(p => !hidden.Contains(p.Cwd)).SelectMany(p => p.Sessions)
                              .Where(Keep).OrderByDescending(s => s.LastModified).Take(10))
-                    RecentSessions.Add(sess);
+                    RecentSessions.Add(WithChatTitle(sess));
                 RefreshRecentProjects();
                 Raise(nameof(HiddenCount));
             });
@@ -947,7 +973,9 @@ public sealed partial class MainViewModel : Observable
             .Where(project => !Hidden(project.Cwd) && Directory.Exists(project.Cwd))
             .Select(project => new RecentDirectoryCandidate(
                 project.Cwd, project.Name, new DateTimeOffset(project.LastModified)));
-        var suggestions = RecentDirectoryHistory.SelectSuggestions(remembered.Concat(catalog));
+        // The no-directory folder has its own fixed chip on the home screen; as a project chip it would show twice.
+        var suggestions = RecentDirectoryHistory.SelectSuggestions(remembered.Concat(catalog),
+            new[] { NoDirectoryWorkspace.Folder });
 
         RecentProjects.Clear();
         foreach (var suggestion in suggestions)
@@ -975,6 +1003,16 @@ public sealed partial class MainViewModel : Observable
 
     private void RememberRecentDirectory(string cwd)
     {
+        if (NoDirectoryWorkspace.IsNoDirectory(cwd))
+        {
+            // Not a project, so it stays out of the folder MRU - otherwise the folder box would prefill with an
+            // AppData path. Starting a chat still un-hides its history group, as it does for any folder.
+            if (AppSettings.Current.HiddenProjects.RemoveWhere(NoDirectoryWorkspace.IsNoDirectory) == 0) return;
+            Raise(nameof(HiddenCount));
+            RefreshRecentProjects();
+            RequestSave();
+            return;
+        }
         if (!AppSettings.Current.RememberRecentDirectory(cwd)) return;
         Raise(nameof(HiddenCount));
         Raise(nameof(PreferredNewChatCwd));
@@ -1009,13 +1047,6 @@ public sealed partial class MainViewModel : Observable
         return count;
     }
 
-    /// <param name="configure">Runs on the new chat immediately BEFORE it spawns. The CLI is handed the model and
-    /// effort at spawn time, so anything that must apply to the very first turn has to be set here — afterwards it
-    /// would take a restart (or a push that also rewrites the app-wide default).</param>
-    /// <param name="accountId">Which saved login the session signs in as. Null means "whatever this provider has
-    /// selected", which is what every ordinary new chat wants; a caller that lets the user pick an account up front
-    /// (Demon Mode) passes one, and so does <see cref="ResumeSession"/> - a transcript can only be resumed by the
-    /// account whose home stores it. <c>""</c> means the shared <c>~/.claude</c> home explicitly.</param>
     public ChatViewModel NewChat(string cwd, string? resume = null, bool fork = false, string? title = null,
         string? provider = null, string? accountId = null, bool activatePrimary = true,
         Action<ChatViewModel>? configure = null)
@@ -1123,9 +1154,17 @@ public sealed partial class MainViewModel : Observable
     /// <summary>Persist state whenever a chat gets (or changes) its resumable session id, and mark it "ours".</summary>
     private void Track(ChatViewModel c)
     {
+        BridgeMailboxStore.ScheduleCleanup(c.Cwd);
+        BridgeEditLedger.ScheduleCleanup(c.Cwd);
+        c.BridgeToolHandler = (tool, args) => InvokeBridgeTool(c, tool, args);
+        c.BridgeEditRecorder = edit => RecordBridgeEdit(c, edit);
+        c.PeerNotificationWakeAllowed = () => ShouldWakeBridgePeer(c);
         c.RefreshPeerChatAccess = () => RefreshBridgeChatAccess(c);
         c.MessageSent += () =>
         {
+            _bridgeMcpSends.Remove(c);
+            if (!c.IsPeerNotificationTurn && c.Items.OfType<UserItem>().LastOrDefault()?.AgentKind != "Coordination update")
+                InvalidateBridgeReview(c);
             BumpChatToTop(c);   // sending in a chat floats it to the top of the sidebar list
             RememberRecentDirectory(c.Cwd);
         };
@@ -1133,6 +1172,7 @@ public sealed partial class MainViewModel : Observable
         {
             if (e.PropertyName == nameof(ChatViewModel.SessionId))
             {
+                c.RememberChatMetadata();
                 // Any chat opened/created inside VibeCode is one of "our" chats and stays visible.
                 if (c.SessionId is { } id) AppSettings.Current.OwnedSessions.Add(id);
                 SaveSession();       // persists OwnedSessions + OpenChats
@@ -1150,8 +1190,13 @@ public sealed partial class MainViewModel : Observable
                 OnBridgePaneStatusChanged(c);   // surface a crashed bridge peer to its still-running peers
                 OnBridgeManagerStatusChanged(c); // manager loop: route dispatches / relay worker reports
             }
+            else if (e.PropertyName == nameof(ChatViewModel.ShowWorkingText) && TryGetLiveBridge(c, out var activeBridge))
+            {
+                RefreshBridgeWorkingCue(activeBridge.Panes);
+            }
             else if (e.PropertyName is nameof(ChatViewModel.Draft) or nameof(ChatViewModel.Title)
-                     or nameof(ChatViewModel.Mode))
+                     or nameof(ChatViewModel.Mode) or nameof(ChatViewModel.Model) or nameof(ChatViewModel.Effort)
+                     or nameof(ChatViewModel.BridgeWorkerConfiguration) or nameof(ChatViewModel.Goal))
             {
                 // An unsent prompt / a renamed chat / a permission mode must not need a polite shutdown to survive.
                 // Mode is in here rather than in SetMode so the pill and the file agree however the mode moved -
@@ -1204,7 +1249,7 @@ public sealed partial class MainViewModel : Observable
             // Also keep a chat that has an unsent draft but no id yet: a first prompt typed into a brand-new chat has
             // no session_id until a turn runs, and dropping it here is exactly how an unsent draft "just disappears"
             // after a restart. A chat with neither an id nor a draft is still discarded.
-            .Where(c => c.SessionId is not null || !string.IsNullOrWhiteSpace(c.Draft))
+            .Where(c => c.SessionId is not null || !string.IsNullOrWhiteSpace(c.Draft) || c.Goal is not null || c.IsLocked)
             .Select(c => new OpenChatState
             {
                 Cwd = c.Cwd,
@@ -1214,9 +1259,12 @@ public sealed partial class MainViewModel : Observable
                 Active = c == ActiveChat,
                 SecondaryActive = c == SecondaryActiveChat,
                 Pinned = c.Pinned,
+                Metadata = c.Metadata,
                 AccountId = c.AccountId,
                 Mode = c.Mode,
+                FastMode = c.ShowFastMode ? c.FastMode : null,
                 Draft = NullIfEmpty(c.Draft),
+                Goal = c.Goal,
                 ExcludeFromMemory = c.ExcludeFromMemory,
             })
             .ToList();
@@ -1314,11 +1362,12 @@ public sealed partial class MainViewModel : Observable
         // Restore chats that either have a resumable id OR carry an unsent draft (a never-sent first prompt): the
         // latter has no SessionId, so gating restore on the id alone silently threw the draft away on every launch.
         var saved = AppSettings.Current.OpenChats
-            .Where(o => o.SessionId is not null || !string.IsNullOrWhiteSpace(o.Draft))
+            .Where(o => o.SessionId is not null || !string.IsNullOrWhiteSpace(o.Draft) || o.Metadata?.IsLocked == true)
             .Where(o => o.SessionId is null || !AppSettings.Current.DeletedSessions.Contains(o.SessionId))
             .ToList();
         ChatViewModel? active = null;
         ChatViewModel? secondaryActive = null;
+        var chatsToStart = new List<ChatViewModel>();
         // saved is newest-first (same order as Chats); Add() appends so the order is preserved
         foreach (var oc in saved)
         {
@@ -1326,9 +1375,12 @@ public sealed partial class MainViewModel : Observable
             // dispatcher, every LATER chat was never added, and the next autosave wrote that shorter list back.
             try
             {
-                var cwd = Directory.Exists(oc.Cwd) ? oc.Cwd : DefaultCwd;
+                var cwd = NoDirectoryWorkspace.DirectoryExists(oc.Cwd) ? oc.Cwd : DefaultCwd;
                 var chat = new ChatViewModel(cwd, oc.SessionId, fork: false, title: oc.Title, accountId: oc.AccountId, provider: oc.Provider)
                 { Pinned = oc.Pinned, Draft = oc.Draft ?? "", ExcludeFromMemory = oc.ExcludeFromMemory };
+                if (oc.SessionId is null || !AppSettings.Current.ChatMetadata.ContainsKey(ChatMetadata.Key(chat.Provider, oc.SessionId)))
+                    chat.RestoreChatMetadata(oc.Metadata);
+                chat.RestoreGoal(oc.Goal);
                 // Put the chat back in the mode it was left in. SetMode (not the property) because the provider's
                 // init event reports the CLI's own mode and overwrites anything the pane hasn't registered as a
                 // deliberate choice - which is exactly how every restored chat used to come back on "ask".
@@ -1338,10 +1390,12 @@ public sealed partial class MainViewModel : Observable
                 chat.SetMode(AppSettings.IsKnownPermissionMode(oc.Mode)
                     ? oc.Mode!
                     : AppSettings.Current.DefaultMode);
+                // This chat's own fast mode, not the new-chat seed (whatever any chat toggled last).
+                if (oc.FastMode is { } fast) chat.FastMode = fast;
                 Track(chat);
                 MarkOwned(oc.SessionId);   // restored chats stay "ours" so their project shows in the list
                 Chats.Add(chat);
-                chat.Start();
+                chatsToStart.Add(chat);
                 if (oc.Active) active = chat;
                 if (oc.SecondaryActive) secondaryActive = chat;
             }
@@ -1360,7 +1414,11 @@ public sealed partial class MainViewModel : Observable
         // start a small fleet of agents on every launch.
         foreach (var sb in AppSettings.Current.SavedBridges)
             if (Chats.FirstOrDefault(c => c.SessionId == sb.HostSessionId && c.Provider == sb.Provider) is { } anchor)
+            {
                 anchor.IsBridgeHost = true;
+                anchor.IsAdvancedBridgeHost = sb.HostIsManager || sb.HostCoordinatesOnly || sb.HostCoordinatorSessionId is not null
+                    || sb.Peers.Any(p => p.IsManager || p.CoordinatesOnly || p.CoordinatorSessionId is not null);
+            }
 
         if (Chats.Any(c => c.Pinned)) ReorderPinned();   // pinned chats float to the top on restore too
         if (Chats.Count > 0)
@@ -1376,11 +1434,11 @@ public sealed partial class MainViewModel : Observable
         }
 
         // Put the bridge back on screen if the user was looking at it (its host was the active chat, or the overlay was
-        // up when the app died). A bridge that was running in the BACKGROUND stays dormant behind its host cue.
-        var bridgeAnchor = ActiveChat is not null && ChatVisibleInSidebar(ActiveChat) && HasSavedBridgeFor(ActiveChat)
+        // up when the app died). A Bridge that was running in the background reconnects below without taking focus.
+        var bridgeAnchor = ActiveChat is not null && ChatVisibleInSidebar(ActiveChat) && ShouldReconnectBridgeAtStartup(ActiveChat)
             ? ActiveChat
             : AppSettings.Current.BridgeVisible
-                ? Chats.FirstOrDefault(c => ChatVisibleInSidebar(c) && HasSavedBridgeFor(c))
+                ? Chats.FirstOrDefault(c => ChatVisibleInSidebar(c) && ShouldReconnectBridgeAtStartup(c))
                 : null;
         if (bridgeAnchor is not null) RestoreBridge(bridgeAnchor);
         SecondaryShowBridge = AppSettings.Current.SecondaryBridgeVisible
@@ -1395,9 +1453,23 @@ public sealed partial class MainViewModel : Observable
             && SecondaryActiveChat is { } secondaryAnchor
             && !ReferenceEquals(secondaryAnchor, ActiveChat)
             && ChatVisibleInSidebar(secondaryAnchor)
-            && HasSavedBridgeFor(secondaryAnchor))
+            && ShouldReconnectBridgeAtStartup(secondaryAnchor))
         {
             RestoreBridge(secondaryAnchor, showPrimary: false);
+        }
+        // An open host owned a live Bridge before the crash, even if another chat was on screen.
+        // Reconnect its roster before starting providers so the first tool call sees its membership.
+        foreach (var anchor in Chats.Where(ShouldReconnectBridgeAtStartup).ToArray())
+            if (!TryGetLiveBridge(anchor, out _))
+                RestoreBridge(anchor, showPrimary: false, showOnSecondary: false);
+        foreach (var chat in chatsToStart)
+        {
+            try { chat.Start(); }
+            catch (Exception ex)
+            {
+                chat.Status = "error";
+                CrashLog.Note("ChatRestoreFailed", $"session {chat.SessionId ?? "(none)"}: {ex.Message}");
+            }
         }
         RefreshResumableBridges();
         RefreshChatAccountFilter();   // no-op unless per-account isolation is on; then it hides other-account rows
@@ -1453,6 +1525,23 @@ public sealed partial class MainViewModel : Observable
 
     public ChatViewModel ResumeSession(SessionEntry session, bool activatePrimary = true)
     {
+        var failedPane = AllLivePanes().FirstOrDefault(pane => pane.SessionId == session.SessionId &&
+            pane.Provider == session.Provider && pane.Status is "error" or "closed");
+        if (failedPane is not null) ReconnectLiveBridgePane(failedPane);
+        var savedBridge = AppSettings.Current.SavedBridges.FirstOrDefault(saved =>
+            (saved.HostSessionId == session.SessionId && saved.Provider == session.Provider) ||
+            saved.Peers.Any(peer => peer.SessionId == session.SessionId && (peer.Provider ?? saved.Provider) == session.Provider));
+        if (savedBridge is not null && ResumeSavedBridge(new SavedBridgeVm(savedBridge), activatePrimary))
+        {
+            var resumed = LiveBridges().SelectMany(bridge => bridge.Panes).FirstOrDefault(pane =>
+                pane.SessionId == session.SessionId && pane.Provider == session.Provider);
+            if (resumed is not null)
+            {
+                if (resumed.BridgeSingleTerminal) SelectBridgeTerminal(resumed);
+                else SelectBridgePane(resumed);
+                return resumed;
+            }
+        }
         var existing = Chats.FirstOrDefault(c => c.SessionId == session.SessionId && c.Provider == session.Provider);
         if (existing is not null && existing.Status is not ("closed" or "error"))
         {
@@ -1467,7 +1556,7 @@ public sealed partial class MainViewModel : Observable
             Chats.Remove(existing);   // replace an exited/error row instead of showing two copies of one transcript
             if (ReferenceEquals(SecondaryActiveChat, existing)) SecondaryActiveChat = null;
         }
-        var cwd = Directory.Exists(session.Cwd)
+        var cwd = NoDirectoryWorkspace.DirectoryExists(session.Cwd)
             ? session.Cwd
             : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         // Resume under the login whose home actually holds this transcript, NOT the currently selected one. The CLI
@@ -1482,6 +1571,7 @@ public sealed partial class MainViewModel : Observable
 
     public void CloseChat(ChatViewModel chat)
     {
+        if (ChatRemovalBlocked(chat)) return;
         // Closing a live host snapshots and disposes its peers first. The snapshot is deliberately KEPT: closing one
         // sidebar row must never destroy a multi-agent bridge. Every peer conversation stays resumable from the saved
         // bridge list (and a relaunch rebuilds the host row from it), which is what "close" used to silently delete.
@@ -1511,6 +1601,8 @@ public sealed partial class MainViewModel : Observable
     /// </summary>
     public void DeleteChat(ChatViewModel chat)
     {
+        if (ChatRemovalBlocked(chat)) return;
+        DeleteBridgeMailboxForChat(chat);
         var settings = AppSettings.Current;
         // Only this chat's own session. Deleting one sidebar row must not tombstone the peers of a bridge it hosts -
         // CloseChat deliberately keeps that roster resumable, and silently burying it here would be the same class of
@@ -1579,17 +1671,6 @@ public sealed partial class MainViewModel : Observable
 
     // ---------------- the second working shell's own Bridge ----------------
 
-    /// <summary>
-    /// The host of the roster the SECOND working shell is showing, when that is a DIFFERENT bridge from the one on
-    /// the primary window. Null means the two shells share a roster (or shell 2 has no bridge), which is the older
-    /// "one bridge spread over two displays" arrangement and still works exactly as before.
-    /// <para>
-    /// The roster itself stays in <see cref="_parkedBridges"/> rather than becoming a second authoritative surface.
-    /// That is the whole trick: a parked roster is already fully live — its processes run, and every "for each live
-    /// bridge" sweep (idle timeout, real-time-sharing re-brief, peer muting, Demon bookkeeping) already walks the
-    /// park list. Pointing a window at one costs nothing but the binding.
-    /// </para>
-    /// </summary>
     private ChatViewModel? _secondaryBridgeHost;
 
     /// <summary>The roster bound to the second shell's Bridge surface. Falls back to the shared roster so that
@@ -1698,6 +1779,10 @@ public sealed partial class MainViewModel : Observable
     /// </summary>
     private LiveBridge? ReplaceLivePane(ChatViewModel old, ChatViewModel moved)
     {
+        moved.RestoreChatMetadata(old.Metadata);
+        CopyBridgeTerminalState(old, moved);
+        foreach (var peer in AllLivePanes().Where(p => p.BridgeCoordinatorAgentId == old.BridgeAgentId))
+            peer.BridgeCoordinatorAgentId = moved.BridgeAgentId;
         var paneIndex = BridgePanes.IndexOf(old);
         if (paneIndex >= 0)
         {
@@ -1789,6 +1874,8 @@ public sealed partial class MainViewModel : Observable
 
     public void SelectBridgePane(ChatViewModel pane)
     {
+        if (pane.BridgeSingleTerminal && TryGetLiveBridge(pane, out var selectedBridge))
+            foreach (var peer in selectedBridge.Panes) peer.BridgeTerminalSelected = ReferenceEquals(peer, pane);
         // A pane clicked in shell 2's own roster selects within THAT roster; the primary's panel must not follow it.
         if (SecondaryBridge is { } secondary && secondary.Panes.Contains(pane))
         {
@@ -1805,8 +1892,7 @@ public sealed partial class MainViewModel : Observable
     /// <summary>A roster currently owns the Bridge surface (the overlay itself may be hidden).</summary>
     public bool IsBridge => BridgePanes.Count > 0;
     public bool CanAddBridgeAgent =>
-        !IsDemonMode   // a Demon team is a fixed roster; a seventeenth agent would have no role and no lane
-        && BridgeAgentPolicy.CanAdd(BridgePanes.Count, AppSettings.Current.BridgeAgentLimit);
+        BridgeAgentPolicy.CanAdd(BridgePanes.Count, AppSettings.Current.BridgeAgentLimit);
     public string BridgeAgentName => BridgePanes.FirstOrDefault()?.AgentDisplay ?? ActiveChat?.AgentDisplay ?? "Agent";
     public string AddBridgeAgentText => "Add agent";
     /// <summary>Tooltip for Add agent. When the roster is at the Settings cap, spell out the limit so the
@@ -1815,9 +1901,7 @@ public sealed partial class MainViewModel : Observable
         CanAddBridgeAgent
             ? $"Choose Claude Code, OpenAI Codex, Kimi Code, or Grok (up to {AppSettings.Current.BridgeAgentLimit} agents)"
             : $"Bridge is full ({BridgePanes.Count} / {AppSettings.Current.BridgeAgentLimit}). Raise the limit in Settings → Bridge.";
-    /// <summary>The Announce affordance is live whenever a Bridge roster owns the surface — except in Demon Mode,
-    /// where broadcasting to all sixteen would be a second way for the user to talk to the read-only workers.</summary>
-    public bool CanAnnounceToBridge => IsBridge && !IsDemonMode;
+    public bool CanAnnounceToBridge => IsBridge;
     public string BridgeSummary => SummaryOf(BridgePanes);
 
     /// <summary>The full working directory shared by every pane in the active Bridge.</summary>
@@ -1885,22 +1969,18 @@ public sealed partial class MainViewModel : Observable
     public string SecondaryBridgeGrokUsageSummary => GrokUsageSummaryOf(SecondaryBridgePanes);
     public bool SecondaryHasMinimizedBridgePanes => SecondaryBridgePanes.Any(p => p.BridgeMinimized);
 
-    /// <summary>Demon Mode refuses the second display outright, so a roster shown over there is never a Demon wall
-    /// and its Announce/Add/Fork affordances need no Demon caveat of their own.</summary>
-    public bool SecondaryCanAnnounceToBridge => SecondaryIsBridge && !SecondaryShowsDemonRoster;
-    public bool SecondaryCanAddBridgeAgent => !SecondaryShowsDemonRoster
-        && BridgeAgentPolicy.CanAdd(SecondaryBridgePanes.Count, AppSettings.Current.BridgeAgentLimit);
+    public bool SecondaryCanAnnounceToBridge => SecondaryIsBridge;
+    public bool SecondaryCanAddBridgeAgent => BridgeAgentPolicy.CanAdd(SecondaryBridgePanes.Count, AppSettings.Current.BridgeAgentLimit);
     public string SecondaryAddBridgeAgentToolTip =>
         SecondaryCanAddBridgeAgent
             ? $"Choose Claude Code, OpenAI Codex, Kimi Code, or Grok (up to {AppSettings.Current.BridgeAgentLimit} agents)"
             : $"Bridge is full ({SecondaryBridgePanes.Count} / {AppSettings.Current.BridgeAgentLimit}). Raise the limit in Settings → Bridge.";
     public bool SecondaryCanForkBridge =>
-        SecondaryIsBridge && !SecondaryShowsDemonRoster && SecondaryBridgePanes.Any(p => p.CanFork);
+        SecondaryIsBridge && SecondaryBridgePanes.Any(p => p.CanFork);
     public string SecondaryForkBridgeToolTip => SecondaryCanForkBridge
         ? "Fork this bridge — a second roster that starts with everything these agents already know"
-        : ForkBridgeUnavailableReason(SecondaryBridgePanes, SecondaryShowsDemonRoster);
+        : ForkBridgeUnavailableReason();
 
-    private bool SecondaryShowsDemonRoster => SecondaryBridgePanes.Any(p => p.IsDemonOrchestrator);
 
     private void RaiseBridgeGrokUsage()
     {
@@ -1916,6 +1996,13 @@ public sealed partial class MainViewModel : Observable
     /// roster change, and every one of these is a trivial projection of the roster.</summary>
     private void RaiseSecondaryBridgeUi()
     {
+        ReconcileBridgeTerminals(SecondaryBridgePanes);
+        _secondarySharedBridgeTerminal?.Reconcile(SecondaryBridgePanes);
+        Raise(nameof(SecondarySharedBridgeTerminal));
+        if (SecondaryIsSingleTerminalBridge && SecondaryBridgePanes.FirstOrDefault(p => p.BridgeTerminalSelected) is { } selected)
+            SelectBridgePane(selected);
+        Raise(nameof(SecondaryIsSingleTerminalBridge));
+        Raise(nameof(SecondaryBridgeTerminalsText));
         Raise(nameof(SecondaryBridgePanes));
         Raise(nameof(HasSeparateSecondaryBridge));
         Raise(nameof(SecondaryIsBridge));
@@ -1961,6 +2048,13 @@ public sealed partial class MainViewModel : Observable
 
     private void RaiseBridgeUi()
     {
+        ReconcileBridgeTerminals(BridgePanes);
+        _sharedBridgeTerminal?.Reconcile(BridgePanes);
+        Raise(nameof(SharedBridgeTerminal));
+        if (IsSingleTerminalBridge && BridgePanes.FirstOrDefault(p => p.BridgeTerminalSelected) is { } selected)
+            SelectBridgePane(selected);
+        Raise(nameof(IsSingleTerminalBridge));
+        Raise(nameof(BridgeTerminalsText));
         Raise(nameof(IsBridge));
         Raise(nameof(CanAnnounceToBridge));
         RaiseBridgeFork();
@@ -1979,9 +2073,6 @@ public sealed partial class MainViewModel : Observable
         RaiseBridgeGrokUsage();
         Raise(nameof(BridgeGridRows));
         Raise(nameof(HasMinimizedBridgePanes));
-        // Every roster change can also change whether the DEMON roster is the one on screen (park / un-park), which
-        // is what the demon wall and its badge are drawn from.
-        RaiseDemonUi();
         Raise(nameof(PanelChat));
         Raise(nameof(BridgePanelChat));
         // Shell 2 shares this roster whenever it has none of its own, and its Grok/limit numbers are read from the
@@ -2038,7 +2129,7 @@ public sealed partial class MainViewModel : Observable
     private static void RefreshBridgeWorkingCue(IReadOnlyList<ChatViewModel> panes)
     {
         if (panes.FirstOrDefault() is { } host)
-            host.BridgeHasWorkingPane = panes.Any(p => p.IsWorking);
+            host.BridgeHasWorkingPane = panes.Any(p => p.ShowWorkingText);
     }
 
     private string _bridgeHint = "";
@@ -2095,9 +2186,6 @@ public sealed partial class MainViewModel : Observable
         _bridgeActivity = default;
         _bridgeBoard = DefaultBridgeBoard;   // the parked roster took its board with it; whatever comes next starts on the default
         _peerTraffic = new PeerTrafficLedger();   // …and so did its traffic; the next roster here starts on a clean budget
-        // Parking a Demon roster does not end the team, but it does take it off the surface — and the demon wall
-        // must go with it, whatever the caller does next.
-        RaiseDemonUi();
     }
 
     /// <summary>Swap a parked roster back into the bound collection; no transcript IO or CLI launch occurs.</summary>
@@ -2291,6 +2379,7 @@ public sealed partial class MainViewModel : Observable
         NoteBridgeActivity();
         StartBridgeIdleTimer();
         RaiseBridgeUi();
+        _ = host.RequestBridgeTaskTitleNowAsync();       // a host mid-task names it now, not at its next request
     }
 
     /// <summary>Activate or resume a Bridge from the second full shell without changing the primary active chat.
@@ -2342,11 +2431,12 @@ public sealed partial class MainViewModel : Observable
         StartBridgeIdleTimer();
         RaiseSecondaryBridgeUi();
         RefreshResumableBridges();
+        _ = host.RequestBridgeTaskTitleNowAsync();       // a host mid-task names it now, not at its next request
         return true;
     }
 
     /// <summary>Add another agent to the bridge up to the configured limit. A null provider matches
-    /// the host; the header picker can explicitly add Claude, Codex, Kimi, or Grok to an existing bridge.</summary>
+    /// the host; the header picker can explicitly add Claude, Codex, Kimi, Grok, or GLM to an existing bridge.</summary>
     public void AddBridgeAgent(string? provider = null) => AddBridgeAgent(provider, null);
 
     /// <summary>Add an agent to whatever Bridge the SECOND working shell is showing. Falls through to the shared
@@ -2356,6 +2446,10 @@ public sealed partial class MainViewModel : Observable
     /// <summary><paramref name="target"/> null means the primary surface; pass shell 2's roster to grow the bridge
     /// on the other display without disturbing this one.</summary>
     private void AddBridgeAgent(string? provider, LiveBridge? target)
+        => AddBridgeAgent(provider, target, null, null);
+
+    private void AddBridgeAgent(string? provider, LiveBridge? target, ChatViewModel? settingsTemplate, ChatViewModel? coordinator,
+        BridgeAgentConfiguration? configuration = null)
     {
         var panes = PanesFor(target);
         var board = BoardFor(target);
@@ -2363,6 +2457,13 @@ public sealed partial class MainViewModel : Observable
         if (!BridgeAgentPolicy.CanAdd(panes.Count, AppSettings.Current.BridgeAgentLimit)) return;
         ResetBridgeExpand(target);         // a new pane must not land hidden behind a focused peer - back to the grid
         var host = panes[0];
+        var defaults = settingsTemplate ?? host;
+        if (coordinator is null && !_launchingOrchestratorGroup && panes.Count(p => p.IsBridgeManager) == 1)
+            coordinator = ManagerOf(panes);
+        if (configuration is null && coordinator?.BridgeWorkerConfiguration is { } workerConfiguration &&
+            (provider is null || string.Equals(provider, workerConfiguration.Provider, StringComparison.OrdinalIgnoreCase)))
+            configuration = workerConfiguration;
+        provider = configuration?.Provider ?? provider;
         var cwd = host.Cwd;
         provider = provider?.Trim().ToLowerInvariant() switch
         {
@@ -2370,28 +2471,33 @@ public sealed partial class MainViewModel : Observable
             "codex" => "codex",
             "kimi" => "kimi",
             "grok" => "grok",
-            _ => host.Provider,
+            Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
+            _ => defaults.Provider,
         };
         var k = panes.Count + 1;          // compact roster => the new pane is always the next contiguous number
         var roster = panes.Select(BridgeNumberOf).Where(n => n > 0).ToList();   // the live roster the new peer joins…
         roster.Add(k);                    // …plus itself
         AppendPeerToBridgeFile(cwd, board, k);   // seed the new peer's identity so everyone sees it in the roster
-        var sameProvider = string.Equals(provider, host.Provider, StringComparison.OrdinalIgnoreCase);
+        var sameProvider = string.Equals(provider, defaults.Provider, StringComparison.OrdinalIgnoreCase);
         var managerNumber = ManagerNumberIn(panes);
-        var chat = new ChatViewModel(cwd, accountId: sameProvider ? host.AccountId : null, provider: provider);
+        var chat = new ChatViewModel(cwd, accountId: sameProvider ? defaults.AccountId : null, provider: provider);
         chat.Title = $"Bridge · {chat.AgentDisplay} {k}";
         // A peer works on the host's task, so muting the host has to mute everything it brings along - otherwise
         // the conversation is excluded from the brain while its bridge agents keep writing the same work into it.
-        chat.ExcludeFromMemory = host.ExcludeFromMemory;
+        chat.ExcludeFromMemory = defaults.ExcludeFromMemory;
         chat.BridgeLabel = AgentLabel(chat, k);
+        chat.BridgeCoordinatorAgentId = coordinator?.BridgeAgentId;
+        if (coordinator is null && !_launchingOrchestratorGroup && panes.Count(p => p.IsBridgeManager) == 1)
+            chat.BridgeCoordinatorAgentId = ManagerOf(panes)?.BridgeAgentId;
         chat.AppendSystemPrompt = BridgePrompt(board, chat, k, roster, managerNumber);
-        chat.SetMode(host.Mode);       // new peers inherit the host's permission mode instead of defaulting to "ask"
+        chat.SetMode(defaults.Mode);
         if (sameProvider)
         {
-            chat.Model = host.Model;   // same-provider peers inherit the host's model + reasoning effort
-            chat.Effort = host.Effort; // (plain setters: never rewrite the global defaults while cloning a live pane)
-            chat.FastMode = host.FastMode;   // …and its fast mode, which is per chat rather than one shared setting
+            chat.Model = defaults.Model;
+            chat.Effort = defaults.Effort;
+            chat.FastMode = defaults.FastMode;
         }
+        if (configuration is not null) chat.ApplyBridgeConfiguration(configuration);
         // A cross-provider peer keeps the defaults loaded by its own constructor; a Codex model id is invalid for Claude.
         Track(chat);
         // Actively tell already-running peers that another agent joined (their system prompt is frozen at spawn,
@@ -2413,11 +2519,15 @@ public sealed partial class MainViewModel : Observable
         chat.Start();
         // Only while a crown is live: if the user stepped the manager down, new peers just join as equals — no
         // "fold it into the plan" update, and no auto-dispatch chain. Re-read the crown (not a stale managerNumber).
-        if (ManagerOf(panes) is { IsBridgeManager: true } mgr && !ReferenceEquals(mgr, chat))
+        if (!_launchingOrchestratorGroup && panes.Count(p => p.IsBridgeManager) == 1 &&
+            ManagerOf(panes) is { IsBridgeManager: true } mgr && !ReferenceEquals(mgr, chat))
+        {
+            chat.BridgeCoordinatorAgentId = mgr.BridgeAgentId;
             SendManagerUpdate(mgr,
                 $"{chat.AgentDisplay} agent #{k} just JOINED the bridge and is idle ({activeCount} agents now). " +
-                $"Fold it into the plan and put it to work: reply with a @@DISPATCH agent={k} block giving it an " +
+                $"Fold it into your group's plan and assign it a task through bridge_dispatch_task, giving it an " +
                 "unclaimed lane (or rebalance lanes if that helps the project finish sooner).");
+        }
         NoteBridgeActivity(target);
         SaveBridge(panes, board);  // keep the temp-save current
         RaiseRosterUi(target);
@@ -2425,18 +2535,14 @@ public sealed partial class MainViewModel : Observable
 
     // ---------------- forking a whole bridge ----------------
 
-    /// <summary>Whether Fork bridge can run: a live roster, not a Demon team (a fixed, deliberately unresumable
-    /// roster), and at least one pane whose provider session can actually be branched.</summary>
-    public bool CanForkBridge => IsBridge && !IsDemonMode && BridgePanes.Any(p => p.CanFork);
+    public bool CanForkBridge => IsBridge && BridgePanes.Any(p => p.CanFork);
 
     public string ForkBridgeToolTip => CanForkBridge
         ? "Fork this bridge — a second roster that starts with everything these agents already know"
-        : ForkBridgeUnavailableReason(BridgePanes, IsDemonMode);
+        : ForkBridgeUnavailableReason();
 
-    private static string ForkBridgeUnavailableReason(IReadOnlyList<ChatViewModel> panes, bool demon) =>
-        demon
-            ? "A Demon team cannot be forked"
-            : "Nothing to fork yet — agents can be branched once they've had a turn";
+    private static string ForkBridgeUnavailableReason() =>
+        "Nothing to fork yet — agents can be branched once they've had a turn";
 
     /// <summary>
     /// Branch the WHOLE roster into a second bridge that starts with the first one's knowledge. Every pane is forked
@@ -2482,8 +2588,15 @@ public sealed partial class MainViewModel : Observable
             chat.SetMode(pane.Mode);
             chat.ExcludeFromMemory = pane.ExcludeFromMemory;
             chat.IsBridgeManager = pane.IsBridgeManager;   // the crown is part of the roster's shape
+            CopyBridgeTerminalState(pane, chat);
             forks.Add(chat);
         }
+        var forkIds = source.Select((pane, i) => (pane.BridgeAgentId, Id: forks[i].BridgeAgentId))
+            .ToDictionary(p => p.BridgeAgentId, p => p.Id);
+        foreach (var fork in forks)
+            if (fork.BridgeCoordinatorAgentId is { } ownerId)
+                fork.BridgeCoordinatorAgentId = forkIds.GetValueOrDefault(ownerId);
+        ReconcileBridgeGroups(forks);
 
         // The original keeps every provider process it had; parking is purely a view-model move.
         ParkActiveBridge();
@@ -2607,15 +2720,12 @@ public sealed partial class MainViewModel : Observable
     /// keep running; if the host is closed, the next pane is promoted. One survivor collapses to a normal chat.</summary>
     public void RemoveBridgePane(ChatViewModel pane)
     {
+        if (ChatRemovalBlocked(pane)) return;
         // Which surface owns this pane? Shell 2's own roster is a full bridge with its own host, board and manager,
         // so closing a pane over there must renumber THAT roster and leave the primary's alone.
         var target = SecondaryBridge is { } secondary && secondary.Panes.Contains(pane) ? secondary : null;
         var panes = PanesFor(target);
         if (!panes.Contains(pane)) return;
-        // Closing the orchestrator ends the whole Demon team — without it the fifteen workers are unreachable by
-        // anyone, which is exactly the orphaned-process state Demon Mode promises never to leave behind.
-        if (target is null && IsDemonMode && pane.IsDemonOrchestrator) { CloseDemonTeam("the orchestrator was closed"); return; }
-        if (target is null && IsDemonMode && pane.IsDemonWorker) RetireSupervisedPane(pane, "its pane was closed by the user");
         var originalHost = panes[0];
         var wasHost = ReferenceEquals(pane, panes[0]);
         var wasActive = ReferenceEquals(pane, ActiveChat);
@@ -2623,6 +2733,11 @@ public sealed partial class MainViewModel : Observable
         var leftNum = BridgeNumberOf(pane);
         var wasManager = pane.IsBridgeManager;
 
+        pane.ClearPeerMailbox(preserve: false);
+        pane.BridgeWork?.CentralPlan?.Cancellation?.Cancel();
+        if (pane.BridgeWork is { } departingWork)
+            foreach (var task in departingWork.Tasks.Where(t => (t.OwnerId == pane.BridgeAgentId || t.CoordinatorId == pane.BridgeAgentId) && t.State != "completed"))
+            { task.State = "interrupted"; task.Summary = "An assigned agent left the bridge. Recover the assignment before continuing."; }
         panes.Remove(pane);
         Chats.Remove(pane);                // the host is a sidebar chat; closing its pane must close that row too
         ErroredFor(target).Remove(pane);   // drop any error-announce bookkeeping for the departing pane
@@ -2644,26 +2759,24 @@ public sealed partial class MainViewModel : Observable
             // Compact every surviving identity (2,3,4 -> 1,2,3), rewrite the status-board ownership headers, and
             // queue an explicit self+peer roster correction into every already-running provider session.
             CompactBridgeRosterAfterDeparture(pane.Cwd, leftNum, pane.AgentDisplay, "left the bridge", "🔗", target);
+            RebriefBridgeGroups(new LiveBridge
+            {
+                Panes = panes, Board = BoardFor(target), Peers = target?.Peers ?? _peerTraffic,
+                PanelChat = panes[0], Errored = ErroredFor(target), Activity = DateTime.Now,
+            });
             if (wasManager)
             {
-                // The brain left. Tell the survivors plainly so nobody keeps waiting for dispatches that will never come.
                 foreach (var peer in panes)
                 {
-                    var note = "[BRIDGE] The MANAGER left the bridge. No manager is assigned now — coordinate as equal " +
-                               "peers via the status board until the user crowns a new one.";
-                    peer.Prelude = string.IsNullOrEmpty(peer.Prelude) ? note : peer.Prelude + "\n" + note;
-                    peer.Items.Add(new DividerItem { Label = "👑 the manager left — no manager assigned" });
+                    var note = $"[BRIDGE] Orchestrator Agent {leftNum} left. Its workers are now unassigned; other orchestrator groups continue. Check bridge_list_agents for current roles and group ownership.";
+                    StagePeerNotice(peer, note);
+                    peer.Items.Add(new DividerItem { Label = $"Orchestrator Agent {leftNum} left; its group is unassigned" });
                 }
+                foreach (var manager in panes.Where(p => p.IsBridgeManager))
+                    SendManagerUpdate(manager, "A peer orchestrator left. Your own workers remain assigned to you. Recheck the roster and agree scopes with any remaining orchestrators before new dispatches.");
             }
-            else if (ManagerOf(panes) is { } mgr)
-            {
-                // A worker left: the manager adapts in real time — its unfinished lane is reassignable immediately.
-                SendManagerUpdate(mgr,
-                    $"{pane.AgentDisplay} agent #{leftNum} LEFT the bridge and the roster was renumbered contiguously " +
-                    $"(you are {mgr.AgentDisplay} agent #{BridgeNumberOf(mgr)}; {panes.Count} agents remain). " +
-                    "Anything it was working on is now unowned — update the plan and re-dispatch its unfinished lane " +
-                    "to a free worker (or take it yourself if none are free).");
-            }
+            else if (CoordinatorFor(pane, panes) is { } coordinator)
+                SendManagerUpdate(coordinator, $"Agent {leftNum} left your worker group. The roster was renumbered; any unfinished work in its lane needs reassignment within your group.");
             if (wasActive) ActiveChat = panes[0];
             if (wasSecondaryActive) SecondaryActiveChat = panes[0];
             SaveBridge(panes, BoardFor(target));
@@ -2712,6 +2825,11 @@ public sealed partial class MainViewModel : Observable
     /// User-minimized panes stay minimized; expand only reflows agents that are still on the grid.</summary>
     public void ToggleBridgeExpand(ChatViewModel pane, Func<ChatViewModel, bool>? surfaceContains = null)
     {
+        if (pane.BridgeSingleTerminal)
+        {
+            SetBridgeTerminalMode(false, SecondaryBridge?.Panes.Contains(pane) == true);
+            return;
+        }
         // Resolve the roster from the PANE, not from the primary surface: the same button exists on shell 2's own
         // bridge, and focusing an agent there must reflow that roster rather than silently doing nothing.
         if (pane is null || pane.BridgeMinimized || RosterPanesOf(pane) is not { } panes) return;
@@ -2765,6 +2883,11 @@ public sealed partial class MainViewModel : Observable
     /// bridge header (next to usage) brings it back. If it was focused, the grid is restored for remaining panes.</summary>
     public void MinimizeBridgePane(ChatViewModel pane)
     {
+        if (pane.BridgeSingleTerminal && TryGetLiveBridge(pane, out var bridge))
+        {
+            if (bridge.Panes.FirstOrDefault(p => !ReferenceEquals(p, pane)) is { } next) SelectBridgeTerminal(next);
+            return;
+        }
         if (pane is null || pane.BridgeMinimized || RosterPanesOf(pane) is not { } panes) return;
         var wasExpanded = pane.BridgeExpanded;
         pane.BridgeMinimized = true;
@@ -2843,22 +2966,23 @@ public sealed partial class MainViewModel : Observable
         MarkOwned(survivor.SessionId);
     }
 
-    /// <summary>
-    /// Take the bridge back out of an agent that is no longer in one.
-    ///
-    /// The four flags above are what the WINDOW reads; none of them is what the agent reads. Its session was launched
-    /// with the "[BRIDGE MODE] you are agent #N of M alongside …" appendix, and whatever roster note was staged last
-    /// is still sitting on its Prelude waiting to ride the user's next message. Clearing only the flags is how a chat
-    /// with no bridge ends up being told, on its very next ordinary turn, that its "active peers are agent #2,
-    /// agent #3" — and how restarting it launches a bridge agent for a bridge that no longer exists.
-    ///
-    /// Every other roster change tells the live sessions what happened (a join, a departure, a lost manager, a fork).
-    /// The bridge ENDING was the one transition that told them nothing.
-    /// </summary>
-    /// <param name="divider">Null for a caller that writes its own transcript marker (Demon Mode does).</param>
     private static void RetireBridgeAgentContext(ChatViewModel pane, string notice,
         string? divider = "🔗 Bridge ended — this is an ordinary chat again")
     {
+        pane.BridgeWork?.CentralPlan?.Cancellation?.Cancel();
+        pane.BridgeWork = null;
+        pane.BridgeSingleTerminal = false;
+        pane.BridgeTerminalSelected = false;
+        pane.BridgeActivitySummary = "Ready for a task";
+        pane.BridgeTaskName = "Ready";
+        pane.BridgeCoordinatesOnly = false;
+        pane.BridgeCoordinatorAgentId = null;
+        pane.BridgeOrchestrationScope = "";
+        pane.BridgeTaskState = "ready";
+        pane.BridgeReviewState = "pending";
+        pane.BridgeReviewSummary = "";
+        pane.BridgeGroupLabel = "Independent agent";
+        pane.RaiseBridgeGroup();
         pane.ClearPeerChatAccess();
         pane.ClearPeerMailbox();
         pane.AppendSystemPrompt = null;   // a restart must not relaunch it as somebody's peer
@@ -2899,17 +3023,6 @@ public sealed partial class MainViewModel : Observable
         "the status board is no longer in use — stop reading and rewriting it. Do not wait on anyone and do not hand " +
         "work over: anything that was still in flight is yours. Carry on with the user's request directly.";
 
-    /// <summary>The same correction for a bridge the user closed outright. The peers are gone from this session's
-    /// point of view either way; the difference is that this one can be brought back, so it does not say the roster
-    /// is finished for good.</summary>
-    /// <summary>The same correction for a Demon orchestrator whose team has been stopped. Worded around dispatch
-    /// rather than peers, because that is the channel it will otherwise keep using.</summary>
-    private const string DemonTeamEndedNotice =
-        "[BRIDGE] Demon Mode has ENDED and every worker has been stopped. This REPLACES the orchestration rules you " +
-        "were given earlier in this session: there is no team, a @@DISPATCH or @@MSG block now reaches no one, and " +
-        "nothing you assigned is still being worked on. Do not wait on any worker and do not dispatch. You are an " +
-        "ordinary chat again — if work remains, do it yourself in this session.";
-
     private const string ClosedBridgeNotice =
         "[BRIDGE] The bridge has been CLOSED and the other agents are no longer running. This REPLACES the bridge " +
         "rules you were given earlier in this session: there is no roster to coordinate with, a @@MSG block now " +
@@ -2921,11 +3034,9 @@ public sealed partial class MainViewModel : Observable
     /// idle timeout. Reopening the host (<see cref="OpenChat"/>) resumes the provider-specific peer threads.</summary>
     public void CloseBridge()
     {
-        // A Demon team is never left resumable: its lanes only mean anything for the objective it was spun up for.
-        if (IsDemonMode) { CloseDemonTeam("the team was closed"); return; }
         var host = BridgePanes.FirstOrDefault();
         var wasShowing = ShowBridge;
-        SaveBridge();   // persist peers FIRST so nothing is lost when their live processes are disposed
+        SaveBridge(BridgePanes, _bridgeBoard, reconnectOnStartup: false); // persist before disposing peer processes
         foreach (var p in BridgePanes.Skip(1).ToList()) { ForgetPeerState(p); p.Close(); }
         BridgePanes.Clear();
         _bridgeErrored.Clear();
@@ -2970,7 +3081,7 @@ public sealed partial class MainViewModel : Observable
     private bool CloseParkedBridge(ChatViewModel host)
     {
         if (!_parkedBridges.Remove(host, out var bridge)) return false;
-        SaveBridge(bridge.Panes, bridge.Board);
+        SaveBridge(bridge.Panes, bridge.Board, reconnectOnStartup: false);
         foreach (var pane in bridge.Panes) ForgetPeerState(pane);
         foreach (var pane in bridge.Panes.Skip(1)) pane.Close();
         RetireBridgeAgentContext(host, ClosedBridgeNotice);
@@ -2983,6 +3094,9 @@ public sealed partial class MainViewModel : Observable
     }
 
     // ---- persist bridge peers so a Close / navigate-away / restart can resume them later ----
+
+    private static bool ShouldReconnectBridgeAtStartup(ChatViewModel host) =>
+        HasSavedBridgeFor(host) && SavedBridgeFor(host)?.ReconnectOnStartup is not false;
 
     private static SavedBridgeState? SavedBridgeFor(ChatViewModel host) =>
         AppSettings.Current.FindSavedBridge(host.SessionId, host.Provider);
@@ -3085,6 +3199,7 @@ public sealed partial class MainViewModel : Observable
 
         var replacePrimarySelection = host is not null && ReferenceEquals(ActiveChat, host);
         var replaceSecondarySelection = host is not null && ReferenceEquals(SecondaryActiveChat, host);
+        var startHost = false;
         if (host is null || host.Status is "error" or "closed")
         {
             if (host is not null)
@@ -3093,7 +3208,7 @@ public sealed partial class MainViewModel : Observable
                 Chats.Remove(host);
                 if (ReferenceEquals(SecondaryActiveChat, host)) SecondaryActiveChat = null;
             }
-            var cwd = Directory.Exists(saved.Cwd) ? saved.Cwd : DefaultCwd;
+            var cwd = NoDirectoryWorkspace.DirectoryExists(saved.Cwd) ? saved.Cwd : DefaultCwd;
             host = new ChatViewModel(cwd, resume: saved.HostSessionId, fork: false,
                 title: saved.HostTitle, accountId: saved.HostAccountId, provider: saved.Provider)
             { Pinned = saved.HostPinned };
@@ -3106,12 +3221,13 @@ public sealed partial class MainViewModel : Observable
             // the rest of the roster came back on bypass. Same clamp as the chat restore: a snapshot from before the
             // mode was saved (or one edited by hand) falls back to the seed rather than to the mode nobody chose.
             host.SetMode(AppSettings.IsKnownPermissionMode(saved.Mode) ? saved.Mode! : AppSettings.Current.DefaultMode);
-            host.Start();
+            startHost = true;
         }
 
         if (activatePrimary || replacePrimarySelection) ActiveChat = host;
         if (!activatePrimary || replaceSecondarySelection) SecondaryActiveChat = host;
         var restored = RestoreBridge(host, showPrimary: activatePrimary);
+        if (startHost) host.Start();
         if (restored) SaveSession();
         RefreshResumableBridges();
         return restored;
@@ -3124,22 +3240,25 @@ public sealed partial class MainViewModel : Observable
     }
 
     private static void SaveBridge(IReadOnlyList<ChatViewModel> panes, string board)
+        => SaveBridge(panes, board, reconnectOnStartup: true);
+
+    private static void SaveBridge(IReadOnlyList<ChatViewModel> panes, string board, bool reconnectOnStartup)
     {
-        if (!SnapshotBridge(panes, board)) return;
+        if (!SnapshotBridge(panes, board, reconnectOnStartup)) return;
         AppSettings.Current.Save();
     }
 
-    private static bool SnapshotBridge(IReadOnlyList<ChatViewModel> panes, string board)
+    private static bool SnapshotBridge(IReadOnlyList<ChatViewModel> panes, string board, bool reconnectOnStartup = true)
     {
         var host = panes.FirstOrDefault();
-        // A Demon team is deliberately not resumable. Persisting one would offer to bring fifteen workers back days
-        // later, each holding a lane from an objective that has long since been finished or abandoned.
-        if (host is not null && (host.IsDemonOrchestrator || panes.Any(p => p.IsDemonWorker))) return false;
+        if (host is not null)
+            host.IsAdvancedBridgeHost = panes.Any(p => p.IsBridgeManager || p.BridgeCoordinatesOnly || p.BridgeCoordinatorAgentId is not null);
         if (host?.SessionId is not { } hostId || panes.Count < 2) return false;
         var peers = panes.Skip(1)
             .Where(p => p.SessionId is not null)
             .Select(p => new SavedBridgePane
             {
+                AgentId = p.BridgeAgentId,
                 Cwd = p.Cwd,
                 SessionId = p.SessionId,
                 Label = p.BridgeLabel,
@@ -3151,14 +3270,28 @@ public sealed partial class MainViewModel : Observable
                 Effort = p.Effort,
                 FastMode = p.ShowFastMode ? p.FastMode : null,
                 Draft = NullIfEmpty(p.Draft),
+                Goal = p.Goal,
                 ExcludeFromMemory = p.ExcludeFromMemory,
                 IsManager = p.IsBridgeManager,
+                ActivitySummary = p.BridgeActivitySummary,
+                TaskName = p.BridgeTaskName,
+                CoordinatesOnly = p.BridgeCoordinatesOnly,
+                CoordinatorSessionId = panes.FirstOrDefault(c => c.BridgeAgentId == p.BridgeCoordinatorAgentId)?.SessionId,
+                OrchestrationScope = NullIfEmpty(p.BridgeOrchestrationScope),
+                TaskState = p.BridgeTaskState,
+                ReviewState = p.BridgeReviewState,
+                ReviewSummary = NullIfEmpty(p.BridgeReviewSummary),
+                Configuration = BridgeAgentConfigurationPolicy.From(p),
+                WorkerConfiguration = p.BridgeWorkerConfiguration,
             })
             .ToList();
         if (peers.Count == 0) return false;   // Track() saves again as soon as a brand-new peer receives its session id
 
         var snapshot = new SavedBridgeState
         {
+            Work = System.Text.Json.JsonSerializer.Deserialize<BridgeWorkState>(System.Text.Json.JsonSerializer.Serialize(WorkFor(panes))),
+            HostAgentId = host.BridgeAgentId,
+            ReconnectOnStartup = reconnectOnStartup,
             Cwd = host.Cwd,
             HostSessionId = hostId,
             Provider = host.Provider,
@@ -3170,6 +3303,18 @@ public sealed partial class MainViewModel : Observable
             Board = board,
             SavedAt = DateTime.Now,
             Peers = peers,
+            SingleTerminal = host.BridgeSingleTerminal,
+            SelectedTerminalSessionId = panes.FirstOrDefault(p => p.BridgeTerminalSelected)?.SessionId,
+            HostActivitySummary = host.BridgeActivitySummary,
+            HostTaskName = host.BridgeTaskName,
+            HostCoordinatesOnly = host.BridgeCoordinatesOnly,
+            HostCoordinatorSessionId = panes.FirstOrDefault(c => c.BridgeAgentId == host.BridgeCoordinatorAgentId)?.SessionId,
+            HostOrchestrationScope = NullIfEmpty(host.BridgeOrchestrationScope),
+            HostTaskState = host.BridgeTaskState,
+            HostReviewState = host.BridgeReviewState,
+            HostReviewSummary = NullIfEmpty(host.BridgeReviewSummary),
+            HostConfiguration = BridgeAgentConfigurationPolicy.From(host),
+            HostWorkerConfiguration = host.BridgeWorkerConfiguration,
         };
         var settings = AppSettings.Current;
         settings.UpsertSavedBridge(snapshot);
@@ -3178,7 +3323,7 @@ public sealed partial class MainViewModel : Observable
 
     /// <summary>Re-spawn a temp-saved bridge's peers (with --resume) and re-enter the overlay. Returns false if there
     /// is no valid saved bridge for this host (missing / different host / expired).</summary>
-    public bool RestoreBridge(ChatViewModel host, bool showPrimary = true)
+    public bool RestoreBridge(ChatViewModel host, bool showPrimary = true, bool showOnSecondary = true)
     {
         // Only the PRIMARY surface can hold one roster at a time. Shell 2 resumes into a parked slot of its own, so a
         // bridge already running on the main window is no reason to refuse it.
@@ -3200,8 +3345,20 @@ public sealed partial class MainViewModel : Observable
         WriteBridgeFile(host.Cwd, board, preserveManagerPlan: managerNumber > 0);
         AppendPeerToBridgeFile(host.Cwd, board, 1);
         host.BridgeLabel = AgentLabel(host, 1);
+        var agentIds = new HashSet<string>(StringComparer.Ordinal);
+        if (Guid.TryParseExact(s.HostAgentId, "N", out var hostAgentId)) host.BridgeAgentId = hostAgentId.ToString("N");
+        agentIds.Add(host.BridgeAgentId);
         host.IsBridgeHost = true;
         host.IsBridgeManager = s.HostIsManager;
+        host.BridgeCoordinatesOnly = s.HostCoordinatesOnly;
+        host.BridgeOrchestrationScope = s.HostOrchestrationScope ?? "";
+        host.BridgeTaskState = s.HostTaskState ?? "ready";
+        host.BridgeReviewState = s.HostReviewState ?? "pending";
+        host.BridgeReviewSummary = s.HostReviewSummary ?? "";
+        host.BridgeTaskName = s.HostTaskName ?? "Ready";
+        host.BridgeWorkerConfiguration = s.HostWorkerConfiguration;
+        if (s.HostConfiguration is { } hostConfiguration && hostConfiguration.Provider == host.Provider)
+            host.ApplyBridgeConfiguration(hostConfiguration);
         // Every resumed PEER is re-briefed below; the host used to be the one pane that was not, silently inheriting
         // whatever appendix it happened to still be carrying. That was already wrong whenever the roster came back a
         // different size ("agent #1 of 4" resuming into a roster of three), and it is the only reason closing a
@@ -3215,7 +3372,7 @@ public sealed partial class MainViewModel : Observable
         {
             var pane = savedPeers[i];
             var num = peerNums[i];
-            var cwd = Directory.Exists(pane.Cwd) ? pane.Cwd : host.Cwd;
+            var cwd = NoDirectoryWorkspace.DirectoryExists(pane.Cwd) ? pane.Cwd : host.Cwd;
             var provider = string.IsNullOrWhiteSpace(pane.Provider) ? host.Provider : pane.Provider!;
             AppendPeerToBridgeFile(cwd, board, num);   // seed the file with the SAME number as the label (no mismatch)
 
@@ -3247,10 +3404,22 @@ public sealed partial class MainViewModel : Observable
             }
 
             chat!.BridgeLabel = AgentLabel(chat, num);
+            if (Guid.TryParseExact(pane.AgentId, "N", out var peerAgentId) && agentIds.Add(peerAgentId.ToString("N")))
+                chat.BridgeAgentId = peerAgentId.ToString("N");
+            else
+            {
+                while (!agentIds.Add(chat.BridgeAgentId)) chat.BridgeAgentId = Guid.NewGuid().ToString("N");
+            }
             // Older snapshots have no flag of their own; fall back to the host's so a restored bridge cannot start
             // recording a conversation the user had muted before the restart.
             chat.ExcludeFromMemory = pane.ExcludeFromMemory || host.ExcludeFromMemory;
             chat.IsBridgeManager = pane.IsManager;
+            chat.BridgeCoordinatesOnly = pane.CoordinatesOnly;
+            chat.BridgeOrchestrationScope = pane.OrchestrationScope ?? "";
+            chat.BridgeTaskState = pane.TaskState ?? "ready";
+            chat.BridgeReviewState = pane.ReviewState ?? "pending";
+            chat.BridgeReviewSummary = pane.ReviewSummary ?? "";
+            chat.BridgeTaskName = pane.TaskName ?? "Ready";
             chat.AppendSystemPrompt = BridgePrompt(board, chat, num, roster, managerNumber);
             chat.Prelude = BridgeJoinPrelude(board, chat, num, roster, managerNumber);
             UpdateGeneratedBridgeTitle(chat, num); // normalize an older saved title such as "Bridge · Codex 4" to its new compact number
@@ -3260,14 +3429,21 @@ public sealed partial class MainViewModel : Observable
                 ? (pane.Mode ?? s.Mode)!
                 : AppSettings.Current.DefaultMode);
             var sameProvider = string.Equals(chat.Provider, host.Provider, StringComparison.OrdinalIgnoreCase);
-            if (pane.Model is not null) chat.Model = pane.Model;
-            else if (sameProvider) chat.Model = host.Model; // legacy snapshots inherited the host's provider settings
-            if (pane.Effort is not null) chat.Effort = pane.Effort;
-            else if (sameProvider) chat.Effort = host.Effort;
+            if (pane.Configuration is { } configuration && configuration.Provider == chat.Provider)
+                chat.ApplyBridgeConfiguration(configuration);
+            else
+            {
+                if (pane.Model is not null) chat.Model = pane.Model;
+                else if (sameProvider) chat.Model = host.Model; // legacy snapshots inherited the host's provider settings
+                if (pane.Effort is not null) chat.Effort = pane.Effort;
+                else if (sameProvider) chat.Effort = host.Effort;
+            }
+            chat.BridgeWorkerConfiguration = pane.WorkerConfiguration;
             // Fast mode is per pane, so a restored bridge must not flatten four panes back onto one shared answer.
             if (pane.FastMode is { } fast) chat.FastMode = fast;
             else if (sameProvider) chat.FastMode = host.FastMode;   // pre-per-chat snapshots knew only the host's
             if (!string.IsNullOrEmpty(pane.Draft)) chat.Draft = pane.Draft;   // an unsent prompt survives the restart
+            chat.RestoreGoal(pane.Goal);
             MarkOwned(chat.SessionId);
             restoredPanes.Add(chat);
             if (start) panesToStart.Add(chat);
@@ -3284,6 +3460,33 @@ public sealed partial class MainViewModel : Observable
                 PanelChat = host,
                 Peers = new PeerTrafficLedger(),
             };
+        foreach (var pane in restoredPanes)
+        {
+            pane.BridgeWork = s.Work ??= new BridgeWorkState();
+            pane.BridgeSingleTerminal = s.SingleTerminal;
+            pane.BridgeTerminalSelected = pane.SessionId == s.SelectedTerminalSessionId;
+            pane.BridgeActivitySummary = ReferenceEquals(pane, host)
+                ? s.HostActivitySummary ?? "Ready for a task"
+                : savedPeers.FirstOrDefault(saved => saved.SessionId == pane.SessionId)?.ActivitySummary ?? "Ready for a task";
+            var coordinatorSession = ReferenceEquals(pane, host) ? s.HostCoordinatorSessionId :
+                savedPeers.FirstOrDefault(saved => saved.SessionId == pane.SessionId)?.CoordinatorSessionId;
+            pane.BridgeCoordinatorAgentId = restoredPanes.FirstOrDefault(p => p.SessionId == coordinatorSession && p.IsBridgeManager)?.BridgeAgentId;
+            pane.BridgeCoordinationRoster = "";
+        }
+        s.Work?.Recover();
+        if (s.Work?.CentralPlan is { State: "interrupted" or "failed" } incompleteCentral)
+            host.Items.Add(new BannerItem { Level = "warning", Text = incompleteCentral.Error + " Worker dispatch remains paused." });
+        if (s.Work is { } recoveredWork && recoveredWork.Tasks.Any(t => t.State == "interrupted"))
+            foreach (var manager in restoredPanes.Where(p => p.IsBridgeManager))
+                StagePeerNotice(manager, "[BRIDGE RECOVERY] Assignments, IDs, dependencies and the setup communication lock were restored. " +
+                    "Use bridge_list_tasks to inspect interrupted work. Check existing changes before bridge_retry_task; nothing was automatically replayed.");
+        ReconcileBridgeTerminals(restoredPanes);
+        foreach (var pane in restoredPanes)
+        {
+            var brief = BridgePrompt(board, pane, BridgeNumberOf(pane), roster, managerNumber);
+            pane.AppendSystemPrompt = brief;
+            StagePeerNotice(pane, brief);
+        }
         if (target is null) BridgePanes.ReplaceAll(restoredPanes);
         else _parkedBridges[host] = target;
         foreach (var pane in panesToStart) pane.Start();
@@ -3293,7 +3496,7 @@ public sealed partial class MainViewModel : Observable
         ResetBridgeExpand(target);
         RefreshBridgeWorkingCue(PanesFor(target));
         if (showPrimary) ShowBridge = true;
-        else
+        else if (showOnSecondary)
         {
             SetSecondaryBridgeHost(host);
             SecondaryActiveChat = host;
@@ -3303,6 +3506,7 @@ public sealed partial class MainViewModel : Observable
         StartBridgeIdleTimer();
         RequestSave();  // refresh compact labels and host metadata in the coalesced autosave, off the click path
         RaiseBridgeUi();
+        _ = host.RequestBridgeTaskTitleNowAsync();   // an untitled host mid-task names it now, not at its next request
         return true;
     }
 
@@ -3329,6 +3533,8 @@ public sealed partial class MainViewModel : Observable
 
     private void OnBridgeIdleTick(object? sender, EventArgs e)
     {
+        foreach (var root in AppSettings.Current.SavedBridges.Select(b => b.Cwd).Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+            BridgeMailboxStore.ScheduleCleanup(root);
         if (!IsBridge && _parkedBridges.Count == 0) { StopBridgeIdleTimer(); return; }
         var now = DateTime.Now;
 
@@ -3566,6 +3772,7 @@ public sealed partial class MainViewModel : Observable
     {
         if (!TryGetLiveBridge(c, out var bridge)) return;
         RefreshBridgeWorkingCue(bridge.Panes);
+        if (c.WaitingForLimitReset || c.IsCompactingContext) return;
         if (c.Status == "error")
         {
             if (!bridge.Errored.Add(c)) return;   // already announced this error
@@ -3606,8 +3813,15 @@ public sealed partial class MainViewModel : Observable
             AppSettings.Current.SwarmMaxWorkers)
             // The peer channel sits between the swarm rule and the role brief: it is addressed to every agent,
             // whereas ManagerClause differs per role and always closes the appendix.
-            + (AppSettings.Current.BridgePeerMessaging ? PeerMessagePolicy.BridgeClause(index) : "")
+            + "\n" + AgentStatus.Mcp.Bridge.BridgeMcpTools.Instructions + "\n"
             + ManagerClause(pane, index, managerNumber, roster.Count);
+        swarmRule += BridgeReviewPolicy.Instructions(pane.BridgeReviewLevel, pane.IsBridgeManager);
+        if (pane.BridgeCoordinatesOnly || pane.BridgeCoordinatorAgentId is not null)
+            return $"[BRIDGE MODE] You are {pane.ProviderDisplay} agent #{index} of {roster.Count}, alongside {peers}. " +
+                "Use bridge_list_agents and bridge_list_tasks for current team context. The structured plan and task records are the source of progress. " +
+                "Use bridge_report_activity for a short activity summary and bridge_update_task for actual outcomes and advisory file activity. " +
+                "No status-board reads or writes are required; do not run shell commands just to update coordination metadata. " +
+                "File activity never grants exclusive access: every agent may edit a shared file. Coordinate overlapping changes with workers.\n" + swarmRule;
         // The board is still where standing claims live — it is durable and everyone can re-read it. A peer message is
         // for the thing a board cannot do: reach one specific agent about one specific thing, right now.
         var boardRole = AppSettings.Current.BridgePeerMessaging
@@ -3624,12 +3838,12 @@ public sealed partial class MainViewModel : Observable
                 "1-2 short lines naming what you're adding or changing there right now (function/class names and a few words — never diffs or " +
                 "code). REWRITE that block in place whenever you start, switch to, or finish a file, or after several consecutive edits to the " +
                 "same file. Never append history — the board is a snapshot, and per-edit logging is a bug (it burns everyone's tokens).\n" +
-                "- Before editing a file, glance at peers' \"## Live activity\" lines. If a peer lists the file you're about to touch, hold off " +
-                "or pick different work, and say so in your block.\n" +
-                "- FIRST ACTION, before any other work: READ `" + board + "`, pick an area no peer claimed, then write BOTH your " +
+                "- Before editing a file, glance at peers' \"## Live activity\" lines and coordinate overlapping changes. These are advisory hints, " +
+                "never locks: you are still allowed to edit a file another agent lists.\n" +
+                "- For work that edits source code, consult `" + board + "` or bridge_list_tasks, then keep your " +
                 "\"## Active\" block AND your first \"## Live activity\" block. Yours is seeded as \"figuring out what to do\", and leaving it " +
-                "that way is a bug. Do the read and the writes before you report back, then continue with the request.\n" +
-                "- Only touch a peer's files after glancing at their blocks first. Otherwise just work; assume peers own their areas.\n" +
+                "that way is unhelpful. For tasks that do not edit files, your bridge_set_task_title title is your status; no board reads or writes are required.\n" +
+                "- No agent may claim exclusive access to a file. Shared files remain editable by everyone; preserve each other's changes.\n" +
                 swarmRule;
         return "[BRIDGE MODE] You are " + pane.ProviderDisplay + " agent #" + index + " of " + roster.Count + " working in this same project " +
             "alongside " + (peers.Length > 0 ? peers : "(peers joining)") + " (more may join). Coordinate at a HIGH LEVEL only — " +
@@ -3637,12 +3851,12 @@ public sealed partial class MainViewModel : Observable
             "Just avoid working on the same thing:\n" +
             "- `" + board + "` (project root) is a STATUS BOARD. Under \"## Active\" each agent has a two-line block:\n" +
             "  an `Agent #" + index + ": Working on <the thing>` line, then a plain-English note (≤100 words) on what you're doing and how.\n" +
-            "- FIRST ACTION, before any other work: READ `" + board + "` to see what your peers claimed, and pick a " +
+            "- For work that edits source code, consult `" + board + "` or bridge_list_tasks for peer context and choose a " +
             "DIFFERENT area. Then, as soon as you know your task, REWRITE your own block (the \"Working on\" line AND the note) " +
             "to say plainly what you're building — it is seeded as \"figuring out what to do\", and leaving it that way is a bug. " +
-            "Do the read and the write before you report back, then continue with the request. Refresh it if your task changes; " +
-            "it's a status, not a per-edit changelog.\n" +
-            "- Only touch a peer's files after glancing at their block first. Otherwise just work; assume peers own their areas.\n" +
+            "For tasks that do not edit files, your bridge_set_task_title title is your status; no board reads or writes are required. Retitle only when " +
+            "your overall task changes; it's a status, not a per-edit changelog.\n" +
+            "- File activity is advisory, never exclusive ownership. You may edit a shared file even when another agent lists it; coordinate overlapping changes.\n" +
             swarmRule;
     }
 
@@ -3655,9 +3869,9 @@ public sealed partial class MainViewModel : Observable
 
     private static string BridgeJoinPrelude(string board, ChatViewModel pane, int index, IReadOnlyCollection<int> roster, int managerNumber) =>
         "[BRIDGE] You have just been put into a VibeCode Bridge. This is NEW state — it was not true earlier in this " +
-        "conversation, so don't assume anything below was already handled. Before you continue with anything else: read " +
-        "`" + board + "` in the project root, then rewrite your own `Agent #" + index + "` block there to say what " +
-        "you are working on. Then carry on with the request.\n\n" + BridgePrompt(board, pane, index, roster, managerNumber);
+        "conversation. Read bridge_list_agents for your current identity and bridge_list_tasks for assignments. " +
+        "Use bridge_report_activity for your status; no status-board file operations are required. " +
+        "Your optional legacy status board is `" + board + "`. Carry on with the request.\n\n" + BridgePrompt(board, pane, index, roster, managerNumber);
 
     /// <summary>
     /// Prelude for a pane that arrived by FORKING another bridge. Its transcript is the original agent's, right down
@@ -3670,8 +3884,8 @@ public sealed partial class MainViewModel : Observable
         "bridge and is yours to keep using - but that roster is still running separately, so do not assume your old " +
         "peers are picking anything up here, and do not act on work you had handed to them. You are now agent #" + index +
         " of " + roster.Count + " in a fresh roster, and your status board is `" + board + "` (NOT `" + sourceBoard +
-        "`, which belongs to the bridge you came from). Before anything else: read `" + board + "` and write your own " +
-        "`Agent #" + index + "` block. Then carry on.\n\n" + BridgePrompt(board, pane, index, roster, managerNumber);
+        "`, which belongs to the bridge you came from). Read bridge_list_agents and bridge_list_tasks for this team's current context, " +
+        "then use bridge_report_activity for status. No status-board file operations are required.\n\n" + BridgePrompt(board, pane, index, roster, managerNumber);
 
     /// <summary>The "## Live activity" board seeded when real-time sharing is on. It sits BEFORE "## Active", which
     /// must stay the last section because <see cref="AppendPeerToBridgeFile"/> seeds identities by appending at EOF.</summary>
@@ -3768,62 +3982,7 @@ public sealed partial class MainViewModel : Observable
     /// <summary>Crown a pane as the bridge MANAGER (moving the crown if another pane holds it), or step the current
     /// manager down when it is clicked again. Crowning re-briefs every live session and immediately sends the new
     /// manager an activation message so it takes charge without the user having to prompt it.</summary>
-    public void ToggleBridgeManager(ChatViewModel pane)
-    {
-        if (!BridgePanes.Contains(pane)) return;
-        // In Demon Mode the crown is structural, not a user choice: stepping the orchestrator down would leave fifteen
-        // read-only workers with nobody able to dispatch to them and nobody able to type into them either.
-        if (IsDemonMode) return;
-
-        if (pane.IsBridgeManager)
-        {
-            // Step down: back to a flat bridge of equal peers. Must also kill in-flight manager traffic —
-            // work orders and MANAGER UPDATEs are ordinary queued Sends, so without a purge they still
-            // land on workers (and the former manager) after the crown is gone.
-            foreach (var p in BridgePanes) p.IsBridgeManager = false;   // belt-and-suspenders: only one should be true
-            RefreshBridgeManagerBriefs();
-            CancelAllManagerTraffic("manager stepped down — pending dispatches cancelled");
-            foreach (var p in BridgePanes)
-            {
-                var note = "[BRIDGE] The manager role was removed by the user — no manager is assigned now. " +
-                           "Coordinate as equal peers via the status board again; nobody is dispatching work.";
-                // Replace any staged manager-loop prelude with the step-down notice only (don't stack "fold into plan").
-                p.ClearManagerPreludes();
-                p.Prelude = string.IsNullOrEmpty(p.Prelude) ? note : p.Prelude + "\n" + note;
-                p.Items.Add(new DividerItem { Label = "👑 manager stepped down — no manager assigned" });
-            }
-            NoteBridgeActivity();
-            SaveBridge();
-            RaiseBridgeUi();
-            return;
-        }
-
-        var previous = ManagerOf(BridgePanes);
-        if (previous is not null) previous.IsBridgeManager = false;
-        pane.IsBridgeManager = true;
-        RefreshBridgeManagerBriefs();
-        // Seed the status ledger so a worker that is ALREADY mid-turn still gets its finish reported to the new manager.
-        foreach (var p in BridgePanes) _bridgeSeenStatus[p] = p.Status;
-
-        var m = BridgeNumberOf(pane);
-        foreach (var p in BridgePanes.Where(p => !ReferenceEquals(p, pane)))
-        {
-            var demoted = ReferenceEquals(p, previous) ? "You are NO LONGER the manager. " : "";
-            var note = $"[BRIDGE] {demoted}{pane.AgentDisplay} agent #{m} was just made this bridge's MANAGER by the " +
-                       "user. From now on messages starting \"👑 [FROM MANAGER\" are your work orders. End every " +
-                       "finished task with a short factual report (what you did / verified / anything blocking) — the " +
-                       "end of your reply is relayed to the manager automatically. Let the manager assign lanes " +
-                       "instead of picking up new areas on your own.";
-            p.Prelude = string.IsNullOrEmpty(p.Prelude) ? note : p.Prelude + "\n" + note;
-            p.Items.Add(new DividerItem { Label = $"👑 {pane.AgentDisplay} #{m} is now the manager" });
-        }
-
-        pane.Items.Add(new DividerItem { Label = $"👑 {pane.BridgeLabel} is now the bridge manager" });
-        pane.Send(ManagerKickoff(pane, m, BridgePanes.Where(p => !ReferenceEquals(p, pane)).ToList()));
-        NoteBridgeActivity();
-        SaveBridge();
-        RaiseBridgeUi();
-    }
+    public void ToggleBridgeManager(ChatViewModel pane) => ToggleBridgeGroupCoordinator(pane);
 
     /// <summary>Rebuild every live pane's system-prompt appendix so restarts see the same manager arrangement the
     /// running sessions were told about via preludes.</summary>
@@ -3859,13 +4018,13 @@ public sealed partial class MainViewModel : Observable
     /// gets the dispatch grammar and the run-the-project-to-completion loop. Empty when the roster has no manager.</summary>
     private static string ManagerClause(ChatViewModel pane, int index, int managerNumber, int rosterCount)
     {
-        // Demon Mode replaces the brief entirely rather than layering onto it: its orchestrator has a narrower job
-        // (plan + dispatch, no review) and its workers are unreachable by the user, so the ordinary "coordinate as
-        // peers" framing would be actively wrong for both.
-        if (pane.IsDemonOrchestrator)
-            return DemonModePolicy.OrchestratorBrief(Math.Max(1, rosterCount - 1),
-                AppSettings.Current.DemonOrchestratorReviewsWork);
-        if (pane.IsDemonWorker) return DemonModePolicy.WorkerBrief(index, Math.Max(1, rosterCount - 1));
+        if (pane.BridgeCoordinatesOnly && pane.IsBridgeManager) return BridgeOrchestratorPolicy.Instructions;
+        if (pane.BridgeCoordinatorAgentId is { } coordinatorId)
+            return "\n[BRIDGE WORKER] Your assigned orchestrator has stable agent_id " + coordinatorId +
+                ". Use bridge_list_agents to find its current label and your group. Work only within its assignments, " +
+                "check retained peer messages at the start of an assignment when relevant, coordinate useful dependencies via bridge_send_message, " +
+                "and end with a factual report of changes, verification and blockers. Avoid acknowledgments to idle/completed agents. " +
+                "Your report is relayed to your own orchestrator automatically. Other orchestrators coordinate their own groups.";
 
         if (managerNumber <= 0) return "";
         if (index != managerNumber)
@@ -3923,6 +4082,8 @@ public sealed partial class MainViewModel : Observable
             return;
         }
         _bridgeSeenStatus[c] = now;
+        // Context maintenance is not a work report and must not finish or reassign this agent's task.
+        if (c.IsCompactingContext) return;
         // Supervision runs BEFORE the crown check: it owns the ledger whether or not a dispatch loop is live, and a
         // team whose manager stepped down still has assignments that must not be left in an unknown state.
         OnSupervisionStatusChanged(c, prev ?? "");
@@ -3935,30 +4096,26 @@ public sealed partial class MainViewModel : Observable
 
         // A mailbox control turn is not evidence that an assigned lane finished. Still route its peer replies
         // and receipts above, but do not wake the manager's work-completion loop for it.
-        if (c.IsPeerNotificationTurn) return;
+        if (c.IsPeerNotificationTurn || c.WaitingForLimitReset) return;
+        RecordBridgeTaskTurn(c, bridge, turnEnded);
 
         // No crown ⇒ no dispatch loop, no worker→manager relays. Flat peers only.
-        var manager = ManagerOf(bridge.Panes);
-        if (manager is null || !manager.IsBridgeManager) return;
-
-        if (ReferenceEquals(c, manager))
+        if (c.IsBridgeManager)
         {
-            if (turnEnded) RouteManagerDispatches(manager, bridge.Panes);
+            if (turnEnded) RouteManagerDispatches(c, bridge.Panes);
             return;
         }
+        var manager = CoordinatorFor(c, bridge.Panes);
+        if (manager is null || !manager.IsBridgeManager) return;
 
         if (turnEnded)
         {
             var report = Tail(AgentDirectiveParser.Strip(c.LastTurnReplyText(), new[]
                 { AgentDirectiveParser.MessageVerb, AgentDirectiveParser.ReadVerb, AgentDirectiveParser.AnsweredVerb }), 1800);
             if (report.Length == 0) return;   // an interrupted/empty turn carries nothing worth relaying
-            // Demon Mode's orchestrator plans and dispatches; it does NOT sit in judgement on worker output unless the
-            // user explicitly asked for that. Telling it to "check/accept the work" here would quietly reintroduce the
-            // review step the mode exists to leave out.
-            var reaction = IsDemonMode && !AppSettings.Current.DemonOrchestratorReviewsWork
-                ? "Do NOT review or re-do this work. Just record the lane as done, update \"## Manager plan\", then " +
-                  $"either dispatch this worker its next unclaimed lane (@@DISPATCH agent={BridgeNumberOf(c)}) or, if " +
-                  "every lane is done, tell the user the project is complete."
+            var reaction = manager.BridgeCoordinatesOnly
+                ? "Handle this result within your configured review level. Give specific feedback or assign a correction for concrete defects. " +
+                  "When useful work and requested checks finish, record scope completion with bridge_review_scope, report the outcome to the user, and stop."
                 : "React per your manager brief: check/accept the work, update \"## Manager plan\", then either " +
                   $"dispatch this worker its next unclaimed lane (@@DISPATCH agent={BridgeNumberOf(c)}) or, if every " +
                   "lane is done, run final verification and tell the user the project is complete.";
@@ -3996,9 +4153,12 @@ public sealed partial class MainViewModel : Observable
         // worker.Send would otherwise still land as "FROM MANAGER" after the user turned management off.
         if (!manager.IsBridgeManager) return;
         var reply = manager.LastTurnReplyText();
-        // A reply with no @@DISPATCH text at all is normal for an ordinary bridge and for an orchestrator that is
-        // still talking to the user — but in Demon Mode it is also exactly what a team that never started looks like.
-        if (!DispatchBlockParser.MentionsDispatch(reply)) { NoteDemonTurnWithoutDispatch(manager, panes); return; }
+        if (!DispatchBlockParser.MentionsDispatch(reply)) return;
+        if (manager.BridgeCoordinatesOnly)
+        {
+            SendManagerUpdate(manager, "Text dispatch blocks were not executed. Use bridge_dispatch_task with a stable task_id so assignments, dependencies and recovery are recorded.");
+            return;
+        }
         // This pane really is the manager and its work orders are about to be delivered, so the blocks come off
         // screen: each worker gets the order in its own pane and the manager keeps a "dispatched #N" divider.
         HideRoutedDirectives(manager, AgentDirectiveParser.DispatchVerb);
@@ -4009,29 +4169,25 @@ public sealed partial class MainViewModel : Observable
             if (!manager.IsBridgeManager) break;   // stepped down mid-route
             var dependencies = ParseDependencies(attributes);
             var targets = target.Equals("all", StringComparison.OrdinalIgnoreCase)
-                ? panes.Where(p => !ReferenceEquals(p, manager)).ToList()
+                ? panes.Where(p => ReferenceEquals(CoordinatorFor(p, panes), manager)).ToList()
                 : int.TryParse(target, out var num)
                     ? panes.Where(p => !ReferenceEquals(p, manager) && BridgeNumberOf(p) == num).ToList()
                     : new List<ChatViewModel>();
             foreach (var worker in targets)
             {
                 if (!manager.IsBridgeManager) break;
+                if (!ReferenceEquals(CoordinatorFor(worker, panes), manager) || !CoordinationReady(panes)) continue;
                 // Under supervision the closing line is a contract, not a nicety: the completion marker is what the
                 // ledger reads to tell "the agent finished" from "the agent said something".
                 var closing = IsSupervising
-                    ? "— Work within this order's scope and constraints. " + DemonModePolicy.ReportingContract
+                    ? "— Work within this order's scope and constraints. " + AgentSupervisionPolicy.ReportingContract
                     : "— Work within this order's scope and constraints. When done, end your reply with a short " +
                       "factual report (what you did / verified / anything blocking); it is relayed to the " +
                       "manager automatically.";
                 var wire = $"👑 [FROM MANAGER — {manager.AgentDisplay} agent #{m}] Work order:\n\n{body}\n\n{closing}";
-                // A Demon worker may still be waiting its turn in the staggered launch queue. Send is a no-op on a
-                // pane with no session yet, and this loop reads that as "not delivered", so the lane would be dropped
-                // in silence. A work order is reason enough to jump the queue; no-op for every other kind of pane.
-                StartQueuedDemonWorker(worker);
                 if (!worker.Send(wire)) continue;
                 ResetPeerChain(worker);   // a work order is a fresh start, not a continuation of a peer conversation
                 delivered.Add("#" + BridgeNumberOf(worker));
-                _demonDispatched = true;   // the team has started; the never-started guard stands down for good
                 // The supervisor's ledger is written from the SAME delivery that reached the session, so the two can
                 // never disagree about which agent holds which task.
                 NoteDispatch(worker, body, dependencies);

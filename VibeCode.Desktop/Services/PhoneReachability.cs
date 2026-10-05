@@ -11,7 +11,7 @@ namespace VibeCode.Services;
 /// <param name="Detail">Why it stops a phone, in the user's terms.</param>
 /// <param name="FixLabel">Null when the user has to do something off-screen.</param>
 /// <param name="Fix">Returns an empty string on success, or the reason it failed.</param>
-/// <param name="Blocking">True when nothing can possibly connect until this is dealt with.</param>
+/// <param name="Blocking">True when connection setup needs attention. A local check cannot prove reachability.</param>
 public sealed record PhoneProblem(
     string Title,
     string Detail,
@@ -72,7 +72,6 @@ public static class PhoneReachability
         problems.AddRange(VpnProblems());
         problems.AddRange(FirewallProblems(port));
         problems.AddRange(NetworkCategoryProblems());
-        problems.AddRange(AdapterNoise(addresses));
 
         return problems;
     }
@@ -109,7 +108,9 @@ public static class PhoneReachability
                     });
                 yield break;
             }
-            // Mullvad is installed and already allowing the LAN; no other tunnel warning would be useful.
+            if (!setting.Contains("allow", StringComparison.OrdinalIgnoreCase))
+                yield return new PhoneProblem("VPN local-network setting could not be checked",
+                    "Open Mullvad and check Local network sharing if the phone cannot connect.", Blocking: false);
             yield break;
         }
 
@@ -156,7 +157,7 @@ public static class PhoneReachability
 
     // ---------------- Windows Firewall ----------------
 
-    private sealed record FwRule(string Name, bool Enabled, int Direction, int Action, int Protocol,
+    internal sealed record FwRule(string Name, bool Enabled, int Direction, int Action, int Protocol,
         string LocalPorts, string App, int Profiles);
 
     /// <summary>
@@ -167,9 +168,10 @@ public static class PhoneReachability
     /// dismissed with Cancel, and which then outranks any allow rule for the rest of time.
     /// </summary>
     /// <summary>What the firewall rule table says about one executable on one port.</summary>
-    /// <param name="Readable">False when the rule table could not be inspected at all; callers stay quiet.</param>
-    /// <param name="Allowed">True when some enabled inbound rule genuinely admits this traffic.</param>
-    /// <param name="BlockRules">Names of enabled inbound BLOCK rules naming this executable.</param>
+    /// <param name="Readable">False when the rule table could not be inspected.</param>
+    /// <param name="Allowed">A matching allow rule exists on an active profile. Address scope and other policy
+    /// can still prevent a particular phone from connecting; this is not a reachability test.</param>
+    /// <param name="BlockRules">Names of enabled inbound TCP block rules covering this executable and port.</param>
     public sealed record FirewallVerdict(bool Readable, bool Allowed, IReadOnlyList<string> BlockRules);
 
     /// <summary>
@@ -194,28 +196,27 @@ public static class PhoneReachability
             return new FirewallVerdict(false, false, Array.Empty<string>());
         }
 
-        bool OnActiveProfile(FwRule r) => (r.Profiles & activeProfiles) != 0 || r.Profiles == int.MaxValue;
+        return EvaluateFirewallRules(rules, exe, port, activeProfiles);
+    }
 
-        var blocked = rules.Where(r =>
+    internal static FirewallVerdict EvaluateFirewallRules(IEnumerable<FwRule> rules, string exe, int port, int activeProfiles)
+    {
+        var snapshot = rules.ToList();
+        bool OnActiveProfile(FwRule r) => (r.Profiles & activeProfiles) != 0 || r.Profiles == int.MaxValue;
+        bool ForThisApp(FwRule r) => r.App.Length == 0
+            || (exe.Length > 0 && string.Equals(r.App, exe, StringComparison.OrdinalIgnoreCase));
+
+        var blocked = snapshot.Where(r =>
                 r.Enabled && r.Direction == 1 && r.Action == 0 && OnActiveProfile(r)
-                && r.App.Length > 0 && exe.Length > 0
-                && string.Equals(r.App, exe, StringComparison.OrdinalIgnoreCase))
+                && (r.Protocol is 6 or 256) && PortsCover(r.LocalPorts, port) && ForThisApp(r))
             .Select(r => r.Name).Distinct().ToList();
 
-        // Only two kinds of rule actually let a phone in, and the distinction matters: a machine has dozens of
-        // enabled inbound TCP allow rules belonging to other programs, and counting those would declare the
-        // firewall healthy on a box where VibeCode is firmly blocked.
-        var allowed = rules.Any(r =>
+        // Rules for another executable do not apply. Unscoped port rules (including an explicit allow-all)
+        // may apply, but a matching rule still says nothing about the phone's route or the rule's address scope.
+        var allowed = snapshot.Any(r =>
             r.Enabled && r.Direction == 1 && r.Action == 1 && OnActiveProfile(r)
             && (r.Protocol is 6 or 256) && PortsCover(r.LocalPorts, port)
-            && (
-                // A port rule - nobody's executable, just this port. Named LocalPorts only: a rule for "any port"
-                // that belongs to no program does not exist in practice, and treating "*" as coverage here would
-                // reintroduce exactly the false pass this guards against.
-                (r.App.Length == 0 && r.Protocol == 6 && r.LocalPorts.Length > 0 && r.LocalPorts != "*")
-                // ...or a rule naming this executable.
-                || (exe.Length > 0 && string.Equals(r.App, exe, StringComparison.OrdinalIgnoreCase))
-            ));
+            && ForThisApp(r));
 
         return new FirewallVerdict(true, allowed, blocked);
     }
@@ -224,28 +225,30 @@ public static class PhoneReachability
     {
         var exe = Environment.ProcessPath ?? "";
         var verdict = InspectFirewall(exe, port);
-        if (!verdict.Readable) yield break;
+        if (!verdict.Readable)
+        {
+            yield return new PhoneProblem("Windows Firewall could not be checked",
+                "Check its settings if the phone cannot connect. No conclusion about reachability is available.", Blocking: false);
+            yield break;
+        }
 
         if (verdict.BlockRules.Count > 0)
         {
             var names = string.Join(", ", verdict.BlockRules);
             yield return new PhoneProblem(
-                "Windows Firewall is set to block VibeCode",
-                "There is a rule that specifically blocks incoming connections to this app — Windows writes one "
-                + $"when the \"allow access?\" prompt is cancelled. A block always beats an allow, so the phone "
-                + $"cannot get in until it is removed ({names}).",
-                "Remove the block",
-                () => Elevate($"advfirewall firewall delete rule name=all dir=in program=\"{exe}\"")
-                    is { Length: 0 } ? "" : "Windows did not remove the rule.");
+                "Windows Firewall has a matching block rule",
+                $"An active inbound rule covers this app and TCP port {port} ({names}). "
+                + "Review its network and address scope if the phone cannot connect. A matching block overrides an allow.",
+                "Review firewall rules", OpenFirewallSettings);
         }
 
         if (!verdict.Allowed)
         {
             yield return new PhoneProblem(
-                "Windows Firewall has no rule for phone access",
-                $"Incoming connections on port {port} are not allowed, so your phone's packets are dropped before "
-                + "VibeCode ever sees them. The rule this adds only accepts devices on your own network — it does "
-                + "not open anything to the internet.",
+                "No matching phone access rule found",
+                $"The local check did not find an active inbound TCP rule for port {port}. If Windows Firewall "
+                + "blocks the phone, this adds a rule for the local subnet on Private and Domain networks. "
+                + "It does not configure access over a private VPN or test remote connectivity.",
                 "Allow it through the firewall",
                 () => AddFirewallRule(port));
         }
@@ -366,12 +369,11 @@ public static class PhoneReachability
         // note rather than a blocker.
         var names = string.Join(", ", publicNetworks.Distinct());
         yield return new PhoneProblem(
-            $"Your network is set to Public ({names})",
-            "Windows blocks incoming connections and hides this PC from other devices on networks marked Public. "
-            + "If this is your home or office Wi-Fi, switching it to Private is what lets your phone find it.",
-            "Set it to Private",
-            () => Elevate("-Command \"Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} "
-                          + "| Set-NetConnectionProfile -NetworkCategory Private\"", powershell: true),
+            $"A network is set to Public ({names})",
+            "The built-in local-subnet rule applies to Private and Domain networks. Review the connection your "
+            + "phone uses, and only mark a network Private if you trust it. VPN profiles may intentionally stay Public.",
+            "Review network settings",
+            () => OpenSettings("ms-settings:network-status"),
             Blocking: !anyPrivate);
     }
 
@@ -399,35 +401,10 @@ public static class PhoneReachability
         return ids;
     }
 
-    // ---------------- addressing ----------------
-
-    /// <summary>
-    /// Virtual adapters hand out addresses that look perfectly routable and are reachable from nothing. They are
-    /// already ranked below real hardware, but when one of them is the FIRST address the desktop advertises the
-    /// user copies it onto their phone and waits for a timeout, so it is worth saying out loud.
-    /// </summary>
-    private static IEnumerable<PhoneProblem> AdapterNoise(List<IPAddress> addresses)
-    {
-        if (addresses.Count == 0) yield break;
-        var first = addresses[0].ToString();
-        var virtualPrefixes = new[] { "192.168.56.", "172.17.", "172.18.", "172.19.", "172.20." };
-        if (!virtualPrefixes.Any(p => first.StartsWith(p, StringComparison.Ordinal))) yield break;
-
-        var real = addresses.Skip(1).FirstOrDefault();
-        yield return new PhoneProblem(
-            $"The address shown ({first}) belongs to a virtual adapter",
-            real is null
-                ? "VirtualBox, Docker or WSL created it and no phone can reach it. Connect this PC to your Wi-Fi "
-                  + "or Ethernet network."
-                : $"VirtualBox, Docker or WSL created it and no phone can reach it. Use {real} instead — the "
-                  + "generated app already tries every address, so it will still find this PC.",
-            Blocking: false);
-    }
-
     // ---------------- running things ----------------
 
     /// <summary>Runs a console tool and returns everything it said. Used only for tools that answer in one line.</summary>
-    private static string RunCapture(string exe, string arguments)
+    internal static string RunCapture(string exe, string arguments, int timeoutMs = 10_000)
     {
         try
         {
@@ -439,15 +416,35 @@ public static class PhoneReachability
                 CreateNoWindow = true,
             });
             if (process is null) return "";
-            var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-            if (!process.WaitForExit(10_000)) { try { process.Kill(true); } catch { /* gone */ } }
-            return output;
+            // Drain both pipes concurrently. Reading one to completion first can deadlock on a full stderr
+            // pipe, and synchronous ReadToEnd before WaitForExit made the timeout ineffective.
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(timeoutMs))
+            {
+                try { process.Kill(true); } catch { /* gone */ }
+                return "";
+            }
+            if (!Task.WaitAll(new Task[] { output, error }, timeoutMs)) return "";
+            return output.Result + error.Result;
         }
         catch (Exception ex)
         {
             CrashLog.Note("PhoneBridge", $"could not run {Path.GetFileName(exe)} - {ex.Message}");
             return "";
         }
+    }
+
+    private static string OpenFirewallSettings() => OpenSettings("wf.msc");
+
+    private static string OpenSettings(string target)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+            return "";
+        }
+        catch (Exception ex) { return ex.Message; }
     }
 
     /// <summary>

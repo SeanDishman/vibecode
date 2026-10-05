@@ -521,7 +521,7 @@ public static partial class GrokAccountLoginService
     }
 
     private static string ErrorMessage(JsonObject error) =>
-        StringValue(error["message"]) ?? error.ToJsonString();
+        GrokRpcError.Describe(StringValue(error["message"]), error["data"], JsonInt(error["code"]));
 
     private static string? JoinName(string? first, string? last)
     {

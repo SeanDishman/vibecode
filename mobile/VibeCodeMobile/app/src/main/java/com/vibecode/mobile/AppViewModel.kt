@@ -5,7 +5,9 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vibecode.mobile.data.BridgeClient
+import com.vibecode.mobile.data.BridgeAddress
 import com.vibecode.mobile.data.BridgeException
+import com.vibecode.mobile.data.ChatDrafts
 import com.vibecode.mobile.data.ChatDetail
 import com.vibecode.mobile.data.ChatOptions
 import com.vibecode.mobile.data.ChatSummary
@@ -16,6 +18,8 @@ import com.vibecode.mobile.data.Message
 import com.vibecode.mobile.data.Pairing
 import com.vibecode.mobile.data.PinnedTls
 import com.vibecode.mobile.data.SecureStore
+import com.vibecode.mobile.data.TranscriptOutOfSyncException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 
@@ -115,8 +120,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var chatsJob: Job? = null
     private var messagesJob: Job? = null
     private var enrolJob: Job? = null
-    private var chatsVersion = -1
-    private var messagesVersion = -1
+    private var pairJob: Job? = null
+    private var optionsJob: Job? = null
+    private var foldersJob: Job? = null
+    private var screenGeneration = 0
+    private val drafts = ChatDrafts()
 
     private val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Phone" }
 
@@ -128,8 +136,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         when {
             saved != null -> {
                 // Starts locked, so no transcript is ever painted before the user has been asked who they are.
-                // The activity clears this immediately on a device with no screen lock, where the gate cannot
-                // be opened.
+                // A device without a screen lock must configure one before it can unlock desktop access.
                 _state.update {
                     it.copy(
                         screen = Screen.Chats,
@@ -237,11 +244,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                                 enrolBusy = false,
                                 enrolError = "",
                                 enrolProgress = "",
+                                locked = true,
                             )
                         }
                         startChatsPoll()
                         return@launch
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         // A 403 means the coupon is spent — this app was already used to set up a phone, and no
                         // amount of retrying changes that. Say so once and stop.
                         if (e is BridgeException && e.status == HttpURLConnection.HTTP_FORBIDDEN) {
@@ -278,15 +287,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun client(pairing: Pairing) =
-        BridgeClient(pairing.host, pairing.port, pairing.fingerprint, pairing.token)
+    private fun client(pairing: Pairing): BridgeClient {
+        check(!_state.value.locked) { "Unlock VibeCode before controlling the PC." }
+        return BridgeClient(pairing.host, pairing.port, pairing.fingerprint, pairing.token)
+    }
 
     /** The chat the user is looking at, or null when the screen is not a chat. */
     private fun openChatId(): String? = (_state.value.screen as? Screen.Chat)?.id
 
+    private fun samePairing(pairing: Pairing): Boolean = _state.value.pairing?.let {
+        it.token == pairing.token && it.fingerprint.equals(pairing.fingerprint, ignoreCase = true)
+    } == true
+
+    private fun changeScreen() {
+        screenGeneration++
+        optionsJob?.cancel(); optionsJob = null
+        foldersJob?.cancel(); foldersJob = null
+        messagesJob?.cancel(); messagesJob = null
+    }
+
     // ---------------- app lock ----------------
 
-    /** Called when the app is unlocked by biometrics or device credential — or when no lock exists to satisfy. */
+    /** Called only after successful biometrics or device credential authentication. */
     fun onUnlocked() = _state.update { it.copy(locked = false) }
 
     /** Re-locks. No-op when nothing is paired: there is no secret on screen to protect yet. */
@@ -300,21 +322,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun onCodeChanged(value: String) =
         _state.update { it.copy(pair = it.pair.copy(code = value.filter(Char::isDigit).take(6), error = "")) }
 
-    fun backToAddress() =
-        _state.update { it.copy(pair = it.pair.copy(step = PairStep.Address, code = "", error = "")) }
+    fun backToAddress() {
+        pairJob?.cancel()
+        _state.update { it.copy(pair = it.pair.copy(step = PairStep.Address, code = "", error = "", busy = false)) }
+    }
 
     /** Step one: reach the PC and find out which certificate it is offering, so the user can vouch for it. */
     fun discover() {
-        val raw = _state.value.pair.address.trim()
-        val host = raw.substringBefore(':').trim()
-        val port = raw.substringAfter(':', "8765").trim().toIntOrNull() ?: 8765
-        if (host.isEmpty()) {
-            _state.update { it.copy(pair = it.pair.copy(error = "Type the address shown on your PC.")) }
+        if (_state.value.pair.busy) return
+        val address = try { BridgeAddress.parse(_state.value.pair.address) } catch (e: IllegalArgumentException) {
+            _state.update { it.copy(pair = it.pair.copy(error = friendly(e))) }
             return
         }
+        val (host, port) = address
 
         _state.update { it.copy(pair = it.pair.copy(busy = true, error = "")) }
-        viewModelScope.launch {
+        pairJob = viewModelScope.launch {
             // No pin yet — this is the one exchange that happens before trust exists, which is exactly why the
             // user is about to be asked to compare a safety code before anything is stored.
             var seen = ""
@@ -327,13 +350,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         pair = it.pair.copy(
                             step = PairStep.Confirm,
                             busy = false,
-                            address = "$host:$port",
+                            address = address.authority,
                             pcName = ping.optString("name").ifBlank { host },
                             fingerprint = seen,
                         )
                     )
                 }
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 _state.update { it.copy(pair = it.pair.copy(busy = false, error = reachabilityMessage(e, host, port))) }
             }
         }
@@ -344,15 +368,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Step two: trade the six-digit code for a token, pinned to the certificate the user just approved. */
     fun submitCode() {
         val pair = _state.value.pair
+        if (pair.busy || pair.step != PairStep.Code) return
         if (pair.code.length != 6) {
             _state.update { it.copy(pair = it.pair.copy(error = "The code is six digits.")) }
             return
         }
-        val host = pair.address.substringBefore(':')
-        val port = pair.address.substringAfter(':', "8765").toIntOrNull() ?: 8765
+        val (host, port) = BridgeAddress.parse(pair.address)
 
         _state.update { it.copy(pair = it.pair.copy(busy = true, error = "")) }
-        viewModelScope.launch {
+        pairJob = viewModelScope.launch {
             try {
                 val client = BridgeClient(host, port, pair.fingerprint, null)
                 val result = client.pair(pair.code, deviceName)
@@ -374,10 +398,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         pairing = saved,
                         pair = PairState(),
                         link = Link.Connecting,
+                        locked = true,
                     )
                 }
                 startChatsPoll()
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 _state.update { it.copy(pair = it.pair.copy(busy = false, error = friendly(e))) }
             }
         }
@@ -386,6 +412,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun unpair() {
         val pairing = _state.value.pairing
         stopPolling()
+        drafts.clear()
         store.clear()
         // A generated app cannot simply pair again: its enrolment secret was spent the first time it ran. Saying
         // so on a dedicated screen is more honest than dropping the user on an address box that will never work.
@@ -407,7 +434,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------- navigation ----------------
 
     fun openChat(chat: ChatSummary) {
-        messagesVersion = -1
+        changeScreen()
         _state.update {
             it.copy(
                 screen = Screen.Chat(chat.id),
@@ -415,16 +442,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 messages = emptyList(),
                 detail = ChatDetail(),
                 options = null,
+                optionsBusy = false,
                 sheet = Sheet.None,
-                draft = "",
+                draft = drafts.get(chat.id),
+                sending = drafts.isSending(chat.id),
+                undoing = false,
             )
         }
         startMessagesPoll(chat.id)
     }
 
     fun closeChatScreen() {
-        messagesJob?.cancel()
-        messagesJob = null
+        changeScreen()
         _state.update {
             it.copy(
                 screen = Screen.Chats,
@@ -432,7 +461,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 messages = emptyList(),
                 detail = ChatDetail(),
                 options = null,
+                optionsBusy = false,
                 sheet = Sheet.None,
+                sending = false,
+                undoing = false,
+                draft = "",
             )
         }
     }
@@ -453,8 +486,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         chatsJob?.cancel(); chatsJob = null
         messagesJob?.cancel(); messagesJob = null
         enrolJob?.cancel(); enrolJob = null
-        chatsVersion = -1
-        messagesVersion = -1
+        pairJob?.cancel(); pairJob = null
+        changeScreen()
     }
 
     /**
@@ -464,13 +497,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun startChatsPoll() {
         chatsJob?.cancel()
-        chatsVersion = -1
         chatsJob = viewModelScope.launch {
+            var chatsVersion = -1
             var backoff = 1_000L
             while (isActive) {
                 val pairing = _state.value.pairing ?: break
+                if (_state.value.locked) { delay(500); continue }
                 try {
                     val result = client(pairing).chats(chatsVersion, BridgeClient.POLL_SECONDS)
+                    if (_state.value.locked) continue
                     chatsVersion = result.optInt("version", chatsVersion)
                     if (!result.optBoolean("unchanged")) {
                         val chats = ChatSummary.list(result.optJSONArray("chats"))
@@ -487,6 +522,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     backoff = 1_000L
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    chatsVersion = -1
                     if (unrecoverable(e)) { forceUnpair(friendly(e)); return@launch }
                     _state.update { it.copy(link = Link.Offline, linkError = friendly(e)) }
                     delay(backoff)
@@ -513,7 +550,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val current = _state.value.pairing ?: return
         _state.update { it.copy(linkError = "Looking for ${current.pcName.ifBlank { "your PC" }}…") }
 
-        val live = runCatching { Discovery.hostsMatching(current.fingerprint, current.port) }.getOrDefault(emptyList())
+        val live = try { Discovery.hostsMatching(current.fingerprint, current.port) } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            emptyList()
+        }
+        if (!samePairing(current)) return
         val next = live.firstOrNull { it != current.host }
             ?: live.firstOrNull()
             ?: baked?.hosts?.takeIf { it.size > 1 }
@@ -522,7 +563,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         if (next == current.host) return
         val moved = current.copy(host = next)
-        store.save(moved)
+        try { store.save(moved) } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            _state.update { it.copy(linkError = friendly(e)) }
+            return
+        }
         _state.update { it.copy(pairing = moved, linkError = "Trying ${moved.address}…") }
     }
 
@@ -531,12 +576,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun startMessagesPoll(chatId: String) {
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
+            var messagesVersion = -1
             var backoff = 1_000L
             while (isActive) {
                 val pairing = _state.value.pairing ?: break
+                if (_state.value.locked) { delay(500); continue }
                 try {
                     val update = client(pairing).messages(chatId, messagesVersion, BridgeClient.POLL_SECONDS)
-                    messagesVersion = update.version
+                    if (_state.value.locked) continue
                     if (!update.unchanged) {
                         _state.update { current ->
                             if ((current.screen as? Screen.Chat)?.id != chatId) current
@@ -550,8 +597,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             )
                         }
                     }
+                    // Only acknowledge the version after the splice was validated and applied.
+                    messagesVersion = update.version
                     backoff = 1_000L
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    messagesVersion = -1
+                    if (e is TranscriptOutOfSyncException) continue
                     if (unrecoverable(e)) { forceUnpair(friendly(e)); return@launch }
                     if (e is BridgeException && e.status == HttpURLConnection.HTTP_NOT_FOUND) {
                         _state.update { it.copy(notice = "That chat was closed on the PC.") }
@@ -568,24 +620,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------- the turn ----------------
 
-    fun onDraftChanged(value: String) = _state.update { it.copy(draft = value) }
+    fun onDraftChanged(value: String) {
+        val chatId = openChatId() ?: return
+        drafts.set(chatId, value)
+        _state.update { it.copy(draft = value) }
+    }
 
     fun send() {
-        val text = _state.value.draft.trim()
         val chatId = openChatId() ?: return
         val pairing = _state.value.pairing ?: return
-        if (text.isEmpty() || _state.value.sending) return
+        val text = drafts.beginSend(chatId) ?: return
 
         // Clear the composer immediately. The prompt reappears as a real transcript row within one poll, and
         // holding the text hostage until the round trip finishes makes the app feel broken on a slow link.
         _state.update { it.copy(draft = "", sending = true) }
         viewModelScope.launch {
+            var failed = false
             try {
                 client(pairing).send(chatId, text)
             } catch (e: Exception) {
-                _state.update { it.copy(draft = text, notice = friendly(e)) }
+                if (e is CancellationException) throw e
+                failed = true
+                if (samePairing(pairing)) {
+                    if (unrecoverable(e)) forceUnpair(friendly(e))
+                    else _state.update { it.copy(notice = friendly(e)) }
+                }
             } finally {
-                _state.update { it.copy(sending = false) }
+                if (samePairing(pairing)) {
+                    drafts.finishSend(chatId, failed)
+                    _state.update {
+                        if (openChatId() == chatId) it.copy(sending = false, draft = drafts.get(chatId)) else it
+                    }
+                }
             }
         }
     }
@@ -610,15 +676,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val chatId = openChatId() ?: return
         val pairing = _state.value.pairing ?: return
         if (_state.value.optionsBusy) return
+        val generation = screenGeneration
         _state.update { it.copy(optionsBusy = true) }
-        viewModelScope.launch {
+        optionsJob = viewModelScope.launch {
             try {
                 val options = client(pairing).options(chatId)
                 _state.update {
-                    if (openChatId() != chatId) it else it.copy(options = options, optionsBusy = false)
+                    if (screenGeneration != generation) it else it.copy(options = options, optionsBusy = false)
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(optionsBusy = false, notice = friendly(e)) }
+                if (e is CancellationException) throw e
+                if (screenGeneration == generation && samePairing(pairing)) {
+                    if (unrecoverable(e)) forceUnpair(friendly(e))
+                    else _state.update { it.copy(optionsBusy = false, notice = friendly(e)) }
+                }
             }
         }
     }
@@ -646,17 +717,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val chatId = openChatId() ?: return
         val pairing = _state.value.pairing ?: return
         if (_state.value.undoing) return
+        val generation = screenGeneration
         _state.update { it.copy(undoing = true) }
         viewModelScope.launch {
             try {
                 val message = client(pairing).undoPrompt(chatId, ordinal)
                 _state.update {
-                    it.copy(notice = message.ifBlank { "Changes undone — your prompt is back on the PC." })
+                    if (screenGeneration != generation) it
+                    else it.copy(notice = message.ifBlank { "Changes undone — your prompt is back on the PC." })
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(notice = friendly(e)) }
+                if (e is CancellationException) throw e
+                if (samePairing(pairing)) {
+                    if (unrecoverable(e)) forceUnpair(friendly(e))
+                    else if (screenGeneration == generation) _state.update { it.copy(notice = friendly(e)) }
+                }
             } finally {
-                _state.update { it.copy(undoing = false) }
+                if (screenGeneration == generation) _state.update { it.copy(undoing = false) }
             }
         }
     }
@@ -667,7 +744,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val pairing = _state.value.pairing ?: return
         viewModelScope.launch {
             runCatching { client(pairing).togglePin(chat.id) }
-                .onFailure { e -> _state.update { it.copy(notice = friendly(e)) } }
+                .onFailure { e -> actionFailure(pairing, e) }
         }
     }
 
@@ -677,25 +754,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (trimmed.isEmpty()) return
         viewModelScope.launch {
             runCatching { client(pairing).rename(chat.id, trimmed) }
-                .onFailure { e -> _state.update { it.copy(notice = friendly(e)) } }
+                .onFailure { e -> actionFailure(pairing, e) }
         }
     }
 
     fun closeChatOnPc(chat: ChatSummary) {
         val pairing = _state.value.pairing ?: return
+        val generation = screenGeneration
         viewModelScope.launch {
             runCatching { client(pairing).close(chat.id) }
-                .onSuccess { if (openChatId() == chat.id) closeChatScreen() }
-                .onFailure { e -> _state.update { it.copy(notice = friendly(e)) } }
+                .onSuccess { if (screenGeneration == generation && openChatId() == chat.id) closeChatScreen() }
+                .onFailure { e -> actionFailure(pairing, e) }
         }
+    }
+
+    private fun actionFailure(pairing: Pairing, error: Throwable) {
+        if (error is CancellationException) throw error
+        if (!samePairing(pairing)) return
+        if (unrecoverable(error)) forceUnpair(friendly(error))
+        else _state.update { it.copy(notice = friendly(error)) }
     }
 
     // ---------------- starting a chat ----------------
 
     fun openNewChat() {
         val pairing = _state.value.pairing ?: return
+        changeScreen()
+        val generation = screenGeneration
         _state.update { it.copy(screen = Screen.NewChat, newChat = NewChatState(loading = true)) }
-        viewModelScope.launch {
+        foldersJob = viewModelScope.launch {
             try {
                 val folders = client(pairing).folders()
                 _state.update {
@@ -709,7 +796,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(newChat = it.newChat.copy(loading = false, error = friendly(e))) }
+                if (e is CancellationException) throw e
+                if (screenGeneration == generation && samePairing(pairing)) {
+                    if (unrecoverable(e)) forceUnpair(friendly(e))
+                    else _state.update { it.copy(newChat = it.newChat.copy(loading = false, error = friendly(e))) }
+                }
             }
         }
     }
@@ -721,11 +812,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onNewChatTitle(title: String) = _state.update { it.copy(newChat = it.newChat.copy(title = title)) }
 
-    fun cancelNewChat() = _state.update { it.copy(screen = Screen.Chats, newChat = NewChatState()) }
+    fun cancelNewChat() {
+        changeScreen()
+        _state.update { it.copy(screen = Screen.Chats, newChat = NewChatState()) }
+    }
 
     fun createChat() {
         val pairing = _state.value.pairing ?: return
         val form = _state.value.newChat
+        if (form.busy || _state.value.screen != Screen.NewChat) return
+        val generation = screenGeneration
         if (form.cwd.isBlank()) {
             _state.update { it.copy(newChat = it.newChat.copy(error = "Pick a folder first.")) }
             return
@@ -737,27 +833,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (id.isBlank()) throw IOException("The PC did not open a chat.")
                 // The list poll has not necessarily seen the new chat yet, so navigate on a summary built from
                 // what was just asked for; the next poll replaces it with the real one.
-                messagesVersion = -1
-                _state.update {
-                    it.copy(
-                        screen = Screen.Chat(id),
-                        newChat = NewChatState(),
-                        openChat = it.chats.firstOrNull { c -> c.id == id },
-                        messages = emptyList(),
-                        detail = ChatDetail(),
-                        options = null,
-                        draft = "",
-                    )
+                if (!samePairing(pairing)) return@launch
+                if (screenGeneration != generation) {
+                    _state.update { it.copy(notice = "Chat created on the PC.") }
+                    return@launch
                 }
-                startMessagesPoll(id)
+                val summary = _state.value.chats.firstOrNull { it.id == id } ?: ChatSummary.from(
+                    JSONObject().put("id", id).put("title", form.title.ifBlank { "New chat" })
+                        .put("provider", form.provider).put("providerLabel", form.provider)
+                        .put("cwd", form.cwd).put("folder", form.folders.folders.firstOrNull { it.cwd == form.cwd }?.name.orEmpty())
+                )
+                _state.update { it.copy(newChat = NewChatState()) }
+                openChat(summary)
             } catch (e: Exception) {
-                _state.update { it.copy(newChat = it.newChat.copy(busy = false, error = friendly(e))) }
+                if (e is CancellationException) throw e
+                if (samePairing(pairing)) {
+                    if (unrecoverable(e)) forceUnpair(friendly(e))
+                    else if (screenGeneration == generation) {
+                        _state.update { it.copy(newChat = it.newChat.copy(busy = false, error = friendly(e))) }
+                    }
+                }
             }
         }
     }
 
     fun retryNow() {
         if (_state.value.pairing == null) return
+        _state.update { it.copy(link = Link.Connecting, linkError = "") }
         startChatsPoll()
         openChatId()?.let { startMessagesPoll(it) }
     }
@@ -771,12 +873,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun act(reload: Boolean = false, block: suspend (BridgeClient, String) -> Unit) {
         val chatId = openChatId() ?: return
         val pairing = _state.value.pairing ?: return
+        val generation = screenGeneration
         viewModelScope.launch {
             try {
                 block(client(pairing), chatId)
-                if (reload) loadOptions()
+                if (reload && screenGeneration == generation && samePairing(pairing)) {
+                    optionsJob?.cancel()
+                    _state.update { it.copy(optionsBusy = false) }
+                    loadOptions()
+                }
             } catch (e: Exception) {
-                _state.update { it.copy(notice = friendly(e)) }
+                if (e is CancellationException) throw e
+                if (samePairing(pairing)) {
+                    if (unrecoverable(e)) forceUnpair(friendly(e))
+                    else if (screenGeneration == generation) _state.update { it.copy(notice = friendly(e)) }
+                }
             }
         }
     }
@@ -789,6 +900,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun forceUnpair(reason: String) {
         stopPolling()
+        drafts.clear()
         store.clear()
         _state.value = if (baked != null) {
             UiState(
@@ -811,13 +923,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         e is javax.net.ssl.SSLHandshakeException ->
             "The PC's security key does not match the one this phone paired with. Pair again if you reinstalled VibeCode."
         e is java.net.SocketTimeoutException -> "The PC did not answer in time."
-        e is java.net.ConnectException -> "Can't reach the PC. Is VibeCode open and on the same Wi-Fi?"
+        e is java.net.ConnectException -> "Can't reach the PC. Check that VibeCode is open and the PC is reachable on this network."
         else -> e.message ?: "Something went wrong."
     }
 
     private fun reachabilityMessage(e: Throwable, host: String, port: Int): String = when (e) {
         is java.net.ConnectException, is java.net.SocketTimeoutException, is java.net.NoRouteToHostException ->
-            "Nothing answered at $host:$port. Check the address on the PC, that VibeCode's phone access is on, and that both are on the same Wi-Fi."
+            "Nothing answered at $host:$port. Check the address, that phone access is on, and that this phone can reach the PC through the same local network or your private VPN."
         else -> friendly(e)
     }
 }

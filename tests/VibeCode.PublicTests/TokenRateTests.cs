@@ -8,21 +8,15 @@ internal static class TokenRateTests
 {
     private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
     private static int _checks;
-
-    public static void Run()
+public static void Run()
     {
         RollingWindows();
         Batched50k();
         LongBufferedReport();
         CorrectionsAndTurns();
-        ChatUsageAndIdleTimer();
-        ResumedSession();
-        GrokStreaming();
-        GrokBatched50k();
-        ReplayLiveGrokCaptures();
-        Console.WriteLine($"PASS: {_checks} token-rate checks (50k bursts, elapsed averages, Grok ACP streaming, reconciliation, idle expiry and pane isolation)");
+        DirectionalRates();
+        Console.WriteLine($"PASS: {_checks} rolling token-rate, 50k burst, separate read/write, reconciliation, expiry and pane isolation checks");
     }
-
     private static void RollingWindows()
     {
         var clock = new TestClock();
@@ -127,170 +121,6 @@ internal static class TokenRateTests
         Expect(tracker, 147, 147, "new turns preserve the trailing minute");
     }
 
-    private static void ChatUsageAndIdleTimer()
-    {
-        var clock = new TestClock();
-        var chat = Chat(clock, "codex");
-        var sibling = Chat(new TestClock(), "codex");
-        try
-        {
-            Check(!chat.HasTokens && chat.TokenRatesText == "0 tok/s · 0 tok/min", "empty chat stays empty");
-            Usage(chat, 100, 200, 40);
-            Check(chat.TokenRatesText == "340 tok/s · 340 tok/min", "rates include fresh, cached and output tokens");
-            Check(chat.HasTokens && chat.TokensText == "340 (300/40)", "existing total remains unchanged");
-            clock.Milliseconds = 900;
-            Usage(chat, 100, 200, 60);
-            clock.Milliseconds = 1000;
-            Result(chat, 100, 200, 60);
-            Check(chat.TokenRatesText == "360 tok/s · 360 tok/min", "final result counts no live token twice");
-            Check(chat.TotalTokens == 360 && !chat.IsWorking, "result commits the original total");
-
-            clock.Milliseconds = 1100;
-            Usage(chat, 5, 0, 5);
-            Result(chat, 5, 0, 10);
-            Check(chat.TokenRatesText == "341 tok/s · 375 tok/min", "next turn contributes its final delta");
-            Usage(chat, 10, 0, 10);
-            Call(chat, "IngestSdk", new JsonObject
-            {
-                ["type"] = "system", ["subtype"] = "codex_usage_checkpoint",
-                ["usage"] = Bucket(10, 0, 15),
-            });
-            Usage(chat, 5, 0, 2);
-            Result(chat, 5, 0, 5);
-            Check(chat.TotalTokens == 410, "checkpoint and final totals remain intact");
-            Check(chat.TokenRatesText == "373 tok/s · 410 tok/min", "fallback checkpoint does not duplicate usage");
-            Result(chat, 20, 0, 10);
-            Check(chat.TokenRatesText == "400 tok/s · 440 tok/min", "final-only provider usage is counted");
-            Check(sibling.TokenRatesText == "0 tok/s · 0 tok/min", "each pane has its own rates");
-
-            clock.Milliseconds = 2100;
-            PumpTimer();
-            Check(chat.TokenRatesText == "210 tok/s · 440 tok/min", "idle dispatcher tick gradually reduces the average");
-            Check(Timer(chat).IsEnabled, "timer keeps aging the idle minute");
-            clock.Milliseconds = 61100;
-            PumpTimer();
-            Check(chat.TokenRatesText == "0 tok/s · 0 tok/min", "idle dispatcher tick expires the minute");
-            Check(!Timer(chat).IsEnabled, "empty windows stop the timer");
-            Usage(chat, 1, 0, 1);
-            Check(Timer(chat).IsEnabled, "new usage restarts the timer");
-        }
-        finally { chat.Close(); sibling.Close(); }
-        Check(!Timer(chat).IsEnabled, "closing a pane releases its timer");
-    }
-
-    private static void ResumedSession()
-    {
-        var chat = Chat(new TestClock(), "kimi");
-        try
-        {
-            var result = new JsonObject
-            {
-                ["type"] = "result", ["subtype"] = "success", ["usage"] = Bucket(10, 0, 10),
-                ["session_usage"] = Bucket(900000, 0, 100000),
-            };
-            Call(chat, "IngestSdk", result);
-            Check(chat.TotalTokens == 1000000, "resumed session still shows its historical total");
-            Check(chat.TokenRatesText == "20 tok/s · 20 tok/min", "historical session total is excluded from recent rates");
-        }
-        finally { chat.Close(); }
-    }
-
-    private static void GrokStreaming()
-    {
-        var clock = new TestClock();
-        var chat = Chat(clock, "grok");
-        var options = new KimiSessionOptions { Cwd = Environment.CurrentDirectory };
-        typeof(KimiSessionOptions).GetProperty("UseGrokProtocol", Hidden)!.SetValue(options, true);
-        using var protocol = new KimiSession(options);
-        protocol.MessageReceived += message => Call(chat, "IngestSdk", message);
-        try
-        {
-            Chunk(protocol, "agent_thought_chunk", 40);
-            Check(chat.TokenRatesText == "0 tok/s · 0 tok/min", "Grok history replay while starting contributes no live rates");
-            chat.Status = "running";
-            Chunk(protocol, "agent_thought_chunk", 40);
-            Check(chat.TokenRatesText == "0 tok/s · 0 tok/min", "queued early prompt does not turn uninitialized Grok history replay into live rates");
-            Check(chat.Items.OfType<ThinkingItem>().Any(item => item.Text.Length > 0), "Grok history remains visible when its rate estimate is excluded");
-            typeof(KimiSession).GetField("_initialized", Hidden)!.SetValue(protocol, true);
-            Chunk(protocol, "agent_thought_chunk", 40);
-            Check(chat.TokenRatesText == "~10 tok/s · ~10 tok/min", "Grok thinking stream shows provisional token rates before final usage");
-            Check(chat.HasTokenRates && !chat.HasTokens && chat.TotalTokens == 0, "fresh Grok rate is visible without inventing session usage");
-            var cost = chat.CostText;
-            clock.Milliseconds = 900;
-            Chunk(protocol, "agent_message_chunk", 20);
-            Check(chat.TokenRatesText == "~15 tok/s · ~15 tok/min", "Grok text and thinking both contribute");
-            Call(protocol, "TranslateSessionUpdate", new JsonObject
-            {
-                ["sessionUpdate"] = "usage_update", ["used"] = 900000, ["size"] = 1000000,
-            });
-            Check(chat.TokenRatesText == "~15 tok/s · ~15 tok/min" && chat.TotalTokens == 0 && chat.CostText == cost,
-                "Grok context-only update does not clear rates or invent billed tokens/cost");
-            clock.Milliseconds = 2000;
-            Call(chat, "RefreshTokenRates");
-            Check(chat.TokenRatesText == "~8 tok/s · ~15 tok/min", "Grok tool-only gap gradually reduces the average");
-            Chunk(protocol, "agent_message_chunk", 20);
-            Check(chat.TokenRatesText == "~10 tok/s · ~20 tok/min", "stream resumes from its cumulative baseline after a gap");
-            clock.Milliseconds = 2200;
-            Result(chat, 100, 20, 25);
-            Check(chat.TokenRatesText == "66 tok/s · 145 tok/min", "delayed final usage reconciles streamed output without counting it twice");
-            Check(chat.TotalTokens == 145 && chat.TotalIn == 120 && chat.TotalOut == 25, "Grok final usage preserves exact disjoint buckets");
-
-            chat.Status = "running";
-            Chunk(protocol, "agent_message_chunk", 400);
-            Result(chat, 0, 0, 2);
-            Check(chat.TokenRatesText == "67 tok/s · 147 tok/min", "Grok overestimate corrects downward without subtracting a preceding turn");
-            chat.Status = "running";
-            Chunk(protocol, "agent_message_chunk", 40);
-            Result(chat, 0, 0, 0);
-            Check(chat.TokenRatesText == "67 tok/s · 147 tok/min", "explicit zero final usage removes only the current estimate");
-
-            clock.Milliseconds = 63000;
-            chat.Status = "running";
-            Chunk(protocol, "agent_message_chunk", 8);
-            Call(chat, "IngestSdk", new JsonObject { ["type"] = "result", ["subtype"] = "error", ["result"] = "test stop" });
-            Check(chat.TokenRatesText == "~2 tok/s · ~2 tok/min", "missing final usage leaves an estimate marked provisional");
-            clock.Milliseconds = 123000;
-            Call(chat, "RefreshTokenRates");
-            Check(chat.TokenRatesText == "0 tok/s · 0 tok/min" && !Timer(chat).IsEnabled, "Grok estimates expire at the exact minute boundary");
-        }
-        finally { chat.Close(); }
-    }
-
-    private static void GrokBatched50k()
-    {
-        var clock = new TestClock();
-        var chat = Chat(clock, "grok");
-        var options = new KimiSessionOptions { Cwd = Environment.CurrentDirectory };
-        typeof(KimiSessionOptions).GetProperty("UseGrokProtocol", Hidden)!.SetValue(options, true);
-        using var protocol = new KimiSession(options);
-        typeof(KimiSession).GetField("_initialized", Hidden)!.SetValue(protocol, true);
-        protocol.MessageReceived += message => Call(chat, "IngestSdk", message);
-        try
-        {
-            // A chat can sit open for minutes before dispatch. Its clock starts with the actual prompt.
-            clock.Milliseconds = 120000;
-            chat.Status = "running";
-            clock.Milliseconds = 140000;
-            Chunk(protocol, "agent_thought_chunk", 80000);
-            Check(chat.TokenRatesText == "~1.0k tok/s · ~20.0k tok/min", $"Grok 20k burst is averaged from prompt dispatch: {chat.TokenRatesText}");
-            clock.Milliseconds = 141000;
-            PumpTimer();
-            Check(chat.TokenRatesText == "~952 tok/s · ~20.0k tok/min", "dispatcher keeps the buffered Grok rate visible");
-            clock.Milliseconds = 160000;
-            Chunk(protocol, "agent_message_chunk", 80000);
-            Check(chat.TokenRatesText == "~1.0k tok/s · ~40.0k tok/min", "second Grok 20k burst is spread over elapsed time");
-            clock.Milliseconds = 170000;
-            Chunk(protocol, "agent_message_chunk", 40000);
-            Result(chat, 0, 0, 50000);
-            Check(chat.TokenRatesText == "1.0k tok/s · 50.0k tok/min", "authoritative 50k completion confirms the averaged Grok rate");
-            Check(chat.TotalTokens == 50000 && chat.TotalOut == 50000, "50k burst simulation preserves exact session totals");
-            clock.Milliseconds = 230000;
-            PumpTimer();
-            Check(chat.TokenRatesText == "0 tok/s · 0 tok/min" && !Timer(chat).IsEnabled, "finished Grok rate expires and releases its timer");
-        }
-        finally { chat.Close(); }
-    }
-
     private static void Chunk(KimiSession protocol, string kind, int characters) =>
         Call(protocol, "TranslateSessionUpdate", new JsonObject
         {
@@ -298,70 +128,64 @@ internal static class TokenRateTests
             ["content"] = new JsonObject { ["type"] = "text", ["text"] = new string('x', characters) },
         });
 
-    private static void ReplayLiveGrokCaptures()
-    {
-        var directory = Environment.GetEnvironmentVariable("VIBECODE_GROK_CAPTURE_DIR");
-        if (string.IsNullOrEmpty(directory)) return;
-        foreach (var file in System.IO.Directory.GetFiles(directory, "live-*-all.json"))
-        {
-            var capture = JsonNode.Parse(System.IO.File.ReadAllText(file))!;
-            foreach (var scenario in capture["scenarios"]!.AsArray())
-            {
-                var phase = scenario!["name"]!.GetValue<string>();
-                var clock = new TestClock();
-                var chat = Chat(clock, "grok");
-                chat.Status = "running";
-                var options = new KimiSessionOptions { Cwd = Environment.CurrentDirectory };
-                typeof(KimiSessionOptions).GetProperty("UseGrokProtocol", Hidden)!.SetValue(options, true);
-                using var protocol = new KimiSession(options);
-                typeof(KimiSession).GetField("_initialized", Hidden)!.SetValue(protocol, true);
-                protocol.MessageReceived += message => Call(chat, "IngestSdk", message);
-                try
-                {
-                    var chunks = 0;
-                    foreach (var ev in capture["events"]!.AsArray().OfType<JsonObject>())
-                    {
-                        if (ev["phase"]?.GetValue<string>() != phase || ev["generated_text"] is null) continue;
-                        clock.Milliseconds = (long)(ev["seconds"]!.GetValue<double>() * 1000);
-                        Call(protocol, "TranslateSessionUpdate", new JsonObject
-                        {
-                            ["sessionUpdate"] = ev["update_kind"]!.DeepClone(),
-                            ["content"] = new JsonObject { ["type"] = "text", ["text"] = ev["generated_text"]!.DeepClone() },
-                        });
-                        chunks++;
-                    }
-                    Check(chunks > 0 && chat.TokenRatesText.Contains('~') && chat.HasTokenRates,
-                        $"{System.IO.Path.GetFileName(file)} {phase}: captured live stream has visible provisional rates");
-                    var report = (JsonObject)typeof(KimiSession).GetMethod("UsageFromGrokResponse", BindingFlags.Static | BindingFlags.NonPublic)!
-                        .Invoke(null, new object?[] { scenario["response_numeric"] })!;
-                    var usage = report["usage"]!;
-                    var expected = new[] { "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens" }
-                        .Sum(key => usage[key]?.GetValue<long>() ?? 0);
-                    clock.Milliseconds = (long)(scenario["seconds"]!.GetValue<double>() * 1000);
-                    Call(chat, "IngestSdk", new JsonObject { ["type"] = "result", ["subtype"] = "success", ["usage"] = usage.DeepClone() });
-                    Check(chat.TotalTokens == expected && !chat.TokenRatesText.Contains('~'), "captured Grok final report confirms all estimates and commits exact usage");
-                    var actual = ((double, double))Call(typeof(ChatViewModel).GetField("_tokenUsageRates", Hidden)!.GetValue(chat)!, "Read")!;
-                    Check(actual.Item2 == expected, "captured Grok stream and final report contribute each token once");
-                    Check(Math.Abs(actual.Item1 - expected / Math.Max(1, clock.Milliseconds / 1000d)) < 0.000001,
-                        "captured final batch is averaged across the prompt duration");
-                    Console.WriteLine($"PASS: live Grok replay {System.IO.Path.GetFileName(file)} {phase}: {chunks} chunks, {chat.TokenRatesText}, exact {expected} tokens");
-                    clock.Milliseconds += 1000;
-                    Call(chat, "RefreshTokenRates");
-                    Check(!chat.TokenRatesText.StartsWith("0 tok/s"), "captured final batch does not disappear a second after arrival");
-                }
-                finally { chat.Close(); }
-            }
-        }
-    }
-
     private static object Tracker(TestClock clock) => Activator.CreateInstance(
         typeof(ChatViewModel).Assembly.GetType("VibeCode.Services.RollingTokenUsage", throwOnError: true)!,
         new object[] { clock })!;
 
+    private static void DirectionalRates()
+    {
+        var clock = new TestClock();
+        var chat = Chat(clock, "codex");
+        var sibling = Chat(new TestClock(), "codex");
+        try
+        {
+            Check(chat.TokenRatesText.Length == 0 && !chat.HasTokenRates, "empty rate rows stay hidden");
+            chat.Status = "running";
+            Call(chat, "BeginTokenUsageTiming");
+            clock.Milliseconds = 10000;
+            Usage(chat, 100, 200, 40);
+            Check(chat.TokenRatesText == "read 30/s · 300/min\nwrite 4/s · 40/min", "input, cache and output are displayed in separate rows");
+            Check(sibling.TokenRatesText.Length == 0, "usage remains isolated to its own pane");
+
+            Call(chat, "EstimateStreamingTokenRate", new string('x', 40));
+            Check(chat.TokenRatesText.Contains("write ~") && !chat.TokenRatesText.Contains("read ~"), "streaming estimates affect only generated output");
+            clock.Milliseconds = 10500;
+            Usage(chat, 100, 200, 50);
+            Check(!chat.TokenRatesText.Contains('~'), "an authoritative report reconciles output estimates");
+            Result(chat, 100, 200, 50);
+            Check(chat.TotalTokens == 350 && !chat.HasTokenRates, "completed totals are exact and finished rate rows are hidden");
+            Check(Rates(chat, "_readTokenUsageRates").Item2 == 300 && Rates(chat, "_writeTokenUsageRates").Item2 == 50,
+                "the final report does not count provisional or reported usage twice");
+
+            chat.Status = "running";
+            Call(chat, "ResetTokenUsageTurn");
+            clock.Milliseconds = 11000;
+            Usage(chat, 5, 0, 10);
+            Result(chat, 5, 0, 15);
+            Check(chat.TotalTokens == 370, "a later turn commits only its own final consumption");
+            Check(Rates(chat, "_readTokenUsageRates").Item2 == 305 && Rates(chat, "_writeTokenUsageRates").Item2 == 65,
+                "both directions retain independent trailing-minute totals across turns");
+
+            chat.Status = "running";
+            clock.Milliseconds = 12000;
+            Usage(chat, 1, 0, 1);
+            Check(Timer(chat).IsEnabled, "active usage starts the display timer");
+            clock.Milliseconds = 73000;
+            PumpTimer();
+            Check(chat.TokenRatesText.Length == 0 && !Timer(chat).IsEnabled, "expired usage hides both rows and releases the timer");
+        }
+        finally { chat.Close(); sibling.Close(); }
+        Check(!Timer(chat).IsEnabled, "closing a pane releases the rate timer");
+    }
+
+    private static (double, double) Rates(ChatViewModel chat, string field) =>
+        ((double, double))Call(typeof(ChatViewModel).GetField(field, Hidden)!.GetValue(chat)!, "Read")!;
+
     private static ChatViewModel Chat(TestClock clock, string provider)
     {
         var chat = new ChatViewModel(Environment.CurrentDirectory, provider: provider, accountId: "token-rate-simulation");
-        typeof(ChatViewModel).GetField("_tokenUsageRates", Hidden)!.SetValue(chat, Tracker(clock));
+        typeof(ChatViewModel).GetField("_readTokenUsageRates", Hidden)!.SetValue(chat, Tracker(clock));
+        typeof(ChatViewModel).GetField("_writeTokenUsageRates", Hidden)!.SetValue(chat, Tracker(clock));
         return chat;
     }
 

@@ -24,6 +24,10 @@ internal sealed class RollingTokenUsage
 
     public void ObserveEstimatedTurn(double total) => Observe(total, estimated: true);
 
+    // Reporting gaps do not erase the minute window. Only fresh positive samples enable the live /s label.
+    public bool HasRecentActivity => _samples.Last is { } last
+        && _clock.GetElapsedTime(last.Value.Ended, _clock.GetTimestamp()) < TimeSpan.FromSeconds(1);
+
     private void Observe(double total, bool estimated)
     {
         if (!double.IsFinite(total) || total < 0) return;

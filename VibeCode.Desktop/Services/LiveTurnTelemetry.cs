@@ -63,10 +63,8 @@ public sealed class LiveTurnTelemetry
     /// turn lands as one spike in whichever second it happened to finish in. These rows spread the same tokens
     /// across the seconds they were actually generated in, which is what a real-time graph has to plot.
     ///
-    /// Deltas rather than totals also make the rows summable, and every derived figure - cost, electricity,
-    /// water - is strictly linear in the four token counts (see <see cref="ModelPricing.TurnCost"/> and
-    /// <see cref="ModelEnergy.TurnEnergyWh"/>), so a turn split across forty rows still totals to exactly what
-    /// the one committed row says.
+    /// Token deltas and differences in the running cost keep rows summable even when requests use different
+    /// models, speed tiers or context rates. A price correction is allowed to reduce the provisional cost.
     /// </summary>
     private readonly Queue<UsageEntry> _flow = new();
     /// <summary>Every output token seen since the process started. MONOTONIC on purpose: a turn committing
@@ -120,7 +118,7 @@ public sealed class LiveTurnTelemetry
     /// </summary>
     /// <param name="owner">The chat this turn belongs to. Identity only; never dereferenced.</param>
     public void Report(object owner, string provider, string? model, double input, double cacheWrite,
-        double cacheRead, double output, string? sessionId, string? project)
+        double cacheRead, double output, string? sessionId, string? project, double? estimatedCostUsd = null)
     {
         if (!IsWatched) return;
 
@@ -143,7 +141,7 @@ public sealed class LiveTurnTelemetry
             Output = output,
             // Nothing reports a price mid-turn, so this is the list-price estimate by definition. It is replaced
             // wholesale by the committed row - including a provider-reported one - the moment the turn lands.
-            CostUsd = Math.Max(0, ModelPricing.TurnCost(id, input, cacheWrite, cacheRead, output)),
+            CostUsd = provider == "grok" ? 0 : Math.Max(0, estimatedCostUsd ?? ModelPricing.TurnCost(id, input, cacheWrite, cacheRead, output)),
             CostReported = false,
             SessionId = sessionId,
             Project = project,
@@ -161,16 +159,17 @@ public sealed class LiveTurnTelemetry
             var stepWrite = Step(cacheWrite, last?.CacheWrite);
             var stepRead = Step(cacheRead, last?.CacheRead);
             var stepOut = Step(output, last?.Output);
+            var reset = last is null || input < last.Input || cacheWrite < last.CacheWrite
+                || cacheRead < last.CacheRead || output < last.Output;
+            var stepCost = entry.CostUsd - (reset ? 0 : last!.CostUsd);
 
             _outputSeen += stepOut;
             _rows[owner] = new LiveRow { Entry = entry, Updated = now };
 
             _samples.Enqueue((now, _outputSeen));
-            if (stepIn + stepWrite + stepRead + stepOut > 0)
+            if (stepIn + stepWrite + stepRead + stepOut > 0 || stepCost != 0)
             {
-                // Priced from the DELTA, not from the turn so far, or the flow would re-bill the whole prompt on
-                // every snapshot. Both this and the energy the buckets derive are linear in the token counts, so
-                // the rows still sum to exactly what the committed turn is worth.
+                // Cost is a delta too. Repricing token deltas loses per-request fast/cache/context rates.
                 _flow.Enqueue(new UsageEntry
                 {
                     At = entry.At,
@@ -180,7 +179,7 @@ public sealed class LiveTurnTelemetry
                     CacheWrite = stepWrite,
                     CacheRead = stepRead,
                     Output = stepOut,
-                    CostUsd = Math.Max(0, ModelPricing.TurnCost(id, stepIn, stepWrite, stepRead, stepOut)),
+                    CostUsd = stepCost,
                     CostReported = false,
                     SessionId = sessionId,
                     Project = project,

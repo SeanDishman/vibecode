@@ -131,6 +131,7 @@ public partial class MainWindow : Window
         BorderlessMode = AppSettings.IsBorderless;
         InitializeComponent();
         DataContext = _vm;
+        ApiKeyAccountService.Instance.PropertyChanged += OnApiKeyAccountsChanged;
         RefreshSurfaceState();
 
         // WPF otherwise scrolls an expanded tool/thinking card into view. Each full chat shell owns this guard.
@@ -138,6 +139,8 @@ public partial class MainWindow : Window
             new RequestBringIntoViewEventHandler((_, e) => e.Handled = true), true);
 
         _vm.PropertyChanged += OnMainViewModelPropertyChanged;
+        if (!_isBridgeMonitor) _vm.JarvisSettingsRequested += OnJarvisSettingsRequested;
+        if (!_isBridgeMonitor) _vm.JarvisAppearanceRequested += OnJarvisAppearanceRequested;
         _vm.BridgePanes.CollectionChanged += OnBridgePanesChanged;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
@@ -150,7 +153,6 @@ public partial class MainWindow : Window
             Deactivated += OnShellDeactivated;
             return;
         }
-
 
         // Only the primary shell owns the phone bridge: the second-monitor window shares this view model, and two
         // listeners on one port would leave the second one permanently in "address already in use".
@@ -307,9 +309,7 @@ public partial class MainWindow : Window
         // the provider sessions, so it must not run: the window is being swapped out, the app is not going away.
         if (_closingForAppearanceReload) return;
 
-        // Close the Demon team through its own teardown so the supervision ledger is closed with a reason and the
-        // final decision is written down, rather than fifteen sessions simply vanishing with tasks still open.
-        if (_vm.IsDemonMode) _vm.CloseDemonTeam("VibeCode is closing");
+        _vm.ShutdownJarvis();
         foreach (var p in _vm.LiveBridgePeers.ToList()) p.Close();   // includes peers parked behind other chats
         foreach (var c in _vm.Chats.ToList()) c.Close();
     }
@@ -320,7 +320,12 @@ public partial class MainWindow : Window
     /// while the chats themselves keep running under the replacement window.</summary>
     private void DetachShellWiring()
     {
+        // Jarvis is an independent taskbar window, so it no longer closes automatically as an owned window.
+        _jarvisWindow?.Close();
+        DetachMicWiring();
         AppSettings.Changed -= OnSettingsChanged;   // unsubscribe before the final Save so it doesn't reload
+        if (!_isBridgeMonitor) _vm.JarvisSettingsRequested -= OnJarvisSettingsRequested;
+        if (!_isBridgeMonitor) _vm.JarvisAppearanceRequested -= OnJarvisAppearanceRequested;
         AppSettings.ActiveAccountAdopted -= OnActiveAccountAdopted;
         _vm.Chats.CollectionChanged -= OnChatsChanged;
         _vm.AllAccounts.CollectionChanged -= OnAccountManagerCollectionChanged;
@@ -344,6 +349,7 @@ public partial class MainWindow : Window
 
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        ApiKeyAccountService.Instance.PropertyChanged -= OnApiKeyAccountsChanged;
         _vm.PropertyChanged -= OnMainViewModelPropertyChanged;
         _vm.BridgePanes.CollectionChanged -= OnBridgePanesChanged;
         // The header context listens to the view model, which outlives this window: a second shell opened and closed
@@ -402,12 +408,6 @@ public partial class MainWindow : Window
     /// <summary>True while the shell is put away in the notification area and its agents are still working.</summary>
     internal bool IsRunningInBackground => _tray is { IsVisible: true };
 
-    /// <summary>
-    /// The close button's other meaning. When "run in background" is on, closing the shell hides it behind a
-    /// notification-area icon and every chat, Bridge peer and Demon worker carries on - the app is a machine for
-    /// running agents unattended, and ending nine of them mid-task on an absent-minded click is not what that
-    /// click means. Returns false when the close is a real one, and the caller lets the existing teardown run.
-    /// </summary>
     private bool TryEnterBackground()
     {
         if (!BackgroundRunPolicy.ShouldStayResident(
@@ -454,7 +454,7 @@ public partial class MainWindow : Window
             }
             StartTrayTooltipUpdates();
             CrashLog.Note("RunInBackground",
-                "Closed to the notification area. Chats, Bridge peers and any Demon team keep running.");
+                "Closed to the notification area. Chats and Bridge peers keep running.");
             return true;
         }
         catch (Exception ex)
@@ -490,9 +490,6 @@ public partial class MainWindow : Window
         Activate();
     }
 
-    /// <summary>Quit for real, from the notification icon. Deliberately routed through the window's own Closing
-    /// path rather than straight to Shutdown: that path is where the Demon team is closed with a reason, every
-    /// Bridge peer and chat is disposed, and the provider processes are actually ended.</summary>
     private void QuitFromTray()
     {
         if (!CodeViewerWindow.ConfirmCloseEditors()) return;
@@ -542,13 +539,6 @@ public partial class MainWindow : Window
     /// <summary>The one shell that owns the sessions - as opposed to a second-monitor companion view of them.</summary>
     internal bool IsPrimaryShell => !_isBridgeMonitor;
 
-    /// <summary>
-    /// Re-skin the app in place. Every window resolves theme brushes, styles and control templates with
-    /// StaticResource when its content is parsed, so a live theme change cannot reach a window that is already
-    /// built - the window itself has to be rebuilt. That used to mean restarting the process, which killed every
-    /// running agent; instead the replacement shell is constructed over the SAME <see cref="MainViewModel"/>, so
-    /// the chats, provider sessions, Bridge peers and Demon team never learn that anything happened.
-    /// </summary>
     internal void ReloadShellForAppearanceChange(bool reopenSettings)
     {
         if (_isBridgeMonitor || _isClosing) return;
@@ -566,6 +556,15 @@ public partial class MainWindow : Window
         replacement.Show();
         if (Application.Current is { } app) app.MainWindow = replacement;
 
+        // Jarvis has its own fixed palette and taskbar window. Keep its conversation/recording alive while
+        // the coding shell adopts the new appearance; the menu resolves settings against the current shell.
+        if (_jarvisWindow is { } jarvis)
+        {
+            replacement._jarvisWindow = jarvis;
+            _jarvisWindow = null;
+            jarvis.Closed += (_, _) => replacement._jarvisWindow = null;
+        }
+
         _closingForAppearanceReload = true;
         Close();   // takes the old second-monitor companion with it; the reconcile below rebuilds it re-skinned
 
@@ -578,8 +577,10 @@ public partial class MainWindow : Window
         // Reopened rather than kept open: Settings is modal and owned by the shell, and swapping a modal dialog's
         // owner out from under it is not safe. Background priority runs it after the reconcile above, and lets this
         // call stack (which came *from* that dialog) unwind first.
+        // Both things that re-skin from Settings (Mode, Borderless) live on Appearance, so that is the page to come
+        // back to - not General, which left the user one click away from the switch they had just used.
         if (reopenSettings)
-            replacement.Dispatcher.BeginInvoke(new Action(() => replacement.ShowSettingsDialog()),
+            replacement.Dispatcher.BeginInvoke(new Action(() => replacement.ShowSettingsDialog("Appearance")),
                 System.Windows.Threading.DispatcherPriority.Background);
     }
 
@@ -598,6 +599,7 @@ public partial class MainWindow : Window
         }
         WindowState = previous.WindowState == WindowState.Minimized ? WindowState.Normal : previous.WindowState;
         _randomChoice = previous._randomChoice;   // a random backdrop must not reshuffle just because the theme did
+        _reloadNoDirectory = previous.NoDirectoryChip.IsChecked == true;   // nor may a theme change pick a folder
     }
 
     /// <summary>The replacement shell is on screen. This re-establishes only what belongs to a *window* - it must
@@ -606,7 +608,7 @@ public partial class MainWindow : Window
     {
         Loaded -= OnAppearanceReloadLoaded;
         EnableDarkTitleBar();
-        PrefillCwdBox();
+        PrefillCwdBox(_reloadNoDirectory ? NoDirectoryWorkspace.Folder : null);
         SetNewChatProvider(AppSettings.Current.DefaultProvider, persist: false);
         _hiddenSnapshot = HiddenSnapshot();
         ApplyBackground();   // also rewrites the Scrim* app resources, which the two modes set very differently
@@ -643,7 +645,6 @@ public partial class MainWindow : Window
         StartupOverlay.Visibility = Visibility.Collapsed;
         // App-wide identity, settings, and extension controls stay in the primary titlebar in both companion modes.
         TitleBarBrand.Visibility = Visibility.Collapsed;
-        GamesButton.Visibility = Visibility.Collapsed;
         WeatherChip.Visibility = Visibility.Collapsed;
         SettingsButton.Visibility = Visibility.Collapsed;
         BridgeMonitorTitle.Visibility = Visibility.Visible;
@@ -666,7 +667,7 @@ public partial class MainWindow : Window
         SetBridgePanePartition(companion: true);
     }
 
-    /// <summary>Whether the bridge overlay (and the demon wall it hosts) owns this shell's chat column, which is the
+    /// <summary>Whether the bridge overlay owns this shell's chat column, which is the
     /// same thing as "the main composer is not the editor the user is typing into". Computed from the view model
     /// rather than read back off <see cref="SurfaceShowBridge"/>, so it is already right while a freshly built shell
     /// is wiring its composer up and has not run <see cref="RefreshSurfaceState"/> yet.</summary>
@@ -720,6 +721,13 @@ public partial class MainWindow : Window
     /// <summary>Put the most useful project path in the new-chat folder field (last chat, else MRU, else profile).</summary>
     private void PrefillCwdBox(string? preferred = null)
     {
+        // Leaving a no-directory chat reopens home on "No directory", the way leaving a project reopens on it.
+        if (NoDirectoryWorkspace.IsNoDirectory(preferred))
+        {
+            SetNoDirectory(true);
+            return;
+        }
+        SetNoDirectory(false);
         if (ShellDirectory(preferred) is { } fromChat)
         {
             CwdBox.Text = fromChat;
@@ -735,9 +743,9 @@ public partial class MainWindow : Window
     }
 
     private ChatViewModel NewChatForWindow(string cwd, string? resume = null, bool fork = false,
-        string? title = null, string? provider = null)
+        string? title = null, string? provider = null, Action<ChatViewModel>? configure = null)
     {
-        var chat = _vm.NewChat(cwd, resume, fork, title, provider, activatePrimary: !IsDoubleSessionCompanion);
+        var chat = _vm.NewChat(cwd, resume, fork, title, provider, activatePrimary: !IsDoubleSessionCompanion, configure: configure);
         if (IsDoubleSessionCompanion) _vm.OpenSecondaryChat(chat);
         return chat;
     }
@@ -793,12 +801,12 @@ public partial class MainWindow : Window
         if ((!_isBridgeMonitor && e.PropertyName == nameof(MainViewModel.ActiveChat))
             || (IsDoubleSessionCompanion && e.PropertyName == nameof(MainViewModel.SecondaryActiveChat)))
             WireActiveChat();
-        if (e.PropertyName == nameof(MainViewModel.BridgeGridRows)) ScheduleBridgeGridRows();
-        // IsDemonSurface belongs in this list: a Demon wall refuses the second display, and it can arrive or leave
-        // (started, parked behind another Bridge, un-parked, torn down) without ShowBridge ever changing.
+        if (e.PropertyName is nameof(MainViewModel.BridgeGridRows)
+            or nameof(MainViewModel.SecondaryIsSingleTerminalBridge)
+            or nameof(MainViewModel.SecondaryBridgePanes)) ScheduleBridgeGridRows();
         if (!_isBridgeMonitor && e.PropertyName is nameof(MainViewModel.ShowBridge)
             or nameof(MainViewModel.SecondaryShowBridge)
-            or nameof(MainViewModel.IsDemonSurface))
+            or nameof(MainViewModel.IsSingleTerminalBridge))
             ReconcileDualMonitorBridge();
     }
 
@@ -904,8 +912,6 @@ public partial class MainWindow : Window
         {
             if (_isClosing || !BridgePaneList.IsLoaded) return;
             BridgePaneList.UpdateLayout();
-            // Demon Mode swaps the UniformGrid for DemonWallPanel, which sizes itself from its own children (the
-            // orchestrator's 2x2 block makes a shared row count meaningless) - so there is simply nothing to set.
             if (FindVisualDescendant<UniformGrid>(BridgePaneList) is not { } grid) return;
             // Density is measured from the roster THIS window is showing; shell 2's own bridge is its own grid.
             if (IsDoubleSessionCompanion && _vm.HasSeparateSecondaryBridge)
@@ -933,24 +939,20 @@ public partial class MainWindow : Window
         var settings = AppSettings.Current;
         var monitorCount = DisplayMonitorService.ActiveMonitorCount;
         var bridgeVisible = _vm.ShowBridge || _vm.SecondaryShowBridge;
-        var demonWall = _vm.IsDemonSurface;
         var shouldSplit = DualMonitorBridgePolicy.ShouldSplit(
-            settings.DualMonitorBridge,
+            settings.DualMonitorBridge && !_vm.IsSingleTerminalBridge,
             bridgeVisible,
             _vm.BridgePanes.Count,
-            monitorCount,
-            demonWall);
+            monitorCount);
         var shouldOpen = DualMonitorBridgePolicy.ShouldOpenCompanion(
-            settings.DualMonitorBridge,
+            settings.DualMonitorBridge && !_vm.IsSingleTerminalBridge,
             settings.DualMonitorDoubleSessions,
             bridgeVisible,
             _vm.BridgePanes.Count,
-            monitorCount,
-            demonWall);
+            monitorCount);
         var shouldPartition = DualMonitorBridgePolicy.ShouldPartition(
             shouldSplit, settings.DualMonitorDoubleSessions, _vm.ShowBridge, _vm.SecondaryShowBridge,
             _vm.HasSeparateSecondaryBridge);
-        NoteDemonRefusesDualMonitor(demonWall, settings);
         if (!shouldOpen || !DisplayMonitorService.TryGetCompanionWorkArea(this, out var target))
         {
             CloseBridgeMonitorInternal();
@@ -1003,7 +1005,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool _demonDualMonitorNoticed;
 
     /// <summary>
     /// Say out loud why the second display went away.
@@ -1013,15 +1014,6 @@ public partial class MainWindow : Window
     /// runs on every roster and surface change — and only to someone who actually has the setting on, because to
     /// everyone else it is a refusal of something they never asked for.
     /// </summary>
-    private void NoteDemonRefusesDualMonitor(bool demonWall, AppSettings settings)
-    {
-        if (!demonWall) { _demonDualMonitorNoticed = false; return; }   // next team gets told again
-        if (_demonDualMonitorNoticed) return;
-        if (!settings.DualMonitorBridge && !settings.DualMonitorDoubleSessions) return;
-        _demonDualMonitorNoticed = true;
-        ShowBridgeHint(DualMonitorBridgePolicy.DemonRefusal);
-    }
-
     private void OpenBridgeMonitor(MonitorWorkArea target)
     {
         MainWindow? companion = null;
@@ -1032,8 +1024,7 @@ public partial class MainWindow : Window
                 AppSettings.Current.DualMonitorBridge,
                 _vm.ShowBridge || _vm.SecondaryShowBridge,
                 _vm.BridgePanes.Count,
-                DisplayMonitorService.ActiveMonitorCount,
-                _vm.IsDemonSurface);
+                DisplayMonitorService.ActiveMonitorCount);
             var splitBridge = DualMonitorBridgePolicy.ShouldPartition(
                 splitEligible, AppSettings.Current.DualMonitorDoubleSessions,
                 _vm.ShowBridge, _vm.SecondaryShowBridge, _vm.HasSeparateSecondaryBridge);
@@ -1220,7 +1211,7 @@ public partial class MainWindow : Window
             StartWeatherPolling();  // keep the titlebar weather chip current (no-op while the extension is off)
             // Resume an already-set-up Second Brain with the app. First-run downloads still wait for the user to
             // open the brain surface, so ordinary startup never surprises them with an installation.
-            if (AppSettings.Current.AgentMemoryEnabled) _ = AgentMemoryService.Instance;
+            if (AppSettings.Current.SecondBrainEnabled) _ = AgentMemoryService.Instance;
         }
         finally
         {
@@ -1231,24 +1222,12 @@ public partial class MainWindow : Window
             await HideStartupOverlayAsync();
             _startupComplete = true;
             ReconcileDualMonitorBridge();
-            MaybeStartDemonTeamFromEnvironment();
+            // Record readiness only after rendering and input have had a chance to run. Completing OnLoaded
+            // alone missed a Loaded-priority auto-scroll loop that left the splash painted over a ready shell.
+            _ = Dispatcher.InvokeAsync(() => CrashLog.Note("StartupReady",
+                $"Workspace rendered and dispatcher idle after {startupTimer.ElapsedMilliseconds} ms."),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         }
-    }
-
-    /// <summary>
-    /// The automation hook for Demon Mode: <c>VIBECODE_DEMON_START=&lt;folder&gt;</c> stands a team up at startup.
-    ///
-    /// Demon Mode is otherwise reachable only through the Settings switch, which asks for the folder with a native
-    /// shell picker — and a smoke test cannot drive one of those from the UIA tree with any reliability. This is the
-    /// same shape as <c>VIBECODE_DEMON_SESSIONS</c>: an env hook that exercises the real activation path rather than
-    /// a second, test-only way in. Primary window only, so a companion display does not start a second team.
-    /// </summary>
-    private void MaybeStartDemonTeamFromEnvironment()
-    {
-        if (_isBridgeMonitor || _vm.IsDemonMode) return;
-        var folder = Environment.GetEnvironmentVariable("VIBECODE_DEMON_START");
-        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return;
-        _vm.ActivateDemonMode(folder, AppSettings.Current.DefaultProvider);
     }
 
     /// <summary>Run one startup step so that its failure costs only that step. Startup is the one place where an
@@ -1272,9 +1251,17 @@ public partial class MainWindow : Window
         ShowSettingsDialog();
     }
 
+    /// <summary>The sidebar's "N hidden" link. The hidden list is a dropdown in Settings ▸ General now, so open
+    /// Settings on it with the dropdown already open instead of leaving the user to go and find it.</summary>
+    private void OnOpenHiddenProjects(object sender, RoutedEventArgs e)
+    {
+        ShowSettingsDialog("Hidden projects");
+    }
+
     private void OnOpenBrain(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
+        if (!AppSettings.Current.SecondBrainEnabled) { ShowSettingsDialog("Extensions"); return; }
         MemoryMapWindow.Open(this);
     }
 
@@ -1284,7 +1271,7 @@ public partial class MainWindow : Window
         PhoneBridgeWindow.Open(this);
     }
 
-    private void ShowSettingsDialog()
+    private void ShowSettingsDialog(string? category = null)
     {
         var coordinator = _isBridgeMonitor ? _primaryWindow : this;
         if (coordinator is null) return;
@@ -1295,9 +1282,8 @@ public partial class MainWindow : Window
             dialog = new SettingsWindow
             {
                 Owner = this,
-                DemonTeamLive = _vm.IsDemonMode,
-                KimiAvailable = _vm.IsKimiInstalled && _vm.IsKimiSignedIn,
             };
+            if (category is not null) dialog.SelectCategory(category);
             dialog.ShowDialog();
         }
         finally
@@ -1307,25 +1293,10 @@ public partial class MainWindow : Window
         }
         // Acted on after the dialog is gone, not from inside it: standing up sixteen sessions behind a modal would
         // hide the Bridge the user is meant to be watching, and tearing one down under one is worse.
-        if (dialog.DemonStopRequested) _vm.CloseDemonTeam("Demon Mode was switched off in Settings");
-        else if (dialog.DemonStartFolder is { } folder) StartDemonTeam(folder, dialog.DemonSetup);
 
         // Last, because it replaces the window this method is running on. Settings reopens on the other side so the
         // user lands back where they clicked, now wearing the mode they picked.
         if (dialog.UiModeChanged) App.ApplyAppearanceChange(reopenSettings: true);
-    }
-
-    /// <summary>Stand up a Demon team in <paramref name="path"/>. The single entry point — Demon Mode is reachable
-    /// only from the Settings switch and the automation hook, never from an ordinary New chat. The provider and the
-    /// team size come from what the user picked in setup, not from the app-wide defaults: choosing a Codex account
-    /// or a team of six and then getting a full Claude team would be the picker quietly ignoring what it asked.</summary>
-    private void StartDemonTeam(string path, TeamSetup? setup)
-    {
-        var provider = setup?.Provider ?? AppSettings.Current.DefaultProvider;
-        if (_vm.ActivateDemonMode(path, provider, setup?.AccountId, setup?.Session, setup?.SessionCount)
-            is not null) return;
-        MessageBox.Show(this, "Demon Mode couldn't start a team in that folder.", "Demon Mode",
-            MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private void OnHideProject(object sender, RoutedEventArgs e)
@@ -1344,7 +1315,7 @@ public partial class MainWindow : Window
         if (count == 0) return;
         if (MessageBox.Show(this,
                 $"Hide all {count} project{(count == 1 ? "" : "s")} from the sidebar?\n\n"
-                + "Nothing is deleted — open chats keep running, and Settings ▸ Projects restores them "
+                + "Nothing is deleted — open chats keep running, and Settings ▸ General ▸ Hidden projects restores them "
                 + "individually or all at once.",
                 "Hide all projects?", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
@@ -1362,6 +1333,10 @@ public partial class MainWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
+            BridgeSharedPanel.RefreshMessageDividers();
+            RefreshSecondBrainExtension();
+            _vm.Jarvis.RefreshSettings();
+            if (!AppSettings.Current.JarvisVoiceEnabled && _vm.Jarvis.IsSpeaking) _vm.Jarvis.Cancel();
             ApplyBackground();
             if (_bridgeMonitorWindow is { _isClosing: false } bridgeMonitor)
             {
@@ -1760,16 +1735,22 @@ public partial class MainWindow : Window
 
     private void OnChatItemsChanged()
     {
-        if (_stickToBottom) Dispatcher.BeginInvoke(ScrollMsgToBottom, System.Windows.Threading.DispatcherPriority.Background);
+        if (_stickToBottom) Dispatcher.BeginInvoke(() =>
+        {
+            // A reader can scroll upward between incoming output and this queued callback.
+            if (_stickToBottom) ScrollMsgToBottom();
+        }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
     private void OnMsgScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        // The message ScrollViewer now lives inside the ListBox control template, so there's no MsgScroll field -
-        // read the offsets straight off the event args. Only re-evaluate stickiness on real scrolls (not when the
-        // extent grew because a new message was appended), otherwise appending would flip us off "stick to bottom".
-        if (e.ExtentHeightChange == 0)
-            _stickToBottom = e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 120;
+        // Nested markdown/code viewers also bubble this event. Their offsets cannot change whether the main
+        // transcript follows new output or preserves a reader's position.
+        if (e.OriginalSource is not ScrollViewer scroll || !ReferenceEquals(scroll, FindScrollViewer(MsgList))) return;
+        _stickToBottom = AutoScroll.ShouldFollowBottom(scroll, e, _stickToBottom, 120);
+        if (_stickToBottom && scroll.VerticalOffset < scroll.ScrollableHeight - 0.5 &&
+            (e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0 || e.ViewportWidthChange != 0))
+            scroll.ScrollToBottom();
     }
 
     // Scroll the virtualized message list to the very bottom. The ScrollViewer is inside MsgList's template, so we
@@ -1817,15 +1798,25 @@ public partial class MainWindow : Window
         if (sender is not FrameworkElement { DataContext: UserItem item }) return;
         ClosePopupAround(sender as DependencyObject);
         var list = NavHost.ForChat(item.Owner) ?? MsgList;
+        object row = item;
+        if (BridgeSharedPanel.Visibility == Visibility.Visible &&
+            BridgeSharedPanel.DataContext is BridgeSharedTerminalViewModel shared &&
+            item.Owner is { } owner && shared.Agents.Contains(owner) &&
+            shared.Entries.FirstOrDefault(entry => ReferenceEquals(entry.Item, item)) is { } entry)
+        {
+            shared.Target = owner;
+            list = (ListBox)BridgeSharedPanel.FindName("SharedTranscript");
+            row = entry;
+        }
         if (list is null) return;
         // Defer past the popup close so the scroll animation isn't competing with the fade-out this same tick.
-        Dispatcher.BeginInvoke(new Action(() => NavigateToUserMessage(list, item)), System.Windows.Threading.DispatcherPriority.Background);
+        Dispatcher.BeginInvoke(new Action(() => NavigateToUserMessage(list, row)), System.Windows.Threading.DispatcherPriority.Background);
     }
 
     // Smoothly scroll `list` so `item` sits comfortably in view, then pulse it. Works with UI virtualization: the
     // target offset is measured by briefly bringing the item into view and reading the offset within the SAME layout
     // pass (no frame is painted between measure and reset, so there is no visible pre-jump), then we animate to it.
-    private void NavigateToUserMessage(ListBox list, UserItem item)
+    private void NavigateToUserMessage(ListBox list, object item)
     {
         var sv = FindScrollViewer(list);
         if (sv is null) { list.ScrollIntoView(item); FlashItem(list, item); return; }
@@ -1964,27 +1955,23 @@ public partial class MainWindow : Window
         var hasDifferentDraft = !composerMatches
                                 && (!string.IsNullOrWhiteSpace(currentText) || owner.Attachments.Count > 0);
 
-        // Rewinding an older prompt takes every prompt after it with it — that is the only order the checkpoint engine
-        // can unwind in. It is also the most destructive thing this button does, so it always asks first, and says
-        // exactly how far back it goes rather than just "continue?".
+        // Every manual rewind changes the chat history and may restore files. Confirm even the latest prompt,
+        // and say explicitly when an older prompt takes later turns with it.
         var cascade = item.NewerPendingTurns;
-        if (cascade > 0 || hasDifferentDraft)
+        var lines = new List<string>
         {
-            var lines = new List<string>();
-            if (cascade > 0)
-                lines.Add($"Going back to this prompt also undoes the {cascade} newer prompt{(cascade == 1 ? "" : "s")} " +
-                          "after it, and removes them from the transcript. Later prompts can only be unwound first.");
-            lines.Add(item.UndoChangedFileCount == 0 && cascade == 0
-                ? "No recorded files need restoring."
-                : "Files changed by those prompts are restored to their pre-prompt contents.");
-            if (hasDifferentDraft)
-                lines.Add("Your current unsent message and staged attachments will be replaced by this prompt.");
-            lines.Add("Continue?");
-            var answer = MessageBox.Show(this, string.Join("\n\n", lines),
-                cascade > 0 ? $"Go back {cascade + 1} prompts" : "Undo prompt changes",
-                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-            if (answer != MessageBoxResult.Yes) return;
-        }
+            cascade > 0
+                ? $"Go back to this prompt and undo the {cascade} newer prompt{(cascade == 1 ? "" : "s")} after it?"
+                : "Go back to this prompt?",
+            "The affected prompts and their replies will be removed from the chat. Their recorded file changes will be restored.",
+        };
+        if (hasDifferentDraft)
+            lines.Add("Your current unsent message and staged attachments will be replaced by this prompt.");
+        if (owner.IsWorking)
+            lines.Add($"{owner.AgentDisplay} and its subagents will be stopped first.");
+        var answer = MessageBox.Show(this, string.Join("\n\n", lines), "Confirm rewind",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
 
         if (owner.IsWorking || item.RollbackCheckpoint?.IsCompleted == false)
         {
@@ -2073,8 +2060,22 @@ public partial class MainWindow : Window
     // breaks a single selection). We copy the transcript wholesale instead.
     private void OnCopyConversation(object sender, RoutedEventArgs e)
     {
+        var element = sender as FrameworkElement;
+        var menu = element?.Parent as ContextMenu
+            ?? (element is not null ? ItemsControl.ItemsControlFromItemContainer(element) as ContextMenu : null);
+        for (DependencyObject? parent = menu?.PlacementTarget; parent is not null; parent = VisualTreeHelper.GetParent(parent))
+            if (parent is BridgeSharedTerminal { DataContext: BridgeSharedTerminalViewModel shared })
+            {
+                SetClipboard(SharedConversationText(shared));
+                return;
+            }
         if (ChatFrom(sender) is { } chat) SetClipboard(ConversationText(chat));
     }
+
+    private static string SharedConversationText(BridgeSharedTerminalViewModel shared) =>
+        string.Join("\n\n", shared.Activity.Cast<BridgeTranscriptEntry>()
+            .Select(entry => TranscriptLine(entry.Item, entry.Owner.BridgeTerminalIdentity))
+            .Where(text => !string.IsNullOrWhiteSpace(text)));
 
     // Walk up from the right-clicked block to the ChatViewModel that owns it (main chat or a bridge pane).
     private ChatViewModel? ChatFrom(object sender)
@@ -2092,6 +2093,7 @@ public partial class MainWindow : Window
     /// "copy this message" produces the same thing.</summary>
     internal static string BlockText(ItemVm item) => item switch
     {
+        BridgeTranscriptEntry entry => entry.Owner.BridgeTerminalIdentity + ":\n" + BlockText(entry.Item),
         UserItem u => u.Text,
         TextItem t => t.Text,
         ThinkingItem th => th.Text,
@@ -2168,7 +2170,12 @@ public partial class MainWindow : Window
     {
         if (Ctx<ChatViewModel>(sender) is not { } chat) return;
         var name = PromptForText("Rename chat", chat.Title);
-        if (!string.IsNullOrWhiteSpace(name)) { chat.Title = name.Trim(); _vm.SaveSession(); }
+        if (!string.IsNullOrWhiteSpace(name)) _vm.RenameChat(chat, name.Trim());
+    }
+
+    private void OnToggleChatLock(object sender, RoutedEventArgs e)
+    {
+        if (Ctx<ChatViewModel>(sender) is { } chat) _vm.ToggleChatLock(chat);
     }
 
     /// <summary>
@@ -2194,6 +2201,7 @@ public partial class MainWindow : Window
     private void OnDeleteChatMenu(object sender, RoutedEventArgs e)
     {
         if (Ctx<ChatViewModel>(sender) is not { } chat) return;
+        if (chat.IsLocked) return;
         // Ask, because unlike the old behaviour this one sticks. "Delete" used to be a close in a red icon: the row
         // went away and the chat was back under Projects on the next home-screen refresh.
         var name = string.IsNullOrWhiteSpace(chat.Title) ? "this chat" : $"\"{chat.Title}\"";
@@ -2330,6 +2338,22 @@ public partial class MainWindow : Window
 
     private void StartFromCwdBox()
     {
+        if (NoDirectoryChip.IsChecked == true)
+        {
+            string folder;
+            try
+            {
+                folder = NoDirectoryWorkspace.Ensure();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                CwdHint.Text = "Couldn't create VibeCode's no-directory folder: " + ex.Message;
+                CwdHint.Foreground = (Brush)FindResource("Red");
+                return;
+            }
+            NewChatForWindow(folder, provider: AppSettings.Current.DefaultProvider);
+            return;
+        }
         // Canonicalise before anything downstream sees it. A pasted "C:/proj" or "C:\\proj" would otherwise become
         // this chat's cwd verbatim and then key its saved state, its project row and its hidden-projects entry by a
         // string no other code path ever produces - the same folder showing up twice, under two spellings.
@@ -2439,14 +2463,11 @@ public partial class MainWindow : Window
             "codex" => "AGENTS.md, skills, plugins and MCP servers load through VibeCode's managed Codex runtime.",
             "kimi" => "AGENTS.md, skills, MCP servers and Kimi's project context load through the installed Kimi Code CLI.",
             "grok" => "AGENTS.md, skills, MCP servers and Grok's project context load through the reviewed Grok ACP runtime.",
-            // The only provider here with no sign-in at all, so "not set up yet" has to be said in the picker.
-            // Left to itself the first turn goes out with an empty key and comes back as "Baseten rejected this
-            // API key", which sends the user looking for a key they never had.
             Protocol.GlmPreset.ProviderId when !HasGlmKey =>
-                "No GLM key saved yet — add one under the account button (Add API key). "
-                + "Create one at app.baseten.co under API keys.",
+                "No GLM account connected yet — open accounts and choose Add GLM account. "
+                + "Connect Z.ai Coding Plan, Z.ai API, or Baseten with its account key.",
             Protocol.GlmPreset.ProviderId =>
-                "GLM runs inside VibeCode against Baseten's inference API. It has its own file and shell tools; "
+                $"GLM runs inside VibeCode through {Protocol.GlmPreset.BackendName(ApiKeyAccountService.Instance.SelectedGlmBackend)}. It has its own file and shell tools; "
                 + "CLI-only features such as skills and MCP servers do not apply.",
             _ => "CLAUDE.md, skills and MCP servers load exactly like the CLI.",
         };
@@ -2479,6 +2500,7 @@ public partial class MainWindow : Window
         }
 
         if (picked != true) return;
+        SetNoDirectory(false);   // browsing to a folder is choosing one
         CwdBox.Text = dlg.FolderName;
         // Persist immediately so the chip appears even if the user leaves home without clicking New Chat yet.
         _vm.RememberDirectorySelection(dlg.FolderName);
@@ -2515,8 +2537,47 @@ public partial class MainWindow : Window
     private void OnChipClick(object sender, RoutedEventArgs e)
     {
         if (Ctx<ProjectVm>(sender) is not { } p) return;
+        SetNoDirectory(false);
         CwdBox.Text = p.Cwd;
         _vm.RememberDirectorySelection(p.Cwd);
+    }
+
+    private string _cwdBeforeNoDirectory = "";
+    private bool _reloadNoDirectory;   // carried across an appearance reload, which rebuilds this window
+
+    private void OnNoDirectoryChip(object sender, RoutedEventArgs e) => SetNoDirectory(NoDirectoryChip.IsChecked == true);
+
+    /// <summary>The home screen's "No directory" chip. On, the folder box empties and disables so it can't look like
+    /// a path is still in play, and New Chat starts in <see cref="NoDirectoryWorkspace"/>. Off, the path that was
+    /// there comes back. Picking a folder any other way (a recent chip, Browse) turns it off.</summary>
+    private void SetNoDirectory(bool on)
+    {
+        NoDirectoryChip.IsChecked = on;
+        if (on == !CwdBox.IsEnabled) return;   // already showing that state
+        if (on)
+        {
+            _cwdBeforeNoDirectory = CwdBox.Text;
+            CwdBox.Text = "";
+            CwdBox.IsEnabled = false;
+            CwdPlaceholder.Text = "No directory: this chat won't open any project folder";
+        }
+        else
+        {
+            CwdBox.IsEnabled = true;
+            CwdPlaceholder.Text = "Path to a project folder…";
+            if (CwdBox.Text.Length == 0) CwdBox.Text = _cwdBeforeNoDirectory;
+        }
+        // A red "that folder doesn't exist" (or a failed no-directory start) is about the choice just replaced.
+        SetNewChatProvider(AppSettings.Current.DefaultProvider, persist: false);
+    }
+
+    /// <summary>Enter on the focused chip starts the chat, as Enter in the folder box does. Left to ButtonBase it
+    /// would click the chip again - turning No directory back off right when the user meant "go".</summary>
+    private void OnNoDirectoryChipKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        StartFromCwdBox();
     }
 
     private void OnOpenChat(object sender, RoutedEventArgs e)
@@ -2527,12 +2588,27 @@ public partial class MainWindow : Window
     private void OnCloseChat(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
-        if (Ctx<ChatViewModel>(sender) is { } chat) _vm.CloseChat(chat);
+        if (Ctx<ChatViewModel>(sender) is { } chat && ConfirmCloseChat(chat)) _vm.CloseChat(chat);
     }
 
     private void OnCloseActiveChat(object sender, RoutedEventArgs e)
     {
-        if (ActiveChatForWindow is { } chat) _vm.CloseChat(chat);
+        if (ActiveChatForWindow is { } chat && ConfirmCloseChat(chat)) _vm.CloseChat(chat);
+    }
+
+    /// <summary>Both X buttons - the sidebar row's and the chat header's - ask first, so a stray click can't close a
+    /// chat or stop a turn in flight. A locked chat skips the question: CloseChat refuses it and says why in the
+    /// transcript.</summary>
+    private bool ConfirmCloseChat(ChatViewModel chat)
+    {
+        if (chat.IsLocked) return true;
+        var name = string.IsNullOrWhiteSpace(chat.Title) ? "this chat" : $"\"{chat.Title}\"";
+        var question = $"Are you sure you want to close {name}?";
+        // Not IsWorking: that includes "starting", which every new chat reports while its CLI boots with nothing to stop.
+        if (chat.Status is "preparing" or "running")
+            question += $"\n\n{chat.AgentDisplay} is still working and will be stopped.";
+        return MessageBox.Show(this, question, "Close chat", MessageBoxButton.YesNo, MessageBoxImage.Question)
+               == MessageBoxResult.Yes;
     }
 
     private void OnResumeSession(object sender, RoutedEventArgs e)
@@ -2550,7 +2626,7 @@ public partial class MainWindow : Window
 
     private void OnNewChatInProject(object sender, RoutedEventArgs e)
     {
-        if (Ctx<ProjectVm>(sender) is not { } p || !Directory.Exists(p.Cwd)) return;
+        if (Ctx<ProjectVm>(sender) is not { } p || !NoDirectoryWorkspace.DirectoryExists(p.Cwd)) return;
         NewChatForWindow(p.Cwd);
     }
 
@@ -2745,6 +2821,16 @@ public partial class MainWindow : Window
         _micWatchdog?.Stop();   // every release path funnels through here, so this is the one place it must stop
     }
 
+    private void DetachMicWiring()
+    {
+        var speech = SpeechService.Instance;
+        if (_micToken != 0 && speech.Owns(_micToken)) speech.ForceReset();
+        ClearMicOwner();
+        if (_micWatchdog is not null) _micWatchdog.Tick -= OnMicWatchdogTick;
+        _bridgeHintTimer?.Stop();
+        if (_bridgeHintTimer is not null) _bridgeHintTimer.Tick -= OnBridgeHintTick;
+    }
+
     /// <summary>Release this window's mic bookkeeping and reset the glyph — but ONLY if <paramref name="token"/> is
     /// still the capture we describe. Returns false when a newer capture has taken over, in which case the caller is a
     /// stale continuation and must do nothing at all (no visual, no hint, no insert).</summary>
@@ -2777,7 +2863,7 @@ public partial class MainWindow : Window
             primary.OnBridgeMicClick(sender, e);
             return;
         }
-        if (Ctx<ChatViewModel>(sender) is { } vm && !vm.InputLocked)   // dictation is still typed input
+        if (Ctx<ChatViewModel>(sender) is { } vm)   // dictation is still typed input
         {
             _vm.SelectBridgePane(vm);
             ToggleMic(sender as Button, vm, text => AppendDraft(vm, text), ShowBridgeHint);
@@ -2830,6 +2916,16 @@ public partial class MainWindow : Window
             // The owner is gone (unknown, or its pane was removed mid-recording) => the capture can never be stopped by
             // a click. Recover rather than leaving the mic stuck forever. A live owner gets a visible explanation
             // instead of the old silent return, which read as "the mic button does nothing".
+            // Setup dictation owns its own ledger. A click in this window must not cancel
+            // that live recording or mistake its transcription for a wedged local capture.
+            var externallyOwned = svc.RecordingOwner is { } activeOwner
+                                  && !ReferenceEquals(activeOwner, _micButton)
+                                  && !ReferenceEquals(activeOwner, _micOwner);
+            if (externallyOwned)
+            {
+                hint(svc.State == SpeechState.Recording ? "Another composer is already listening." : "Speech-to-text is still working.");
+                return;
+            }
             var orphaned = !_micActive
                            || !svc.Owns(_micToken)                                       // our bookkeeping is stale
                            || _micOwner is null                                          // owner truly unknown
@@ -2870,7 +2966,7 @@ public partial class MainWindow : Window
             ClearMicOwner();
         }
 
-        if (!svc.StartRecording(out var err, out var newToken))
+        if (!svc.StartRecording(out var err, out var newToken, (object?)owner ?? btn))
         {
             hint(err ?? "Microphone unavailable.");
             return;
@@ -2902,14 +2998,14 @@ public partial class MainWindow : Window
     }
     private void OnBridgeHintTick(object? s, EventArgs e) { _bridgeHintTimer?.Stop(); _vm.BridgeHint = ""; }
 
-    // Recolor the mic glyph for the current state (red while listening, accent while working, neutral when idle).
+    // Recolor the mic glyph for the current state (blue while listening, accent while working, neutral when idle).
     private void SetMicVisual(Button? btn, SpeechState state)
     {
         if (btn?.Content is not TextBlock tb) return;
         switch (state)
         {
             case SpeechState.Recording:
-                tb.Foreground = (Brush)FindResource("Red");
+                tb.Foreground = (Brush)FindResource("WeatherBlue");
                 btn.ToolTip = "Listening — click to stop & insert";
                 break;
             case SpeechState.Transcribing:
@@ -3069,6 +3165,7 @@ public partial class MainWindow : Window
         KimiAccountsPanel.Visibility = provider == "kimi" ? Visibility.Visible : Visibility.Collapsed;
         GrokAccountsPanel.Visibility = provider == "grok" ? Visibility.Visible : Visibility.Collapsed;
         GlmAccountsPanel.Visibility = glm ? Visibility.Visible : Visibility.Collapsed;
+        if (glm) RefreshGlmUsage();
         // Sorting and status filtering are about saved LOGINS - usage, plan, sign-in state. A key has none of
         // those, so both controls are disabled for GLM rather than left live and doing nothing. Search stays
         // enabled because it does work on the key list (see GlmKeyMatchesSearch).
@@ -3083,7 +3180,7 @@ public partial class MainWindow : Window
             "codex" => ("Add Codex account", "Click to switch · right-click to test or remove · saved date appears at right."),
             "kimi" => ("Manage Kimi account", "Kimi keeps one shared OAuth login in the Kimi Code CLI."),
             "grok" => ("Add Grok account", "Click to switch · right-click to test, sign out, or remove · each login stays isolated."),
-            _ when glm => ("Add GLM API key", "GLM signs in with a Baseten API key rather than an account. Click a key to try it first; save several and a rate-limited one falls through."),
+            _ when glm => ("Add GLM account", "Connect Z.ai Coding Plan, Z.ai API, or Baseten. Click an account to use it for new chats; key fallback stays within that service."),
             _ => ("Add Claude account", "Click to switch · right-click to test or remove · saved date appears at right."),
         };
         RefreshAccountManagerViews();   // refreshes the GLM key list too
@@ -3233,7 +3330,7 @@ public partial class MainWindow : Window
             _ => (claudeVisible, _vm.Accounts.Count),
         };
 
-        var noun = Protocol.GlmPreset.Is(provider) ? "key" : "account";
+        var noun = "account";
         AccountManagerResultsText.Text = visible == total
             ? $"{total:N0} {noun}{(total == 1 ? "" : "s")}"
             : $"{visible:N0} of {total:N0}";
@@ -3661,6 +3758,7 @@ public partial class MainWindow : Window
     private void KickAccountUsage() => _ = Task.Run(async () =>
     {
         await _vm.RefreshAccountUsageAsync();
+        await Dispatcher.InvokeAsync(() => RefreshGlmUsage());
         // Usage is itself a sort/filter key, so a completed background probe must re-place rows that are currently
         // ordered by availability or attention instead of leaving a stale order until the manager is reopened.
         ScheduleAccountManagerRefresh();
@@ -3676,9 +3774,7 @@ public partial class MainWindow : Window
     private void OnAccountUsageTick(object? sender, EventArgs e) => KickAccountUsage();
 
     /// <summary>
-    /// "Add API key" - sign a provider in with a raw key instead of its subscription login. The key is
-    /// validated against the vendor's free model-list endpoint before it is stored (DPAPI-sealed), so a
-    /// typo fails here rather than as a confusing CLI error on the next message.
+    /// Connect an account using its service's credential and validation endpoint, then store it with DPAPI.
     /// </summary>
     private async void OnAddApiKeyAccount(object sender, RoutedEventArgs e)
     {
@@ -3690,7 +3786,7 @@ public partial class MainWindow : Window
         var dialog = new UI.ApiKeyDialog(provider) { Owner = this };
         if (dialog.ShowDialog() != true) return;
 
-        Services.ApiKeyAccountService.Instance.Add(provider, dialog.ApiKey, dialog.AccountLabel);
+        Services.ApiKeyAccountService.Instance.Add(provider, dialog.ApiKey, dialog.AccountLabel, dialog.GlmBackend);
 
         RefreshAccountManagerViews();
         RefreshGlmKeys();
@@ -3726,12 +3822,46 @@ public partial class MainWindow : Window
         var shown = all.Where(GlmKeyMatchesSearch).ToList();
         GlmKeyList.ItemsSource = shown;
         GlmEmptyText.Text = all.Count == 0
-            ? "No GLM keys saved yet. Use \"Add API key\" below — create one at app.baseten.co under API keys."
-            : "No GLM keys match the current search.";
+            ? "No GLM accounts connected yet. Choose \"Add GLM account\" to connect Z.ai or Baseten."
+            : "No GLM accounts match the current search.";
         GlmEmptyText.Visibility = shown.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         GlmKeyCountText.Text = all.Count == 0
             ? ""
-            : $"{all.Count} key{(all.Count == 1 ? "" : "s")}";
+            : $"{all.Count} account{(all.Count == 1 ? "" : "s")}";
+    }
+
+    private void OnApiKeyAccountsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ApiKeyAccountService.Accounts)) return;
+        _vm.RefreshProviderPresentation();
+        RefreshGlmKeys();
+        RefreshGlmUsage();
+    }
+
+    private void RefreshGlmUsage(bool force = false)
+    {
+        foreach (var account in ApiKeyAccountService.Instance.For(Protocol.GlmPreset.ProviderId).ToList())
+            _ = GlmUsageService.Instance.RefreshAsync(account, force);
+    }
+
+    private void OnRefreshGlmUsage(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is ApiKeyAccount account)
+            _ = GlmUsageService.Instance.RefreshAsync(account, force: true);
+        else RefreshGlmUsage(force: true);
+        e.Handled = true;
+    }
+
+    private void OnShowGlmUsage(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement anchor) return;
+        var account = anchor.DataContext is ChatViewModel chat ? chat.GlmAccount : anchor.DataContext as ApiKeyAccount;
+        if (account is null) return;
+        e.Handled = true;
+        GlmUsagePopup.DataContext = account;
+        GlmUsagePopup.PlacementTarget = anchor;
+        GlmUsagePopup.IsOpen = true;
+        _ = GlmUsageService.Instance.RefreshAsync(account);
     }
 
     /// <summary>Make a saved key the one GLM chats try first. Already-running chats keep the key they started
@@ -3741,6 +3871,7 @@ public partial class MainWindow : Window
         if ((sender as FrameworkElement)?.Tag as string is not { Length: > 0 } id) return;
         ApiKeyAccountService.Instance.Select(Protocol.GlmPreset.ProviderId, id);
         RefreshGlmKeys();
+        SetNewChatProvider(AppSettings.Current.DefaultProvider, persist: false);
     }
 
     private void OnRemoveGlmKey(object sender, RoutedEventArgs e)
@@ -3751,8 +3882,8 @@ public partial class MainWindow : Window
         var account = ApiKeyAccountService.Instance.Accounts.FirstOrDefault(a => a.Id == id);
         if (account is null) return;
         if (MessageBox.Show(this,
-                $"Remove this GLM key ({account.Masked})?\n\nChats already running keep the key they started with.",
-                "Remove GLM key?", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                $"Remove this {account.ConnectionDisplay} account ({account.Masked})?\n\nChats already running keep the account they started with.",
+                "Remove GLM account?", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
         ApiKeyAccountService.Instance.Remove(id);
         RefreshGlmKeys();
@@ -3780,8 +3911,7 @@ public partial class MainWindow : Window
         }
         if (Protocol.GlmPreset.Is(provider))
         {
-            // GLM has no OAuth flow to run - a key IS the account here - so the primary button leads to the same
-            // dialog as "Add API key" rather than being a dead control labelled "Add GLM API key".
+            // Z.ai connects coding tools through an account key, including subscription accounts.
             OnAddApiKeyAccount(sender, e);
             return;
         }
@@ -4002,7 +4132,8 @@ public partial class MainWindow : Window
         if (!state.IsInstalled)
         {
             MessageBox.Show(this,
-                "Install the Grok CLI or set VIBECODE_GROK_PATH to its executable.",
+                "The reviewed Grok runtime is not available. Reinstall VibeCode, place a reviewed " +
+                "grok.exe beside VibeCode, or set VIBECODE_GROK_PATH.",
                 "Grok runtime not found", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -4841,14 +4972,6 @@ public partial class MainWindow : Window
 
     private void OnSpotifyOpenSettings(object sender, RoutedEventArgs e) => ShowSettingsDialog();
 
-    // ---------- games extension ----------
-
-    private void OnOpenSurviveTheShapes(object sender, RoutedEventArgs e)
-    {
-        GamesPopup.IsOpen = false;
-        GameWindow.Open(this, GameCatalog.SurviveTheShapes);
-    }
-
     // ---------- weather extension ----------
 
     private System.Windows.Threading.DispatcherTimer? _weatherTimer;
@@ -4883,6 +5006,11 @@ public partial class MainWindow : Window
     private void OnMenuBridge(object sender, RoutedEventArgs e)
     {
         MorePopup.IsOpen = false;
+        if (BridgePeerPopup.IsOpen)
+        {
+            BridgeSetup.FocusFirstControl();
+            return;
+        }
         var chat = ActiveChatForWindow ?? _vm.ActiveChat;
         // Resume / reopen paths stay one-click. Only a brand-new roster needs a peer provider pick.
         if (!_vm.WouldStartFreshBridge(chat))
@@ -4890,17 +5018,20 @@ public partial class MainWindow : Window
             ActivateBridgeForWindow();
             return;
         }
-        // Open on the next input tick so the click that pressed the button doesn't immediately
-        // dismiss this StaysOpen=False popup.
-        Dispatcher.BeginInvoke(new Action(() => BridgePeerPopup.IsOpen = true),
+        // Opening after the button's input completes lets the setup take keyboard focus.
+        // The draft remains open until Close, Escape, or a successful start.
+        if (chat is null) return;
+        BridgeSetup.Configure(chat, _vm.MaximumFreshOrchestratorWorkers,
+            workerCapacity: _ => _vm.MaximumFreshOrchestratorWorkers);
+        BridgePeerPopup.PlacementTarget = this;
+        BridgeSetup.MaxWidth = Math.Max(640, Math.Min(960, ActualWidth - 64));
+        BridgeSetup.MaxHeight = Math.Max(300, Math.Min(SystemParameters.WorkArea.Height - 100, ActualHeight - 80));
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            BridgePeerPopup.IsOpen = true;
+            BridgeSetup.FocusFirstControl();
+        }),
             System.Windows.Threading.DispatcherPriority.Input);
-    }
-
-    private void OnStartBridgeWithProvider(object sender, RoutedEventArgs e)
-    {
-        BridgePeerPopup.IsOpen = false;
-        if ((sender as FrameworkElement)?.Tag is not string provider) return;
-        ActivateBridgeForWindow(provider);
     }
 
     private void OnMenuFork(object sender, RoutedEventArgs e) { MorePopup.IsOpen = false; OnForkChat(sender, e); }
@@ -5080,6 +5211,9 @@ public partial class MainWindow : Window
 
     private ScrollViewer? CurrentBridgeScrollViewer()
     {
+        if (SurfaceShowBridge && BridgeSharedPanel.Visibility == Visibility.Visible &&
+            BridgeSharedPanel.FindName("SharedTranscript") is ListBox shared)
+            return FindScrollViewer(shared);
         if (_bridgeScrollList is null || _bridgeScrollPane is null || !_bridgeScrollList.IsLoaded
             || !_vm.BridgePanes.Contains(_bridgeScrollPane)
             || !ReferenceEquals(_bridgeScrollList.DataContext, _bridgeScrollPane))
@@ -5180,16 +5314,6 @@ public partial class MainWindow : Window
         if (Ctx<ChatViewModel>(sender) is { } vm) _vm.RestoreBridgePane(vm);
     }
 
-    /// <summary>Model / thinking / permission mode for ONE pane. A Demon worker has no composer, so this menu row is
-    /// the only place those controls exist for it — the "change them one by one afterwards" half of Demon setup.
-    /// Applied live rather than at spawn, so it costs a set_model round trip instead of a restart.</summary>
-    private void OnPaneMenuSessionSetup(object sender, RoutedEventArgs e)
-    {
-        ClosePaneMoreMenu(sender);
-        if (Ctx<ChatViewModel>(sender) is not { } vm) return;
-        if (SessionSetupWindow.AskForPane(this, vm) is { } setup) setup.ApplyToLive(vm);
-    }
-
     private void OnPaneMenuTodos(object sender, RoutedEventArgs e)
     {
         ClosePaneMoreMenu(sender);
@@ -5245,6 +5369,7 @@ public partial class MainWindow : Window
     {
         if (Ctx<ChatViewModel>(sender) is not { } vm) return;
         _vm.SelectBridgePane(vm);
+        if (sender is TextBox slashInput && HandleSlashKey(slashInput, e)) return;
         // Bridge uses the same Send/Stop button and advertises the same Esc shortcut as a normal chat. The normal
         // composer handled it, but this pane-local handler did not, so Esc was silently ignored instead of
         // interrupting the pane whose editor has focus.
@@ -5257,7 +5382,6 @@ public partial class MainWindow : Window
         // Ctrl+V with an image on the clipboard stages it on this pane (text paste still works normally).
         // A read-only TextBox still raises PreviewKeyDown, so Enter/paste/history would all still reach a locked
         // worker's session. Esc (interrupt) stays available above: stopping a runaway agent is not "input".
-        if (vm.InputLocked) return;
         if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control && TryPasteImage(vm))
         {
             e.Handled = true;
@@ -5277,17 +5401,11 @@ public partial class MainWindow : Window
 
     private void SendBridgePane(ChatViewModel vm)
     {
-        // The one choke point every typed path funnels through (Enter, the send button, dictation), so it is where a
-        // Demon Mode worker's read-only guarantee is actually enforced - the hidden buttons upstream are only a hint.
-        if (vm.InputLocked) return;
         var text = vm.Draft.Trim();
         var atts = vm.Attachments.ToList();
         if (text.Length == 0 && atts.Count == 0) return;
         if (vm.Send(text, atts))
         {
-            // In Demon Mode this IS the objective: it is the only text the user can put into the team, so the
-            // supervisor keeps it to check the finished work against at the end.
-            if (_vm.IsDemonMode && vm.IsDemonOrchestrator) _vm.NoteSupervisionObjective(text);
             vm.Draft = "";
             vm.Attachments.Clear();
             _vm.NoteBridgeActivity();   // sending resets the bridge idle timeout
@@ -5298,7 +5416,7 @@ public partial class MainWindow : Window
     // (resolved from the sender's DataContext) instead of the active chat.
     private void OnBridgeAttachClick(object sender, RoutedEventArgs e)
     {
-        if (Ctx<ChatViewModel>(sender) is not { } vm || vm.InputLocked) return;
+        if (Ctx<ChatViewModel>(sender) is not { } vm) return;
         _vm.SelectBridgePane(vm);
         var dlg = MakeAttachDialog();
         if (dlg.ShowDialog(this) == true)
@@ -5316,7 +5434,7 @@ public partial class MainWindow : Window
 
     private void OnBridgeComposerDrop(object sender, DragEventArgs e)
     {
-        if (Ctx<ChatViewModel>(sender) is not { } vm || vm.InputLocked
+        if (Ctx<ChatViewModel>(sender) is not { } vm
             || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         _vm.SelectBridgePane(vm);
         e.Handled = true;
@@ -5333,29 +5451,7 @@ public partial class MainWindow : Window
             e.Handled = true;
             return;
         }
-        if (SlashPopup.IsOpen && SlashList.Items.Count > 0)
-        {
-            if (e.Key is Key.Down or Key.Up)
-            {
-                var delta = e.Key == Key.Down ? 1 : -1;
-                SlashList.SelectedIndex = ((SlashList.SelectedIndex + delta) % SlashList.Items.Count + SlashList.Items.Count) % SlashList.Items.Count;
-                SlashList.ScrollIntoView(SlashList.SelectedItem);
-                e.Handled = true;
-                return;
-            }
-            if (e.Key is Key.Tab or Key.Enter)
-            {
-                AcceptSlash();
-                e.Handled = true;
-                return;
-            }
-            if (e.Key == Key.Escape)
-            {
-                SlashPopup.IsOpen = false;
-                e.Handled = true;
-                return;
-            }
-        }
+        if (sender is TextBox slashInput && HandleSlashKey(slashInput, e)) return;
         if (ActiveChatForWindow is { } activeChat
             && sender is TextBox input
             && TryNavigatePromptHistory(input, activeChat, e.Key, text => input.Text = text))
@@ -5475,7 +5571,19 @@ public partial class MainWindow : Window
             chat.Draft = text;    // mirrored into the chat so autosave can keep an unsent prompt across a force quit
             _vm.RequestSave();
         }
-        if (chat is null || !text.StartsWith('/') || text.Contains(' ') || text.Length < 1)
+        ShowSlashCommands(InputBox, chat);
+    }
+
+    private void OnBridgeInputChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is TextBox input && input.IsKeyboardFocusWithin)
+            ShowSlashCommands(input, Ctx<ChatViewModel>(sender));
+    }
+
+    private void ShowSlashCommands(TextBox input, ChatViewModel? chat)
+    {
+        var text = input.Text;
+        if (chat is null || !text.StartsWith('/') || text.Any(char.IsWhiteSpace))
         {
             SlashPopup.IsOpen = false;
             return;
@@ -5489,7 +5597,24 @@ public partial class MainWindow : Window
             .ToList();
         SlashList.ItemsSource = matches;
         SlashList.SelectedIndex = matches.Count > 0 ? 0 : -1;
+        SlashPopup.PlacementTarget = input;
         SlashPopup.IsOpen = matches.Count > 0;
+    }
+
+    private bool HandleSlashKey(TextBox input, KeyEventArgs e)
+    {
+        if (!SlashPopup.IsOpen || SlashPopup.PlacementTarget != input || SlashList.Items.Count == 0) return false;
+        if (e.Key is Key.Down or Key.Up)
+        {
+            var delta = e.Key == Key.Down ? 1 : -1;
+            SlashList.SelectedIndex = ((SlashList.SelectedIndex + delta) % SlashList.Items.Count + SlashList.Items.Count) % SlashList.Items.Count;
+            SlashList.ScrollIntoView(SlashList.SelectedItem);
+        }
+        else if (e.Key is Key.Tab or Key.Enter) AcceptSlash();
+        else if (e.Key == Key.Escape) SlashPopup.IsOpen = false;
+        else return false;
+        e.Handled = true;
+        return true;
     }
 
     private void OnSlashPick(object sender, MouseButtonEventArgs e) => AcceptSlash();
@@ -5698,13 +5823,14 @@ public partial class MainWindow : Window
 
     private void AcceptSlash()
     {
+        var input = SlashPopup.PlacementTarget as TextBox ?? InputBox;
         if (SlashList.SelectedItem is CommandChoice cmd)
         {
-            InputBox.Text = "/" + cmd.Name + " ";
-            InputBox.CaretIndex = InputBox.Text.Length;
+            input.SetCurrentValue(TextBox.TextProperty, "/" + cmd.Name + " ");
+            input.CaretIndex = input.Text.Length;
         }
         SlashPopup.IsOpen = false;
-        InputBox.Focus();
+        input.Focus();
     }
 
     // ---------- attachments ----------
@@ -6049,7 +6175,7 @@ public partial class MainWindow : Window
     private void OnModeUnchecked(object sender, RoutedEventArgs e) => ModePopup.IsOpen = false;
     private void OnModelChecked(object sender, RoutedEventArgs e)
     {
-        ActiveChatForWindow?.RefreshModelPicker(AppSettings.Current.DefaultProvider);
+        ActiveChatForWindow?.RefreshModelPicker();
         ModelPopup.IsOpen = true;
     }
     private void OnModelUnchecked(object sender, RoutedEventArgs e) => ModelPopup.IsOpen = false;

@@ -340,7 +340,8 @@ public static partial class McpCatalog
         string? sessionDirectory = null)
     {
         var definitions = Snapshot(source);
-        var selected = definitions.Where(definition => definition.Enabled && IsSelectedForProvider(definition, provider)).ToList();
+        var selected = definitions.Where(definition => definition.Enabled && CanProjectMemory(definition)
+            && IsSelectedForProvider(definition, provider)).ToList();
         var problems = new List<string>();
         if (selected.Count > MaxManagedServers)
             problems.Add($"at most {MaxManagedServers} managed MCP servers may target one CLI");
@@ -522,6 +523,9 @@ public static partial class McpCatalog
             fields.Add($"startup_timeout_sec = {definition.StartupTimeoutSeconds}");
             fields.Add($"tool_timeout_sec = {definition.ToolTimeoutSeconds}");
             fields.Add("enabled = true");
+            if (definition.IsStdio && definition.Id == BridgeMcpConnection.ManagedId)
+                fields.Add("tools = { " + string.Join(", ", AgentStatus.Mcp.Bridge.BridgeMcpTools.Create((_, _) => new JsonObject())
+                    .Select(tool => TomlString(tool.Name) + " = { approval_mode = \"approve\" }")) + " }");
             if (definition.IsStdio && string.Equals(definition.Id, ManagedMemoryMcpPolicy.ServerId, StringComparison.Ordinal))
             {
                 // approval_policy=never prohibits prompts; it does not grant MCP permission. The managed proxy
@@ -665,11 +669,17 @@ public static partial class McpCatalog
         var definitions = Snapshot(source);
         foreach (var definition in definitions)
         {
+            if (!CanProjectMemory(definition)) continue;
             if (!definition.Enabled || Validate(definition, definitions).Any(message => message.Severity == McpValidationSeverity.Error))
                 continue;
             if (IsSelectedForProvider(definition, provider)) yield return definition;
         }
     }
+
+    private static bool CanProjectMemory(McpServerDefinition definition) => !AgentMemoryService.IsMemoryServer(definition)
+        || AppSettings.Current.SecondBrainEnabled && definition.Arguments.Contains("--second-brain-mcp")
+            && definition.Environment.TryGetValue(AgentStatus.Mcp.Memory.SecondBrainMcpHost.PipeEnvironment, out var pipe)
+            && !string.IsNullOrWhiteSpace(pipe);
 
     private static bool IsSelectedForProvider(McpServerDefinition definition, string provider) => provider switch
     {

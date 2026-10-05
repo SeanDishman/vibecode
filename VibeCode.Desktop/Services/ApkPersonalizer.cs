@@ -252,18 +252,16 @@ public static class ApkPersonalizer
         public static ZipLayout Read(byte[] apk)
         {
             var eocd = FindEocd(apk);
-            var directorySize = BinaryPrimitives.ReadUInt32LittleEndian(apk.AsSpan(eocd + 12));
-            var directoryOffset = BinaryPrimitives.ReadUInt32LittleEndian(apk.AsSpan(eocd + 16));
-            if (directoryOffset == uint.MaxValue || directorySize == uint.MaxValue)
-                throw new InvalidOperationException("ZIP64 APKs are not supported here");
-            if ((ulong)directoryOffset + directorySize > (ulong)eocd)
-                throw new InvalidOperationException("the APK central directory is outside the package");
             var layout = new ZipLayout
             {
                 EocdOffset = eocd,
-                CentralDirectorySize = (int)directorySize,
-                CentralDirectoryOffset = (int)directoryOffset,
+                CentralDirectorySize = (int)BinaryPrimitives.ReadUInt32LittleEndian(apk.AsSpan(eocd + 12)),
+                CentralDirectoryOffset = (int)BinaryPrimitives.ReadUInt32LittleEndian(apk.AsSpan(eocd + 16)),
             };
+
+            if (layout.CentralDirectoryOffset == unchecked((int)uint.MaxValue)
+                || layout.CentralDirectorySize == unchecked((int)uint.MaxValue))
+                throw new InvalidOperationException("ZIP64 APKs are not supported here");
 
             layout.EntriesEnd = layout.CentralDirectoryOffset;
             // An APK that has been signed already carries a signing block immediately before the central

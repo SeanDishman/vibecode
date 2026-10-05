@@ -106,7 +106,7 @@ public partial class MemoryMapWindow : Window, INotifyPropertyChanged
 
     private static void SizeJustInsideOwner(MemoryMapWindow window, Window owner)
     {
-        // Match the game windows: nearly fill the IDE while leaving a small, deliberate rim around the brain.
+        // Nearly fill the IDE while leaving a small, deliberate rim around the brain.
         var ownerWidth = owner.ActualWidth > 0 ? owner.ActualWidth : owner.Width;
         var ownerHeight = owner.ActualHeight > 0 ? owner.ActualHeight : owner.Height;
         if (double.IsFinite(ownerWidth)) window.Width = Math.Max(window.MinWidth, ownerWidth - 96);

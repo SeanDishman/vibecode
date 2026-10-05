@@ -10,7 +10,7 @@ namespace VibeCode.Services;
 public sealed record SessionEntry(string SessionId, string Title, string Cwd, DateTime LastModified, string? GitBranch,
     string Provider = "claude", string? AccountId = null)
 {
-    public string ProviderBadge => Provider switch { "kimi" => "Kimi", "grok" => "Grok", _ => "" };
+    public string ProviderBadge => Provider switch { "kimi" => "Kimi", "grok" => "Grok", "glm" => "GLM", _ => "" };
 }
 public sealed record ProjectEntry(string Cwd, string Name, DateTime LastModified, List<SessionEntry> Sessions);
 public sealed record TranscriptMessage(string Type, JsonNode Message, string? ParentToolUseId);
@@ -80,7 +80,8 @@ public static class SessionCatalog
         catch { return ""; }
     }
 
-    public static List<ProjectEntry> ListProjects(int maxSessionsPerProject = 40)
+    public static List<ProjectEntry> ListProjects(int maxSessionsPerProject = 40,
+        IReadOnlySet<string>? allowedSessionIds = null)
     {
         var titles = LoadHistoryTitles();
         var byCwd = new Dictionary<string, List<SessionEntry>>(StringComparer.OrdinalIgnoreCase);
@@ -101,7 +102,12 @@ public static class SessionCatalog
                 {
                     try
                     {
-                        if (!seen.Add(Path.GetFileNameWithoutExtension(file))) continue;
+                        var sessionId = Path.GetFileNameWithoutExtension(file);
+                        // The normal sidebar shows only VibeCode-owned sessions. Filter on the filename before
+                        // opening a transcript: large account homes can contain tens of thousands of unrelated
+                        // sessions, and reading every head starves startup's disk and CPU for no visible result.
+                        if (allowedSessionIds is not null && !allowedSessionIds.Contains(sessionId)) continue;
+                        if (!seen.Add(sessionId)) continue;
                         var entry = ReadSessionHead(file, titles, accountId);
                         if (entry is null) continue;
                         if (!byCwd.TryGetValue(entry.Cwd, out var list)) byCwd[entry.Cwd] = list = new();
@@ -112,8 +118,9 @@ public static class SessionCatalog
             }
         }
 
-        AddKimiSessions(byCwd);
-        AddGrokSessions(byCwd);
+        AddKimiSessions(byCwd, allowedSessionIds);
+        AddGrokSessions(byCwd, allowedSessionIds);
+        AddGlmSessions(byCwd, allowedSessionIds);
 
         return byCwd
             .Select(kv => new ProjectEntry(
@@ -125,8 +132,26 @@ public static class SessionCatalog
             .ToList();
     }
 
+    /// <summary>Merge VibeCode's own GLM conversations (<see cref="GlmTranscriptStore"/>) into history.</summary>
+    private static void AddGlmSessions(Dictionary<string, List<SessionEntry>> byCwd,
+        IReadOnlySet<string>? allowedSessionIds)
+    {
+        foreach (var snapshot in GlmTranscriptStore.List(GlmTranscriptStore.Directory,
+                     id => allowedSessionIds is null || allowedSessionIds.Contains(id)))
+        {
+            if (string.IsNullOrWhiteSpace(snapshot.Cwd)) continue;
+            var title = GlmTranscriptStore.FirstPrompt(snapshot) ?? snapshot.SessionId[..Math.Min(8, snapshot.SessionId.Length)];
+            title = title.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ').Trim();
+            if (title.Length > 80) title = title[..80] + "…";
+            if (!byCwd.TryGetValue(snapshot.Cwd, out var list)) byCwd[snapshot.Cwd] = list = new();
+            list.Add(new SessionEntry(snapshot.SessionId, title, snapshot.Cwd, snapshot.Updated, null, "glm",
+                snapshot.AccountId));
+        }
+    }
+
     /// <summary>Merge Grok's summary.json session store (~/.grok/sessions/&lt;cwd&gt;/&lt;id&gt;) into history.</summary>
-    private static void AddGrokSessions(Dictionary<string, List<SessionEntry>> byCwd)
+    private static void AddGrokSessions(Dictionary<string, List<SessionEntry>> byCwd,
+        IReadOnlySet<string>? allowedSessionIds)
     {
         var root = Path.Combine(GrokDir, "sessions");
         if (!Directory.Exists(root)) return;
@@ -143,6 +168,7 @@ public static class SessionCatalog
                 if (kind?.StartsWith("subagent", StringComparison.OrdinalIgnoreCase) == true) continue;
                 var id = summary["info"]?["id"]?.GetValue<string>()
                          ?? Directory.GetParent(file)?.Name;
+                if (id is null || (allowedSessionIds is not null && !allowedSessionIds.Contains(id))) continue;
                 var cwd = summary["info"]?["cwd"]?.GetValue<string>();
                 if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(cwd)) continue;
                 var title = summary["generated_title"]?.GetValue<string>();
@@ -162,7 +188,8 @@ public static class SessionCatalog
     }
 
     /// <summary>Merge Kimi Code's documented session index into the same project browser as Claude history.</summary>
-    private static void AddKimiSessions(Dictionary<string, List<SessionEntry>> byCwd)
+    private static void AddKimiSessions(Dictionary<string, List<SessionEntry>> byCwd,
+        IReadOnlySet<string>? allowedSessionIds)
     {
         var index = Path.Combine(KimiDir, "session_index.jsonl");
         if (!File.Exists(index)) return;
@@ -177,6 +204,7 @@ public static class SessionCatalog
                     var row = JsonNode.Parse(line);
                     var id = row?["sessionId"]?.GetValue<string>();
                     if (string.IsNullOrWhiteSpace(id)) continue;
+                    if (allowedSessionIds is not null && !allowedSessionIds.Contains(id)) continue;
                     if (row?["deleted"]?.GetValue<bool>() == true) { rows.Remove(id); continue; }
                     var dir = row?["sessionDir"]?.GetValue<string>();
                     var cwd = row?["workDir"]?.GetValue<string>();

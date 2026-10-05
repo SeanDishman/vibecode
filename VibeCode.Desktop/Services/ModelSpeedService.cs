@@ -231,11 +231,11 @@ public sealed class ModelSpeedService
     /// <summary>Claude Code ships tier aliases rather than ids, and Kimi's ids drop the vendor.</summary>
     private static readonly IReadOnlyDictionary<string, string> Aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["opus"] = "anthropic/claude-opus-5",
-        ["opusplan"] = "anthropic/claude-opus-5",
-        ["sonnet"] = "anthropic/claude-sonnet-5",
+        ["opus"] = "anthropic/claude-opus-5.5",
+        ["opusplan"] = "anthropic/claude-opus-5.5",
+        ["sonnet"] = "anthropic/claude-sonnet-5.5",
         ["haiku"] = "anthropic/claude-haiku-4.5",
-        ["fable"] = "anthropic/claude-fable-5-1",
+        ["fable"] = "anthropic/claude-fable-5.1",
         ["k3"] = "moonshotai/kimi-k3",
         ["kimi-for-coding"] = "moonshotai/kimi-k2.7-code",
         ["kimi-for-coding-highspeed"] = "moonshotai/kimi-k2.7-code",
