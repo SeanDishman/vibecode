@@ -133,6 +133,9 @@ level. Use the composer’s **Send to** control to address the agent you want to
 Direct the orchestrator from its chat while watching worker activity in the shared feed. You can also inspect
 individual agents and change direction as the task develops.
 
+Opening or returning to the advanced bridge's single terminal takes you to the latest activity. While it is
+open, you can scroll up to read earlier messages; live output follows again when you return to the bottom.
+
 ## Agent swarms - provider-native sub-agents
 
 <!-- ![An agent fanning a task out to child workers](assets/screenshots/swarm.png) -->
@@ -286,8 +289,15 @@ Pairing credentials and the signing identity are generated on the desktop. See t
 
 ## Quick start
 
+Download the [standalone Windows x64 EXE](https://github.com/SeanDishman/vibecode/releases/download/v1.1.3/VibeCode-v1.1.3-win-x64.exe)
+or the [source ZIP](https://github.com/SeanDishman/vibecode/releases/download/v1.1.3/VibeCode-v1.1.3-source.zip)
+from the [1.1.3 release](https://github.com/SeanDishman/vibecode/releases/tag/v1.1.3).
+The EXE includes the .NET Desktop Runtime. Run it, choose a project, and configure your coding provider.
+
+To build from source:
+
 ```bash
-git clone <your-fork-url> vibecode
+git clone https://github.com/SeanDishman/vibecode.git
 ```
 
 ```bash

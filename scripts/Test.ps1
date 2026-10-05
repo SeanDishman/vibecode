@@ -14,6 +14,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "$ProjectName failed." }
     }
     Invoke-Regression VibeCode.PublicTests
+    Invoke-Regression VibeCode.AutoScrollTests
     Invoke-Regression VibeCode.BridgeTerminalTests
     Invoke-Regression VibeCode.BridgeTerminalTests @('--jarvis-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--jarvis-capabilities-only')

@@ -11,7 +11,7 @@
     <!-- THE version number. MSBuild stamps it onto the assembly and Settings > About reads it back through
          AppVersion.Current. Keep it Major.Minor.Patch - AppVersion parses a leading 'v' and a 4th part, but
          nothing else. -->
-    <Version>1.1.2</Version>
+    <Version>1.1.3</Version>
     <Deterministic>true</Deterministic>
     <PathMap>$(MSBuildProjectDirectory)=/src/VibeCode.Desktop</PathMap>
     <ApplicationManifest>app.manifest</ApplicationManifest>

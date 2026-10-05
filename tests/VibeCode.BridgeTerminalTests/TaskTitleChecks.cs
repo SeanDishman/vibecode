@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -122,8 +123,16 @@ internal static partial class Program
         Check("the task-title tool never shows a permission card in Plan mode", agent.Items.OfType<PermItem>().Count() == cards
             && Session(agent).PermissionResponses.Last()["behavior"]!.ToString() == "allow");
         var registration = (McpServerDefinition)Call(Call(agent, "EnsureBridgeMcp")!, "Registration")!;
-        var start = (ProcessStartInfo)typeof(VibeCode.Protocol.ClaudeSession).GetMethod("CreateStartInfo", Flags)!.Invoke(null,
-            [new VibeCode.Protocol.ClaudeSessionOptions { Cwd = agent.Cwd, PermissionMode = "plan", McpServers = [registration] }])!;
+        var previousCli = Environment.GetEnvironmentVariable("VIBECODE_CLAUDE_PATH");
+        ProcessStartInfo start;
+        try
+        {
+            // Inspect launch arguments without requiring an installed provider CLI on the CI runner.
+            Environment.SetEnvironmentVariable("VIBECODE_CLAUDE_PATH", Path.ChangeExtension(Assembly.GetExecutingAssembly().Location, ".exe"));
+            start = (ProcessStartInfo)typeof(VibeCode.Protocol.ClaudeSession).GetMethod("CreateStartInfo", Flags)!.Invoke(null,
+                [new VibeCode.Protocol.ClaudeSessionOptions { Cwd = agent.Cwd, PermissionMode = "plan", McpServers = [registration] }])!;
+        }
+        finally { Environment.SetEnvironmentVariable("VIBECODE_CLAUDE_PATH", previousCli); }
         var launch = start.ArgumentList.ToList();
         var allowed = launch.IndexOf("--allowedTools");
         Check("Claude pre-approves exactly the chat-name and task-title tools", allowed >= 0 && launch[allowed + 1].EndsWith("__chat_set_title")

@@ -131,6 +131,12 @@ public static class AutoScroll
     public static void SetEnabled(DependencyObject o, bool v) => o.SetValue(EnabledProperty, v);
     public static bool GetEnabled(DependencyObject o) => (bool)o.GetValue(EnabledProperty);
 
+    public static readonly DependencyProperty ScrollToBottomOnShowProperty = DependencyProperty.RegisterAttached(
+        "ScrollToBottomOnShow", typeof(bool), typeof(AutoScroll), new PropertyMetadata(false));
+
+    public static void SetScrollToBottomOnShow(DependencyObject o, bool v) => o.SetValue(ScrollToBottomOnShowProperty, v);
+    public static bool GetScrollToBottomOnShow(DependencyObject o) => (bool)o.GetValue(ScrollToBottomOnShowProperty);
+
     private static readonly DependencyProperty CleanupProperty = DependencyProperty.RegisterAttached(
         "Cleanup", typeof(Action), typeof(AutoScroll), new PropertyMetadata(null));
 
@@ -143,8 +149,9 @@ public static class AutoScroll
 
         ScrollViewer? attached = null;
         Action? detach = null;
+        DispatcherOperation? pendingReset = null;
 
-        void Resolve()
+        void Resolve(bool reset = false)
         {
             if (!fe.IsLoaded || !fe.IsVisible || !GetEnabled(fe)) return;
             if (fe is Control control) control.ApplyTemplate();
@@ -152,10 +159,12 @@ public static class AutoScroll
             if (inner is not null)
             {
                 fe.LayoutUpdated -= OnLayoutUpdated;
-                if (ReferenceEquals(inner, attached)) return;
+                if (ReferenceEquals(inner, attached) && !reset) return;
                 detach?.Invoke();
                 attached = inner;
-                detach = Attach(inner);
+                // Rebinding a shared feed can settle by a couple of text lines as its
+                // virtualized message groups are measured. Keep that small gap following.
+                detach = Attach(inner, GetScrollToBottomOnShow(fe) ? 48 : 24);
             }
             else
             {
@@ -171,11 +180,30 @@ public static class AutoScroll
         void OnLoaded(object sender, RoutedEventArgs args) => Resolve();
         void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
         {
-            if (fe.IsVisible) Resolve();
-            else fe.LayoutUpdated -= OnLayoutUpdated;
+            if (fe.IsVisible) Resolve(reset: GetScrollToBottomOnShow(fe));
+            else
+            {
+                pendingReset?.Abort();
+                pendingReset = null;
+                fe.LayoutUpdated -= OnLayoutUpdated;
+            }
+        }
+        void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs args)
+        {
+            // A shared terminal can display a different bridge without being hidden first.
+            // Wait for its ItemsSource binding and virtualized layout to adopt that conversation.
+            if (!GetScrollToBottomOnShow(fe) || !fe.IsLoaded || !fe.IsVisible) return;
+            pendingReset?.Abort();
+            pendingReset = fe.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+            {
+                pendingReset = null;
+                Resolve(reset: true);
+            }));
         }
         void OnUnloaded(object sender, RoutedEventArgs args)
         {
+            pendingReset?.Abort();
+            pendingReset = null;
             fe.LayoutUpdated -= OnLayoutUpdated;
             detach?.Invoke();
             detach = null;
@@ -185,17 +213,19 @@ public static class AutoScroll
         fe.Loaded += OnLoaded;
         fe.Unloaded += OnUnloaded;
         fe.IsVisibleChanged += OnVisibilityChanged;
+        fe.DataContextChanged += OnDataContextChanged;
         fe.SetValue(CleanupProperty, (Action)(() =>
         {
             fe.Loaded -= OnLoaded;
             fe.Unloaded -= OnUnloaded;
             fe.IsVisibleChanged -= OnVisibilityChanged;
+            fe.DataContextChanged -= OnDataContextChanged;
             OnUnloaded(fe, new RoutedEventArgs());
         }));
         Resolve();
     }
 
-    private static Action Attach(ScrollViewer sv)
+    private static Action Attach(ScrollViewer sv, double tolerance)
     {
         var stick = true;   // start pinned to the newest message
         void Pin() => sv.ScrollToBottom();
@@ -208,7 +238,7 @@ public static class AutoScroll
             if (!ReferenceEquals(a.OriginalSource, sv)) return;
 
             var layoutChanged = a.ExtentHeightChange != 0 || a.ViewportHeightChange != 0 || a.ViewportWidthChange != 0;
-            stick = ShouldFollowBottom(sv, a, stick, 24);
+            stick = ShouldFollowBottom(sv, a, stick, tolerance);
 
             // Keep following through every estimate refinement, rather than giving up after a fixed number of
             // layout passes. A viewport change (resizing/composer growth) moves the bottom without growing content.
