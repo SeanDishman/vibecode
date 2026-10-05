@@ -1,23 +1,30 @@
 # VibeCode
 
-**Run a whole team of AI coding agents on one project, from one window.** VibeCode brings Claude Code,
-OpenAI Codex, Kimi Code, Grok, and GLM into a native Windows interface with account switching, readable tool
-activity, session recovery, and usage tracking. Bridges let agents coordinate on the same codebase; advanced
-bridges add orchestrators, worker groups, shared progress, and configurable reviews.
+**Run a team of AI coding agents from one Windows app.** VibeCode brings Claude Code, OpenAI Codex,
+Kimi Code, Grok, and GLM together with shared bridge activity, account switching, session recovery, and usage tracking.
+Jarvis adds a desktop assistant you can speak to or type to for help with VibeCode and everyday tasks.
 
-**Jarvis** is your built-in desktop assistant for everyday questions, help with VibeCode, voice conversations,
-and supported app and Windows actions. It can also open a project and hand a coding task to a normal chat.
+### Advanced bridges
 
-Claude, Codex, Kimi, and Grok chats use an installed CLI and its streaming protocol. GLM uses an API account you
-configure in the app. Each chat keeps its own provider, model, account, and permission controls.
+[![Advanced bridge showing an orchestrator, three workers, a shared terminal, progress, and per-agent reviews](https://raw.githubusercontent.com/SeanDishman/vibecode/main/assets/screenshots/advanced-bridge.png)](https://github.com/SeanDishman/vibecode/blob/main/assets/screenshots/advanced-bridge.png)
+
+An orchestrator assigns work to its own workers while the shared terminal shows the team's messages, tool calls,
+and edits. Track the plan, inspect each agent, and choose its review level from the sidebar.
+[Read the advanced bridge guide.](#advanced-bridges---orchestrators-and-workers)
+
+### Jarvis
+
+[![Jarvis settings showing the AI provider, model, thinking effort, spoken replies, Kokoro voice, speech speed, volume, and microphone test](https://raw.githubusercontent.com/SeanDishman/vibecode/main/assets/screenshots/jarvis-settings.png)](https://github.com/SeanDishman/vibecode/blob/main/assets/screenshots/jarvis-settings.png)
+
+Ask Jarvis how VibeCode works, open a project, hand a task to a coding chat, adjust settings, or use supported
+Windows app actions. Its own settings let you pick a provider and model, preview a voice, and set speech speed and volume.
+[Read the Jarvis guide and example questions.](#jarvis---your-desktop-assistant)
 
 > [!WARNING]
 > **VibeCode is a work in progress.** It is under active development - expect rough edges, changing behavior, and
 > features that are still landing. **Found a bug? [Open an issue](https://github.com/SeanDishman/vibecode/issues).** Crashes, broken tool cards, a
 > provider that won't connect, layout weirdness - all of it is worth reporting. Include what you did, what you
 > expected, what happened, and which provider you were on. Bug reports are the fastest way to make this better.
-
-![Two Grok agents working the same project in a VibeCode bridge](assets/screenshots/bridge-hero.png)
 
 ---
 
@@ -104,8 +111,6 @@ per pane, no agent continuing on stale instructions.
 
 ## Advanced bridges - orchestrators and workers
 
-![An advanced bridge with one orchestrator, three workers, a shared activity feed, and per-agent review controls](assets/screenshots/advanced-bridge.png)
-
 Use an **advanced bridge** when a task benefits from a team with an orchestrator. Choose the orchestrator and
 workers in bridge setup, or arrange several orchestrator groups within the bridge's agent ceiling. Each group
 has its own workers, and each agent can use a different provider, model, and reasoning effort.
@@ -158,8 +163,6 @@ main conversation. A bridge can also use a second display. Session recovery and 
 help long-running work continue across interruptions.
 
 ## Jarvis - your desktop assistant
-
-![Jarvis settings for provider, model, thinking effort, spoken replies, voice, speed, volume, and microphone testing](assets/screenshots/jarvis-settings.png)
 
 **Jarvis** is VibeCode’s personal desktop assistant. Ask how VibeCode works, get help with settings, or talk
 through everyday questions, writing, plans, and ideas. Jarvis uses VibeCode’s provider adapters and desktop
