@@ -77,8 +77,15 @@ internal static partial class Program
             }
         }
         finally { resources.Clear(); foreach (var resource in original) resources.Add(resource); }
-        File.WriteAllText(Path.Combine(GeminiRuntime.ConfigDirectory, "oauth_creds.json"), "{\"expiry_date\":1}");
-        Check("Google CLI login is usable by Bridge", BridgeAccountChoice.For("gemini").Any(a => a.IsUsable));
+        var previousCli = Environment.GetEnvironmentVariable("VIBECODE_GEMINI_PATH");
+        try
+        {
+            // Model a present CLI explicitly: CI runners do not have Gemini installed. This fixture never launches it.
+            Environment.SetEnvironmentVariable("VIBECODE_GEMINI_PATH", Environment.ProcessPath);
+            File.WriteAllText(Path.Combine(GeminiRuntime.ConfigDirectory, "oauth_creds.json"), "{\"expiry_date\":1}");
+            Check("Google CLI login is usable by Bridge", BridgeAccountChoice.For("gemini").Any(a => a.IsUsable));
+        }
+        finally { Environment.SetEnvironmentVariable("VIBECODE_GEMINI_PATH", previousCli); }
 
     }
 }
