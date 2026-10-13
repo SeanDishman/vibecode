@@ -204,10 +204,12 @@ internal static partial class Program
         foreach (var agent in team) agent.Status = "idle";
         var a = team[0]; var b = team[3];
         vm.ConfigureBridgeOrchestrator(a, 2, "Build a store website.", true);
-        vm.ConfigureBridgeOrchestrator(b, 2, "Coordinate marketing and discovery for the store.", true);
-        // Exercise restored groups that predate the central planner. New central handoffs are covered by
-        // VibeCode.OrchestratorGroupTests using the actual provider adapters and isolated CLI fixtures.
-        ((BridgeWorkState)Property(a, "BridgeWork")!).CentralPlan = null;
+        // Construct a legacy second group without launching a current central planner in the background.
+        // That planner could overwrite this fixture's scopes while restoration is being checked. New central
+        // handoffs are covered by OrchestratorGroupTests with isolated provider fixtures.
+        Call(vm, "PrepareBridgeOrchestrator", b, 2, true, null, null);
+        ((BridgeWorkState)Property(a, "BridgeWork")!).OrchestratorObjectives[b.BridgeAgentId] = "Coordinate marketing and discovery for the store.";
+        Call(vm, "ReconcileBridgeGroups", vm.BridgePanes);
         var kickoff = a.Items.OfType<UserItem>().First(u => u.Text.StartsWith("[BRIDGE ORCHESTRATOR]"));
         Check("orchestrator kickoff stays an automated turn with readable goal presentation",
             (bool)Call(a, "IsSystemInjectedPrompt", kickoff.Text)! && kickoff.IsAgentMessage && kickoff.AgentKind == "Goal" &&
