@@ -30,16 +30,15 @@ internal static partial class Program
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         AppSettings.Current.AgentMemoryEnabled = false;
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.NotifyOnTurnEnd = AppSettings.Current.NotifyOnAwaitingInput = false;
         AppSettings.Current.McpServers.Clear();
         try
         {
             if (args.Contains("--live")) RunLive();
             else if (args.Contains("--ui-only")) VerifyComposerViews();
-            else { RunOffline(); VerifyComposerViews(); }
-            Console.WriteLine($"PASS: {_checks} {(args.Contains("--live") ? "live GPT-5.6 Luna simulation" : "offline goal") } checks.");
+            else if (args.Contains("--completion-only")) RunGoalCompletionChecks();
+            else { RunOffline(); RunGoalCompletionChecks(); VerifyComposerViews(); }
+            Console.WriteLine($"PASS: {_checks} {(args.Contains("--live") ? "live GPT-5.6 Luna simulation" : "offline goal")} checks.");
             return 0;
         }
         catch (Exception ex)
@@ -56,7 +55,7 @@ internal static partial class Program
 
     private static void RunOffline()
     {
-        foreach (var provider in new[] { "codex", "claude", "glm", "kimi", "grok" })
+        foreach (var provider in new[] { "codex", "claude", "glm", "kimi" })
         {
             var menu = new ChatViewModel(_root, provider: provider) { ExcludeFromMemory = true };
             Chats.Add(menu);
@@ -80,10 +79,9 @@ internal static partial class Program
         Check("goal command is converted to a provider-neutral prompt", !Session(chat).Sent[0].Contains("/goal") && Session(chat).Sent[0].Contains("[VIBECODE ACTIVE GOAL]"));
         var normalized = (string)Call(chat, "StripInjectedPrelude", Session(chat).Sent[0])!;
         Check("history echo removes the goal context", normalized == goal.Text);
-        var initial = End(chat, "First step only.\n" + GoalPolicy.CompleteMarker(goal));
-        Check("a remembered protocol marker is hidden on normal replies too", initial.RenderText == "First step only.");
+        End(chat, "First step only.");
         WaitSent(chat, 2);
-        Check("only an actual goal-check reply can complete the goal", !chat.Goal!.Completed);
+        Check("a work turn without completion still needs a goal check", !chat.Goal!.Completed);
         Check("automatic check asks the actual goal", Session(chat).Sent[1].Contains(GoalPolicy.CheckHeader) && Session(chat).Sent[1].Contains(goal.Text));
         Check("automatic check has a readable transcript card", chat.Items.OfType<UserItem>().Last().AgentKind == "Goal check");
         Check("checks are system-injected prompts", (bool)Call(chat, "IsSystemInjectedPrompt", chat.Items.OfType<UserItem>().Last().Text)!);
@@ -127,9 +125,8 @@ internal static partial class Program
         Send(waiting, "Turquoise", 3);
         Check("user answer resumes the same goal", waiting.Goal is { Paused: false, Completed: false });
         var answered = End(waiting, "Color accepted\n" + GoalPolicy.CompleteMarker(waiting.Goal!));
-        Check("user-answer reply hides remembered goal metadata without skipping confirmation", answered.RenderText == "Color accepted" && !waiting.Goal!.Completed);
-        WaitSent(waiting, 4);
-        End(waiting, "Finished.\n" + GoalPolicy.CompleteMarker(waiting.Goal!));
+        Check("user-answer reply settles the goal and hides its metadata", answered.RenderText == "Color accepted" && waiting.Goal!.Completed);
+        Quiet(waiting, 3, "a completed user-answer turn stops further checks");
 
         var draft = NewFake("draft");
         Send(draft, "/goal Finish after my draft", 1);

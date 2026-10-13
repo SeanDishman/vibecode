@@ -164,7 +164,8 @@ public static class GlmPreset
     {
         var value = model?.Trim();
         var fallback = IsZai(backend) ? ZaiDefaultModelId : DefaultModelId;
-        if (string.IsNullOrEmpty(value) || string.Equals(value, "default", StringComparison.OrdinalIgnoreCase)) return fallback;
+        if (string.IsNullOrEmpty(value) || string.Equals(value, "default", StringComparison.OrdinalIgnoreCase))
+            return fallback;
         foreach (var known in ModelsFor(backend))
             if (string.Equals(known.Value, value, StringComparison.OrdinalIgnoreCase)) return known.Value;
         return fallback;

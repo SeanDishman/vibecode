@@ -8,13 +8,15 @@ public sealed partial class ChatViewModel
     private bool _isTitleManual;
     private bool _hasGeneratedTitle;
     public bool IsLocked => _isLocked;
-    public bool CanCloseChat => !IsLocked;
+    public bool CanCloseChat => !IsLocked || IsBridgeAgent || IsBridgeHost;
+    public bool CanDeleteChat => !IsLocked;
     public string ChatLockLabel => IsLocked ? "Unlock chat" : "Lock chat";
     public string ChatLockGlyph => IsLocked ? "\uE785" : "\uE72E";
-    public string CloseChatToolTip => IsLocked ? "Unlock this chat before closing or deleting it" : "Close chat";
-    public string DeleteChatToolTip => IsLocked ? CloseChatToolTip : "Delete chat";
+    public string CloseChatToolTip => CanCloseChat ? "Close chat" : "Unlock this chat before closing it";
+    public string DeleteChatToolTip => CanDeleteChat ? "Delete chat" : "Unlock this chat before deleting it";
     public string ChatDirectoryToolTip => "Working directory\n" + Cwd +
-        (IsLocked ? "\nLocked — unlock from the chat menu to close or delete." : "");
+        (IsLocked ? CanCloseChat ? "\nLocked — protected from deletion. Closing keeps its history."
+            : "\nLocked — unlock from the chat menu to close or delete." : "");
     internal bool IsTitleManual => _isTitleManual;
     internal bool HasGeneratedTitle => _hasGeneratedTitle;
     private string PreserveChatTitleInstructions => _isTitleManual
@@ -39,8 +41,12 @@ public sealed partial class ChatViewModel
     }
     internal ChatMetadata Metadata => new()
     {
-        IsLocked = IsLocked, Title = _isTitleManual || _hasGeneratedTitle ? Title : null,
-        IsTitleManual = _isTitleManual, HasGeneratedTitle = _hasGeneratedTitle,
+        IsLocked = IsLocked,
+        Title = _isTitleManual || _hasGeneratedTitle ? Title : null,
+        IsTitleManual = _isTitleManual,
+        HasGeneratedTitle = _hasGeneratedTitle,
+        LastActivityAt = _lastActivityAt,
+        LastAssistantAt = _lastAssistantAt,
     };
 
     internal void RestoreChatMetadata(ChatMetadata? metadata)
@@ -49,6 +55,8 @@ public sealed partial class ChatViewModel
         _isLocked = metadata.IsLocked;
         _isTitleManual = metadata.IsTitleManual;
         _hasGeneratedTitle = metadata.HasGeneratedTitle;
+        _lastActivityAt = metadata.LastActivityAt ?? _lastActivityAt;
+        _lastAssistantAt = metadata.LastAssistantAt ?? _lastAssistantAt;
         if (!string.IsNullOrWhiteSpace(metadata.Title)) Title = metadata.Title;
         RaiseChatMetadata();
     }
@@ -81,13 +89,13 @@ public sealed partial class ChatViewModel
     {
         if (SessionId is not { Length: > 0 } id) return;
         var key = ChatMetadata.Key(Provider, id);
-        if (IsLocked || _isTitleManual || _hasGeneratedTitle || AppSettings.Current.ChatMetadata.ContainsKey(key))
+        if (IsLocked || _isTitleManual || _hasGeneratedTitle || _lastActivityAt is not null || AppSettings.Current.ChatMetadata.ContainsKey(key))
             AppSettings.Current.ChatMetadata[key] = Metadata;
     }
 
     private void RaiseChatMetadata()
     {
-        foreach (var property in new[] { nameof(IsLocked), nameof(CanCloseChat), nameof(ChatLockLabel),
+        foreach (var property in new[] { nameof(IsLocked), nameof(CanCloseChat), nameof(CanDeleteChat), nameof(ChatLockLabel),
                      nameof(ChatLockGlyph), nameof(CloseChatToolTip), nameof(DeleteChatToolTip), nameof(ChatDirectoryToolTip) }) Raise(property);
     }
 }

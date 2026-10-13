@@ -68,19 +68,24 @@ internal static partial class Program
         Call(replacement, "ApplyBridgeConfiguration", new BridgeAgentConfiguration("codex", model, effort, "obsolete"));
         Check("unrecognized saved review values safely fall back to Normal", replacement.BridgeReviewLevel == "normal");
 
-        Tool(manager, "bridge_dispatch_task", new() { ["recipient"] = worker.BridgeAgentId, ["task_name"] = "Repair filtering",
-            ["task_id"] = "repair-filtering", ["message"] = "Correct filtering and run the explicitly requested boundary checks." });
+        Tool(manager, "bridge_dispatch_task", new()
+        {
+            ["recipient"] = worker.BridgeAgentId,
+            ["task_name"] = "Repair filtering",
+            ["task_id"] = "repair-filtering",
+            ["message"] = "Correct filtering and run the explicitly requested boundary checks."
+        });
         PumpUntil(() => Session(worker).Sent.Count == 1);
         Check("assignments include the worker's review limit and retain required checks",
             Session(worker).Sent[0].Contains("[REVIEW LEVEL: LOW") && Session(worker).Sent[0].Contains("1 pass(es) for this assignment") &&
             Session(worker).Sent[0].Contains("checks explicitly requested by the user still apply"));
         Reject("None still waits for active worker assignments", () => Tool(manager, "bridge_review_scope", new()
-            { ["verdict"] = "approved", ["summary"] = "No extra inspection requested." }));
+        { ["verdict"] = "approved", ["summary"] = "No extra inspection requested." }));
         Call(worker, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = true });
         PumpUntil(() => Session(manager).Sent.Count == 2);
         Call(manager, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = false });
         Reject("None cannot mark failed work complete", () => Tool(manager, "bridge_review_scope", new()
-            { ["verdict"] = "approved", ["summary"] = "The assignment failed." }));
+        { ["verdict"] = "approved", ["summary"] = "The assignment failed." }));
         worker.Status = "idle";
         Tool(manager, "bridge_retry_task", new() { ["task_id"] = "repair-filtering" });
         PumpUntil(() => Session(worker).Sent.Count == 2);
@@ -88,8 +93,11 @@ internal static partial class Program
         Call(worker, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = false });
         PumpUntil(() => Session(manager).Sent.Count == 3);
         Call(manager, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = false });
-        var done = Tool(manager, "bridge_review_scope", new() { ["verdict"] = "approved",
-            ["summary"] = "Required repair and requested checks complete. Extra review was disabled." });
+        var done = Tool(manager, "bridge_review_scope", new()
+        {
+            ["verdict"] = "approved",
+            ["summary"] = "Required repair and requested checks complete. Extra review was disabled."
+        });
         Check("None records skipped review instead of claiming a passed inspection", done["review_state"]!.ToString() == "skipped" &&
             done["all_scopes_reviewed"]!.ToString() == "true" && manager.BridgeReviewLabel == "Review skipped" && manager.BridgeTaskState == "completed");
         Call(manager, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = false });

@@ -325,7 +325,8 @@ internal sealed class TrayIcon : IDisposable
     [DllImport("user32.dll")] private static extern bool SetMenuDefaultItem(nint menu, int item, bool byPosition);
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT point);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint hwnd);
-    [DllImport("user32.dll")] private static extern int TrackPopupMenuEx(nint menu, int flags, int x, int y,
+    [DllImport("user32.dll")]
+    private static extern int TrackPopupMenuEx(nint menu, int flags, int x, int y,
         nint hwnd, nint parameters);
     [DllImport("user32.dll")] private static extern bool PostMessage(nint hwnd, int message, nint wParam, nint lParam);
 }

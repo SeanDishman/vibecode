@@ -31,7 +31,8 @@ public static class BridgeTeamSuggestionService
         var done = new TaskCompletionSource<JsonNode>(TaskCreationOptions.RunContinuationsAsynchronously);
         var candidates = new List<string>();
         var gate = new object();
-        var usage = new BridgeSuggestionUsage(configuration.Provider, configuration.Model, host.Cwd);
+        using var usage = new BridgeSuggestionUsage(configuration.Provider, configuration.Model, host.Cwd,
+            configuration.UltrafastMode ? "ultrafast" : configuration.FastMode == true ? "fast" : "standard");
         session.Initialized += () => ready.TrySetResult();
         session.Exited += (_, _) =>
         {
@@ -43,6 +44,7 @@ public static class BridgeTeamSuggestionService
             new JsonObject { ["behavior"] = "deny", ["message"] = "Team-size planning cannot execute tools." }, r.ToolUseId);
         session.MessageReceived += node =>
         {
+            usage.Observe(node, session.SessionId, session.Models);
             if (node["type"]?.ToString() == "assistant" && node["message"]?["content"] is JsonArray content)
                 lock (gate)
                     foreach (var block in content.OfType<JsonObject>().Where(b => b["type"]?.ToString() == "text"))
@@ -68,13 +70,17 @@ public static class BridgeTeamSuggestionService
                 timeout.CancelAfter(Timeout.InfiniteTimeSpan);
                 waitingForLimit?.Invoke(true);
                 bool recovered;
-                try { recovered = await UsageLimitRecovery.WaitForResetAsync(response, configuration.Provider, configuration.Model,
-                    accountId, session, attempts++, timeout.Token); }
+                try
+                {
+                    recovered = await UsageLimitRecovery.WaitForResetAsync(response, configuration.Provider, configuration.Model,
+                    accountId, session, attempts++, timeout.Token);
+                }
                 finally { waitingForLimit?.Invoke(false); }
                 if (!recovered) break;
                 lock (gate) candidates.Clear();
                 done = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 timeout.CancelAfter(TimeSpan.FromMinutes(2));
+                usage.BeginTurn();
                 session.SendUser(JsonValue.Create("Continue after the usage limit and return the JSON team-size suggestion for the task above."));
             }
             if (response["is_error"]?.ToString() == "true" || (response["subtype"]?.ToString() ?? "").Contains("error", StringComparison.OrdinalIgnoreCase))
@@ -126,35 +132,63 @@ public static class BridgeTeamSuggestionService
         var effort = configuration.Effort;
         instructions ??= Instructions;
         return configuration.Provider switch
-    {
-        "codex" => new CodexSession(new CodexSessionOptions
         {
-            Cwd = host.Cwd, HomeDirectory = CodexAccountService.Instance.HomeFor(accountId), Model = model,
-            Effort = effort, PermissionMode = "plan", AppendSystemPrompt = instructions, McpServers = [], DialogueOnly = dialogueOnly,
-            DialogueOutputSchema = outputSchema, DialogueInstructions = outputSchema is null ? null : "Return only the JSON handoff matching the supplied output schema. Do not execute the task.",
-        }),
-        "claude" => new ClaudeSession(new ClaudeSessionOptions
-        {
-            Cwd = host.Cwd, ConfigDirectory = AccountService.Instance.ConfigDirectory(accountId), Model = model,
-            Effort = effort, PermissionMode = "plan", AppendSystemPrompt = instructions, McpServers = [], DialogueOnly = dialogueOnly,
-        }),
-        "kimi" => new KimiSession(new KimiSessionOptions
-        {
-            Cwd = host.Cwd, Model = model, Effort = effort,
-            PermissionMode = "plan", AppendSystemPrompt = instructions, McpServers = [],
-        }),
-        "grok" => new GrokSession(new GrokSessionOptions
-        {
-            Cwd = host.Cwd, AuthFilePath = GrokAccountService.Instance.AuthPathFor(accountId), Model = model,
-            Effort = effort, PermissionMode = "plan", AppendSystemPrompt = instructions, McpServers = [],
-        }),
-        "glm" => new GlmSession(new GlmSessionOptions
-        {
-            Cwd = host.Cwd, Backend = glmAccount?.GlmBackend ?? GlmPreset.Baseten,
-            ApiKeys = glmCredentials.Select(c => c.Key).ToList(), ApiKeyAccountIds = glmCredentials.Select(c => c.AccountId).ToList(),
-            Model = model, Effort = effort, PermissionMode = "plan", AppendSystemPrompt = instructions,
-        }),
-        _ => throw new InvalidOperationException("This provider cannot suggest a team size."),
+            "codex" => new CodexSession(new CodexSessionOptions
+            {
+                Cwd = host.Cwd,
+                HomeDirectory = CodexAccountService.Instance.HomeFor(accountId),
+                Model = model,
+                UltrafastMode = configuration.UltrafastMode,
+                Effort = effort,
+                FastMode = configuration.FastMode == true,
+                PermissionMode = "plan",
+                AppendSystemPrompt = instructions,
+                McpServers = [],
+                DialogueOnly = dialogueOnly,
+                DialogueOutputSchema = outputSchema,
+                DialogueInstructions = outputSchema is null ? null : "Return only the JSON handoff matching the supplied output schema. Do not execute the task.",
+            }),
+            "claude" => new ClaudeSession(new ClaudeSessionOptions
+            {
+                Cwd = host.Cwd,
+                ConfigDirectory = AccountService.Instance.ConfigDirectory(accountId),
+                Model = model,
+                Effort = effort,
+                FastMode = configuration.FastMode == true,
+                PermissionMode = "plan",
+                AppendSystemPrompt = instructions,
+                McpServers = [],
+                DialogueOnly = dialogueOnly,
+            }),
+            "gemini" => new GeminiSession(new KimiSessionOptions
+            {
+                Cwd = host.Cwd,
+                Model = model,
+                PermissionMode = "plan",
+                AppendSystemPrompt = instructions,
+                McpServers = [],
+            }),
+            "kimi" => new KimiSession(new KimiSessionOptions
+            {
+                Cwd = host.Cwd,
+                Model = model,
+                Effort = effort,
+                PermissionMode = "plan",
+                AppendSystemPrompt = instructions,
+                McpServers = [],
+            }),
+            "glm" => new GlmSession(new GlmSessionOptions
+            {
+                Cwd = host.Cwd,
+                Backend = glmAccount?.GlmBackend ?? GlmPreset.Baseten,
+                ApiKeys = glmCredentials.Select(c => c.Key).ToList(),
+                ApiKeyAccountIds = glmCredentials.Select(c => c.AccountId).ToList(),
+                Model = model,
+                Effort = effort,
+                PermissionMode = "plan",
+                AppendSystemPrompt = instructions,
+            }),
+            _ => throw new InvalidOperationException("This provider cannot suggest a team size."),
         };
     }
 
@@ -162,7 +196,6 @@ public static class BridgeTeamSuggestionService
     {
         "claude" => AccountService.Instance.ActiveId,
         "codex" => CodexAccountService.Instance.ActiveId,
-        "grok" => GrokAccountService.Instance.ActiveId,
         "glm" => ApiKeyAccountService.Instance.SelectedFor(GlmPreset.ProviderId)?.Id,
         _ => null,
     };

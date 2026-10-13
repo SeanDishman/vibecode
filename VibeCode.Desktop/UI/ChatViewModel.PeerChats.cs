@@ -6,6 +6,8 @@ public sealed partial class ChatViewModel
     internal BridgeChatMirror? PeerChatMirror { get; set; }
     internal bool PeerChatSetupWarningShown { get; set; }
     internal bool HasRunningPeerChatSession => _session is { HasExited: false };
+    internal bool IsPeerChatHistoryLoading => ResumeSessionId is not null
+        && ((IsClaude || IsGlm) ? !_transcriptLoaded : !_bridgeSessionInitialized);
     private string? PeerChatInstructions => PeerChatMirror?.Store.Instructions;
 
     internal void ClearPeerChatAccess()

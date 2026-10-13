@@ -4,17 +4,6 @@ using System.Runtime.InteropServices;
 
 namespace VibeCode.Services;
 
-/// <summary>
-/// Opens a provider's sign-in page in the user's real browser.
-///
-/// On Windows this is ShellExecute and always has been. Under Wine it cannot be: the Linux package builds a bare
-/// prefix, so the Windows URL association points at winebrowser and nothing guarantees it reaches a real browser.
-/// Every device-code and OAuth sign-in in VibeCode ends with "finish this in your browser", so when the launch
-/// quietly failed the account simply never arrived - which is why Kimi, Codex and Grok could not be signed in on
-/// Linux while Claude, whose CLI prints a code to paste back, worked.
-///
-/// Callers must treat a false result as normal and show the URL instead. <see cref="Describe"/> gives the wording.
-/// </summary>
 public static class ExternalBrowser
 {
     /// <summary>Unix directories searched for an opener, expressed as Wine sees them under the Z: drive root.</summary>
@@ -87,7 +76,9 @@ public static class ExternalBrowser
             // second chance rather than a repeat of the attempts above.
             var winebrowser = new ProcessStartInfo
             {
-                FileName = "winebrowser.exe", UseShellExecute = false, CreateNoWindow = true,
+                FileName = "winebrowser.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
             };
             winebrowser.ArgumentList.Add(url);
             yield return winebrowser;
@@ -105,14 +96,14 @@ public static class ExternalBrowser
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var candidate in PreferredOpeners())
-        foreach (var path in CandidatePaths(candidate))
-        {
-            if (!seen.Add(path)) continue;
-            var exists = false;
-            try { exists = File.Exists(path); }
-            catch { /* an unreadable mount point is simply not a launcher */ }
-            if (exists) yield return path;
-        }
+            foreach (var path in CandidatePaths(candidate))
+            {
+                if (!seen.Add(path)) continue;
+                var exists = false;
+                try { exists = File.Exists(path); }
+                catch { /* an unreadable mount point is simply not a launcher */ }
+                if (exists) yield return path;
+            }
     }
 
     private static IEnumerable<string> PreferredOpeners()

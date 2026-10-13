@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -13,9 +15,9 @@ namespace VibeCode.Services;
 /// way to learn the new one. That is the single most likely way this feature rots, and it cannot be fixed from the
 /// phone side alone, so the desktop shouts its presence on request.
 ///
-/// This is safe to answer unauthenticated because the reply contains nothing secret: a machine name, a port, and
-/// the certificate fingerprint that is already public in every TLS handshake this service performs. The phone
-/// treats a reply as a *hint about where to look* and nothing more — it still refuses to talk to anything whose
+/// Replies are AES-256-GCM encrypted using an ephemeral exchange with the probing phone. Public keys and
+/// protocol framing are the only clear discovery fields. The phone treats a reply as an address hint: it
+/// still refuses to talk to anything whose
 /// certificate does not match the fingerprint baked into its own signed package, so a hostile responder on the
 /// same Wi-Fi can at worst point the app at an address where the handshake then fails.
 /// </summary>
@@ -24,8 +26,7 @@ public sealed class PhoneBeacon : IDisposable
     /// <summary>Sent by the phone. Probes must be padded to at least this length so a reply is never larger than
     /// the request that caused it — a beacon that answers a 20-byte packet with a 200-byte one is a reflection
     /// amplifier, and there is no reason to build one.</summary>
-    private const string Magic = "VIBECODE-DISCOVER-1";
-    private const int MinProbeBytes = 256;
+    private const int MinProbeBytes = PhoneAesChannel.DiscoveryBytes;
     /// <summary>Replies one source may draw per second. A phone sends three; a flood gets ignored.</summary>
     private const int MaxRepliesPerSecondPerSource = 5;
 
@@ -99,12 +100,21 @@ public sealed class PhoneBeacon : IDisposable
 
     private void Answer(UdpClient socket, UdpReceiveResult received)
     {
-        if (received.Buffer.Length < MinProbeBytes) return;
+        if (received.Buffer.Length != MinProbeBytes) return;
         if (!PhoneBridgeService.IsLocalNetwork(received.RemoteEndPoint.Address)) return;
-
-        var text = Encoding.ASCII.GetString(received.Buffer, 0, Math.Min(received.Buffer.Length, 64));
-        if (!text.StartsWith(Magic, StringComparison.Ordinal)) return;
+        var magic = PhoneAesChannel.DiscoveryMagic;
+        if (!received.Buffer.AsSpan(0, magic.Length).SequenceEqual(magic)) return;
         if (!Allowed(received.RemoteEndPoint.Address.ToString())) return;
+
+        var keyLength = BinaryPrimitives.ReadInt32BigEndian(received.Buffer.AsSpan(magic.Length, 4));
+        if (keyLength is < 1 or > PhoneAesChannel.MaxPublicKeyBytes) return;
+        var clientPublic = received.Buffer.AsSpan(magic.Length + 4, keyLength).ToArray();
+        using var key = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        var serverPublic = key.ExportSubjectPublicKeyInfo();
+        PhoneAesChannel channel;
+        try { channel = PhoneAesChannel.Create(key, clientPublic, serverPublic, server: true, "discovery"); }
+        catch (CryptographicException) { return; }
+        using var disposableChannel = channel;
 
         var reply = new JsonObject
         {
@@ -114,7 +124,13 @@ public sealed class PhoneBeacon : IDisposable
             ["fingerprint"] = _bridge.Fingerprint,
         }.ToJsonString();
 
-        var bytes = Encoding.UTF8.GetBytes(reply);
+        var sealedReply = channel.Seal(Encoding.UTF8.GetBytes(reply));
+        var bytes = new byte[magic.Length + 4 + serverPublic.Length + sealedReply.Length];
+        magic.CopyTo(bytes, 0);
+        BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(magic.Length, 4), serverPublic.Length);
+        serverPublic.CopyTo(bytes, magic.Length + 4);
+        sealedReply.CopyTo(bytes, magic.Length + 4 + serverPublic.Length);
+        if (bytes.Length > received.Buffer.Length) return;
         socket.Send(bytes, bytes.Length, received.RemoteEndPoint);
     }
 

@@ -22,7 +22,7 @@ public sealed partial class CodexSession
         var details = envelope?["turn"] as JsonObject;
         _costProfiles[thread] = new(SafeString(details?["model"] ?? envelope?["model"]) ?? previous?.Model ?? ApiModel(_model),
             UsagePricing.Tier(details) ?? UsagePricing.Tier(envelope) ?? previous?.Tier
-            ?? (_fastMode && KnownFastModel(_model) ? "priority" : "default"));
+            ?? ServiceTierFor(ApiModel(_model)));
     }
 
     private void AddRequestCost(JsonObject? envelope, JsonNode usage, string thread, TokenUsage increment, TokenUsage latest)
@@ -30,7 +30,7 @@ public sealed partial class CodexSession
         if (!increment.HasTokens) return;
         var profile = _costProfiles.GetValueOrDefault(thread)
             ?? _costProfiles.GetValueOrDefault(SessionId ?? "root")
-            ?? new CostProfile(ApiModel(_model), _fastMode && KnownFastModel(_model) ? "priority" : "default");
+            ?? new CostProfile(ApiModel(_model), ServiceTierFor(ApiModel(_model)));
         var model = SafeString(usage["last"]?["model"] ?? usage["model"] ?? envelope?["model"]) ?? profile.Model;
         // Returned metadata wins over requested speed, including an explicit downgrade to standard.
         var tier = UsagePricing.Tier(usage["last"]) ?? UsagePricing.Tier(usage)

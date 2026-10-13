@@ -20,7 +20,7 @@ public sealed partial class MainViewModel
             if (pane.BridgeTaskState == "completed") pane.BridgeTaskState = "waiting";
         }
         pane.AppendSystemPrompt = BridgePrompt(bridge.Board, pane, BridgeNumberOf(pane),
-            bridge.Panes.Select(BridgeNumberOf).ToArray(), ManagerNumberIn(bridge.Panes));
+            bridge.Panes.Select(BridgeNumberOf).ToArray());
         if (!pane.IsBridgeManager && CoordinatorFor(pane, bridge.Panes) is { } coordinator)
             StagePeerNotice(coordinator, $"[BRIDGE REVIEW SETTINGS]\n{pane.BridgeTerminalIdentity}'s user-selected review level is {level}. " +
                 BridgeReviewPolicy.Choice(level).Description + " Respect this limit when assigning optional reviews.");
@@ -74,16 +74,24 @@ public sealed partial class MainViewModel
         caller.BridgeReviewState = skipped ? "skipped" : verdict;
         caller.BridgeReviewSummary = summary;
         caller.BridgeTaskState = verdict == "approved" ? "completed" : "waiting";
-        caller.Items.Add(new DividerItem { Label = skipped ? "Scope complete · extra review disabled"
-            : verdict == "approved" ? "Final review passed" : "Final review requested changes" });
+        caller.Items.Add(new DividerItem
+        {
+            Label = skipped ? "Scope complete · extra review disabled"
+            : verdict == "approved" ? "Final review passed" : "Final review requested changes"
+        });
         var allReviewed = bridge.Panes.Where(p => p.IsBridgeManager).All(p => p.BridgeReviewComplete);
         SaveBridge(bridge.Panes, bridge.Board);
         RaiseRosterUi(BridgePanes.Contains(caller) ? null : bridge);
         RequestSave();
-        return new JsonObject { ["agent_id"] = caller.BridgeAgentId, ["review_state"] = caller.BridgeReviewState,
-            ["review_level"] = caller.BridgeReviewLevel, ["all_scopes_reviewed"] = allReviewed,
+        return new JsonObject
+        {
+            ["agent_id"] = caller.BridgeAgentId,
+            ["review_state"] = caller.BridgeReviewState,
+            ["review_level"] = caller.BridgeReviewLevel,
+            ["all_scopes_reviewed"] = allReviewed,
             ["next_step"] = verdict == "changes_requested" ? "Assign concrete corrections to your own workers. Respect each agent's configured review budget."
                 : allReviewed ? "Report the outcome and any review limitations to the user and finish. Do not send acknowledgments or invent more work."
-                : "Report your group's outcome and finish. Other groups finish independently; the UI tracks their progress. Do not poll or send messages to other orchestrators." };
+                : "Report your group's outcome and finish. Other groups finish independently; the UI tracks their progress. Do not poll or send messages to other orchestrators."
+        };
     }
 }

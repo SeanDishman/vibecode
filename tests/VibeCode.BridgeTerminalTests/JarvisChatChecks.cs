@@ -134,8 +134,9 @@ internal static partial class Program
         bridgeVm.ToggleChatLock(team[1]);
         var protectedBridge = ((IJarvisChatActionHost)bridgeVm).ExecuteChatActionAsync(
             new("close_chats", "", "", "Close this bridge") { ChatFilter = new(ChatId: team[0].BridgeAgentId) }, CancellationToken.None).GetAwaiter().GetResult();
-        Check("closing a bridge host cannot bypass a peer's lock", bridgeVm.BridgePanes.Count == 2 && team.All(chat => chat.Status == "idle")
-            && protectedBridge.Message.Contains("locked chats"));
+        Check("closing a Bridge keeps its locked peer's history without requiring an unlock", bridgeVm.BridgePanes.Count == 0
+            && team.All(chat => chat.Status == "closed") && team[1].IsLocked && protectedBridge.Message.Contains("Closed 1 chat")
+            && !AppSettings.Current.DeletedSessions.Contains(team[1].SessionId!));
 
         ChatViewModel AddChat(string path, string title, string status)
         {
@@ -170,7 +171,7 @@ internal static partial class Program
             Task.FromResult(new JarvisTurn(plan(context), selection.Provider, selection.Model, null));
     }
 
-    private sealed class JarvisPlanningSession(string result) : ICodingSession
+    private sealed class JarvisPlanningSession(string result, string? reportedModel = null) : ICodingSession
     {
 #pragma warning disable CS0067
         public event Action<JsonNode>? MessageReceived;
@@ -184,7 +185,12 @@ internal static partial class Program
         public string? SessionId => "jarvis-planner-fixture";
         public bool HasExited { get; private set; }
         public JsonObject? Prompt { get; private set; }
-        public void Start() => Initialized?.Invoke();
+        public void Start()
+        {
+            if (reportedModel is not null)
+                MessageReceived?.Invoke(new JsonObject { ["type"] = "system", ["subtype"] = "init", ["model"] = reportedModel });
+            Initialized?.Invoke();
+        }
         public void SendUser(JsonNode content)
         {
             Prompt = JsonNode.Parse(content.GetValue<string>())!.AsObject();

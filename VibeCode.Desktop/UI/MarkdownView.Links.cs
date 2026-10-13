@@ -10,8 +10,6 @@ namespace VibeCode.UI;
 
 public partial class MarkdownView
 {
-    private ICommand? _linkCommand;
-    private ICommand NavigationCommand => _linkCommand ??= new LinkCommand(this);
     public static readonly DependencyProperty LinkBaseDirectoryProperty = DependencyProperty.Register(
         nameof(LinkBaseDirectory), typeof(string), typeof(MarkdownView), new PropertyMetadata(null));
 
@@ -24,14 +22,17 @@ public partial class MarkdownView
 
     public MarkdownView()
     {
-        // MdXaml's default routes GoToPage, which has no navigation host in a chat pane.
-        // Set the engine's command before parsing, so new streamed documents also get a working link action.
-        Engine.HyperlinkCommand = NavigationCommand;
+        // WPF copies rich selections by serializing their Hyperlink.Command. A private ICommand that holds
+        // this viewer throws during both Copy and Ctrl+C; a standard routed command can be serialized safely.
+        CommandBindings.Add(new CommandBinding(NavigationCommands.GoToPage,
+            (_, e) => { FollowLink(e.Parameter); e.Handled = true; },
+            (_, e) => { e.CanExecute = true; e.Handled = true; }));
+        Engine.HyperlinkCommand = NavigationCommands.GoToPage;
     }
 
     private void ConfigureLinks(DependencyObject element)
     {
-        if (element is Hyperlink link) link.Command = NavigationCommand;
+        if (element is Hyperlink link) link.Command = NavigationCommands.GoToPage;
         // MdXaml 1.27 resets the engine's command when an engine is replaced. Bind each newly rendered document
         // too, so engine replacement and restored FlowDocuments follow the same route as streaming text.
         foreach (var child in LogicalTreeHelper.GetChildren(element).OfType<DependencyObject>()) ConfigureLinks(child);
@@ -99,12 +100,5 @@ public partial class MarkdownView
         if (Window.GetWindow(this) is { } owner)
             MessageBox.Show(owner, message, "Open link", MessageBoxButton.OK, MessageBoxImage.Information);
         else MessageBox.Show(message, "Open link", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    private sealed class LinkCommand(MarkdownView viewer) : ICommand
-    {
-        public event EventHandler? CanExecuteChanged { add { } remove { } }
-        public bool CanExecute(object? parameter) => true;
-        public void Execute(object? parameter) => viewer.FollowLink(parameter);
     }
 }

@@ -56,9 +56,12 @@ public sealed class GlmAccountUsage(string backend) : Observable
         }
     }
 
-    internal void Notify() { Raise(nameof(Limits)); Raise(nameof(Plan)); Raise(nameof(Summary)); Raise(nameof(Status));
+    internal void Notify()
+    {
+        Raise(nameof(Limits)); Raise(nameof(Plan)); Raise(nameof(Summary)); Raise(nameof(Status));
         Raise(nameof(Detail)); Raise(nameof(HasData)); Raise(nameof(IsStale)); Raise(nameof(IsRefreshing));
-        Raise(nameof(CanRefresh)); Raise(nameof(UpdatedDisplay)); }
+        Raise(nameof(CanRefresh)); Raise(nameof(UpdatedDisplay));
+    }
 
     internal void Complete(GlmUsageSnapshot? snapshot, string error)
     {
@@ -85,7 +88,7 @@ public sealed class GlmUsageService
 {
     public const string QuotaUrl = "https://api.z.ai/api/monitor/usage/quota/limit";
     public static GlmUsageService Instance { get; } = new(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
-        { Timeout = TimeSpan.FromSeconds(15) });
+    { Timeout = TimeSpan.FromSeconds(15) });
     private readonly HttpClient _http;
     public GlmUsageService(HttpClient http) => _http = http;
 
@@ -179,8 +182,11 @@ public sealed class GlmUsageService
     {
         if (Number(value) is > 0 and var timestamp)
         {
-            try { return timestamp > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds((long)timestamp)
-                : DateTimeOffset.FromUnixTimeSeconds((long)timestamp); }
+            try
+            {
+                return timestamp > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds((long)timestamp)
+                : DateTimeOffset.FromUnixTimeSeconds((long)timestamp);
+            }
             catch (ArgumentOutOfRangeException) { return null; }
         }
         return DateTimeOffset.TryParse(value?.ToString(), CultureInfo.InvariantCulture,

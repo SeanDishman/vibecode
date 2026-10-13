@@ -95,8 +95,17 @@ public sealed partial class BridgeMailboxStore
             throw new InvalidOperationException("Your one setup message to this orchestrator was already saved. Read the shared plan to continue.");
         if (ReferenceEquals(from, to) || string.IsNullOrWhiteSpace(body) || body.Length > 6000)
             throw new ArgumentException("A peer message needs another recipient and a body.");
-        var message = new Message { From = from, To = to, FromAtSend = from.Number, ToAtSend = to.Number,
-            Body = body, Hop = hop, SentAt = now.ToUniversalTime(), Sequence = ++_sequence };
+        var message = new Message
+        {
+            From = from,
+            To = to,
+            FromAtSend = from.Number,
+            ToAtSend = to.Number,
+            Body = body,
+            Hop = hop,
+            SentAt = now.ToUniversalTime(),
+            Sequence = ++_sequence
+        };
         var beforeFrom = from.Entries.ToArray();
         var beforeTo = to.Entries.ToArray();
         foreach (var box in new[] { from, to })

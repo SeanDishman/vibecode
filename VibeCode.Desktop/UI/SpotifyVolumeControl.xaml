@@ -1,12 +1,4 @@
-<UserControl x:Class="VibeCode.UI.SpotifyVolumeControl"
-             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:svc="clr-namespace:VibeCode.Services"
-             Height="20" Background="Transparent" Focusable="False"
-             DataContext="{x:Static svc:SpotifyService.Instance}"
-             ToolTipService.ShowOnDisabled="True"
-             PreviewMouseWheel="OnVolumeWheel"
-             SnapsToDevicePixels="True" UseLayoutRounding="True">
+<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:svc="clr-namespace:VibeCode.Services" x:Class="VibeCode.UI.SpotifyVolumeControl" Height="20" Background="Transparent" Focusable="False" DataContext="{x:Static svc:SpotifyService.Instance}" ToolTipService.ShowOnDisabled="True" PreviewMouseWheel="OnVolumeWheel" SnapsToDevicePixels="True" UseLayoutRounding="True">
     <!--
       Speaker + inline slider, the way Spotify's own player does it. This deliberately has NO Popup.
 
@@ -21,24 +13,17 @@
       click the speaker to mute, drag the slider to set volume, wheel anywhere over the control.
     -->
     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-        <Button x:Name="VolumeButton" Width="20" Height="20" Cursor="Hand"
-                FontFamily="{StaticResource Icons}" FontSize="10"
-                IsEnabled="{Binding SupportsVolume}"
-                ToolTip="{Binding VolumeTooltip}"
-                ToolTipService.ShowOnDisabled="True"
-                AutomationProperties.Name="{Binding VolumeTooltip}"
-                AutomationProperties.HelpText="Mutes or restores the Spotify device volume."
-                Click="OnVolumeButtonClick">
+        <Button x:Name="VolumeButton" Width="20" Height="20" Cursor="Hand" FontFamily="{StaticResource Icons}" FontSize="10" IsEnabled="{Binding SupportsVolume}" ToolTip="{Binding VolumeTooltip}" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="{Binding VolumeTooltip}" AutomationProperties.HelpText="Mutes or restores the Spotify device volume." Click="OnVolumeButtonClick">
             <Button.Style>
                 <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
-                    <Setter Property="Foreground" Value="{StaticResource Faint}" />
+                    <Setter Property="Foreground" Value="{StaticResource Faint}"/>
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding IsMuted}" Value="True">
-                            <Setter Property="Foreground" Value="{StaticResource SpotifyGreenDim}" />
+                            <Setter Property="Foreground" Value="{StaticResource SpotifyGreenDim}"/>
                         </DataTrigger>
                         <!-- last, so hovering a muted speaker still lights up -->
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Foreground" Value="{StaticResource SpotifyGreenHover}" />
+                            <Setter Property="Foreground" Value="{StaticResource SpotifyGreenHover}"/>
                         </Trigger>
                     </Style.Triggers>
                 </Style>
@@ -46,20 +31,10 @@
             <!-- No "active" underline like shuffle/repeat have: the glyph itself already swaps to the
                  crossed-out speaker, and an empty track is sitting right next to it saying the same
                  thing. Spotify's own volume button doesn't mark muted with an accent either. -->
-            <TextBlock Text="{Binding VolumeGlyph}" FontFamily="{StaticResource Icons}" FontSize="10"
-                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding VolumeGlyph}" FontFamily="{StaticResource Icons}" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Button>
 
-        <Slider x:Name="VolumeSlider" Minimum="0" Maximum="100" Width="58" Height="20"
-                Margin="3,0,0,0" VerticalAlignment="Center" Cursor="Hand"
-                Value="{Binding VolumePercent, Mode=OneWay}"
-                IsEnabled="{Binding SupportsVolume}"
-                IsMoveToPointEnabled="True"
-                SmallChange="1" LargeChange="10"
-                ToolTip="{Binding VolumeText}"
-                ToolTipService.ShowOnDisabled="True"
-                AutomationProperties.Name="Spotify volume"
-                ValueChanged="OnVolumeSliderValueChanged">
+        <Slider x:Name="VolumeSlider" Minimum="0" Maximum="100" Width="58" Height="20" Margin="3,0,0,0" VerticalAlignment="Center" Cursor="Hand" Value="{Binding VolumePercent, Mode=OneWay}" IsEnabled="{Binding SupportsVolume}" IsMoveToPointEnabled="True" SmallChange="1" LargeChange="10" ToolTip="{Binding VolumeText}" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="Spotify volume" ValueChanged="OnVolumeSliderValueChanged">
             <Slider.Template>
                 <ControlTemplate TargetType="Slider">
                     <!-- Transparent background, not none: the wheel and move-to-point need the full
@@ -68,8 +43,7 @@
                         <!-- One continuous groove behind the Track. Without it the hidden thumb leaves a
                              10px hole punched through the middle of the bar, because Track lays the
                              decrease button, the thumb and the increase button out end to end. -->
-                        <Border Height="4" VerticalAlignment="Center" Background="{StaticResource CodeBg}"
-                                CornerRadius="{StaticResource Rad2}" />
+                        <Border Height="4" VerticalAlignment="Center" Background="{StaticResource CodeBg}" CornerRadius="{StaticResource Rad2}"/>
                         <!-- Height pinned to the strip: a Track sizes itself to the Thumb (10px here), and
                              the full-height hit grids inside the repeat buttons would then overhang the
                              bottom, rendering the fill 5px below the groove as two stacked bars. -->
@@ -82,17 +56,13 @@
                                                  fill overhangs by half a thumb so it runs under the knob
                                                  instead of stopping short of it. -->
                                             <Grid Background="Transparent" Height="20">
-                                                <Border x:Name="fill" Height="4" Margin="0,0,-5,0"
-                                                        VerticalAlignment="Center"
-                                                        Background="{StaticResource Muted}"
-                                                        CornerRadius="{StaticResource Rad2}" />
+                                                <Border x:Name="fill" Height="4" Margin="0,0,-5,0" VerticalAlignment="Center" Background="{StaticResource Muted}" CornerRadius="{StaticResource Rad2}"/>
                                             </Grid>
                                             <ControlTemplate.Triggers>
                                                 <!-- Spotify greens the filled part when you're on the control,
                                                      not just when you're on the 4px track itself. -->
-                                                <DataTrigger Value="True"
-                                                             Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=UserControl}}">
-                                                    <Setter TargetName="fill" Property="Background" Value="{StaticResource SpotifyGreen}" />
+                                                <DataTrigger Value="True" Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                                    <Setter TargetName="fill" Property="Background" Value="{StaticResource SpotifyGreen}"/>
                                                 </DataTrigger>
                                                 <!-- Last, so it wins over the hover colour. At zero the
                                                      decrease button has no width, but the half-thumb
@@ -102,7 +72,7 @@
                                                      double without converting it, so "0" never matches 0.0
                                                      and the trigger silently never fires. -->
                                                 <DataTrigger Binding="{Binding IsMuted}" Value="True">
-                                                    <Setter TargetName="fill" Property="Visibility" Value="Collapsed" />
+                                                    <Setter TargetName="fill" Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -117,17 +87,16 @@
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
                                             <Grid x:Name="knobRoot" Opacity="0">
-                                                <Ellipse Fill="{StaticResource Text}" />
+                                                <Ellipse Fill="{StaticResource Text}"/>
                                             </Grid>
                                             <ControlTemplate.Triggers>
-                                                <DataTrigger Value="True"
-                                                             Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=UserControl}}">
-                                                    <Setter TargetName="knobRoot" Property="Opacity" Value="1" />
+                                                <DataTrigger Value="True" Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                                    <Setter TargetName="knobRoot" Property="Opacity" Value="1"/>
                                                 </DataTrigger>
                                                 <!-- keep it visible while dragging even if the pointer
                                                      slips off the 20px strip mid-drag -->
                                                 <Trigger Property="IsDragging" Value="True">
-                                                    <Setter TargetName="knobRoot" Property="Opacity" Value="1" />
+                                                    <Setter TargetName="knobRoot" Property="Opacity" Value="1"/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -143,7 +112,7 @@
                                 <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Focusable="False">
                                     <RepeatButton.Template>
                                         <ControlTemplate TargetType="RepeatButton">
-                                            <Border Height="20" Background="Transparent" />
+                                            <Border Height="20" Background="Transparent"/>
                                         </ControlTemplate>
                                     </RepeatButton.Template>
                                 </RepeatButton>
@@ -152,7 +121,7 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Opacity" Value="0.4" />
+                            <Setter Property="Opacity" Value="0.4"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

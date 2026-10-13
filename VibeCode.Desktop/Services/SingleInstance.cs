@@ -40,6 +40,15 @@ public static class SingleInstance
 
     private static string SignalPath => Path.Combine(AppSettings.Dir, "show.signal");
 
+    /// <summary>How long a launch waits for an owner that is already on its way out (a restart, or a quit just
+    /// before relaunching) to release the directory.</summary>
+    internal static TimeSpan HandoffWait { get; set; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>How long a launch waits for an owner that never answered the request to come forward. A live owner
+    /// consumes that request within moments; one that does not is usually a crashed run that Windows Error
+    /// Reporting is still holding open, and it releases the lock only when it finally disappears.</summary>
+    internal static TimeSpan UnresponsiveOwnerWait { get; set; } = TimeSpan.FromSeconds(30);
+
     /// <summary>Claim this data directory. Returns false only when another live VibeCode already holds it, in
     /// which case it has been asked to show itself and this process should exit without touching anything.</summary>
     public static bool TryAcquire(out IDisposable? lease)
@@ -49,15 +58,20 @@ public static class SingleInstance
         try
         {
             mutex = new Mutex(initiallyOwned: false, "Local\\VibeCode.Instance." + KeyForDataDir());
-            bool owned;
-            try { owned = mutex.WaitOne(TimeSpan.Zero); }
-            // The previous owner died without releasing (killed, or a hard crash). The directory is ours.
-            catch (AbandonedMutexException) { owned = true; }
+            var owned = TryOwn(mutex, TimeSpan.Zero);
+            if (!owned)
+            {
+                AskRunningInstanceToShow();
+                // 2026-10-12: a relaunch three seconds after a crash found the crashed run still holding the lock,
+                // asked it to come forward (it could not) and exited, leaving nothing on screen. Wait for an owner
+                // that is leaving; step aside only for one that is alive and answered.
+                owned = TryOwn(mutex, HandoffWait);
+                if (!owned && File.Exists(SignalPath)) owned = TryOwn(mutex, UnresponsiveOwnerWait);
+            }
 
             if (!owned)
             {
                 mutex.Dispose();
-                AskRunningInstanceToShow();
                 return false;
             }
 
@@ -73,6 +87,13 @@ public static class SingleInstance
             try { mutex?.Dispose(); } catch { /* ignore */ }
             return true;
         }
+    }
+
+    private static bool TryOwn(Mutex mutex, TimeSpan wait)
+    {
+        try { return mutex.WaitOne(wait); }
+        // The previous owner died without releasing (killed, or a hard crash). The directory is ours.
+        catch (AbandonedMutexException) { return true; }
     }
 
     /// <summary>A stable, filename-safe id for this data directory. Case-folded because Windows paths are.</summary>

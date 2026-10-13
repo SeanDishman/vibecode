@@ -20,7 +20,7 @@ internal sealed class BridgeMcpConnection : IDisposable
     internal static readonly string ChatTitleToolName = "mcp__" + ServerName + "__chat_set_title";
     internal static string ChatTitleToolNameFor(string provider) => provider switch
     {
-        "grok" => ServerName + "__chat_set_title",
+        "gemini" => ServerName + "_chat_set_title",
         "glm" => "chat_set_title",
         _ => ChatTitleToolName,
     };
@@ -29,7 +29,7 @@ internal sealed class BridgeMcpConnection : IDisposable
     internal static readonly string TaskTitleToolName = "mcp__" + ServerName + "__" + TaskTitleTool;
     internal static string TaskTitleToolNameFor(string provider) => provider switch
     {
-        "grok" => ServerName + "__" + TaskTitleTool,
+        "gemini" => ServerName + "_" + TaskTitleTool,
         "glm" => TaskTitleTool,
         _ => TaskTitleToolName,
     };
@@ -46,10 +46,7 @@ internal sealed class BridgeMcpConnection : IDisposable
 
     private static string TitleToolCall(string provider, string name, string function) => provider switch
     {
-        // Grok's MCP catalog uses server__tool and calls it through search_tool/use_tool.
-        // https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md
-        "grok" => $"Its exact MCP catalog name is {name}. Discover it with search_tool if needed, then call use_tool "
-            + $"with tool_name=\"{name}\" and inline tool_input={{\"title\":\"your summary\"}}. Do not create argument files. ",
+        "gemini" => $"Its exact tool name is {name}. Call it directly with the title argument. ",
         "glm" => $"Its exact function name is {function}; call it directly with the title argument. ",
         _ => $"Its full MCP name is {name}. If it is deferred, discover it with tool search and then call it. ",
     };
@@ -59,23 +56,16 @@ internal sealed class BridgeMcpConnection : IDisposable
     internal static bool IsChatTitlePermission(string provider, string toolName, JsonNode? input)
     {
         if (toolName == ChatTitleToolNameFor(provider) || toolName == TaskTitleToolNameFor(provider)) return true;
-        // Trust only an inline call to our exact Grok registration, never a similarly named third-party
+
         // tool, an arbitrary use_tool call, or an invocation file whose actual target isn't in this request.
-        return provider == "grok" && toolName == "use_tool" && input is JsonObject envelope
-            && envelope["tool_name"] is JsonValue target && target.TryGetValue<string>(out var name)
-            && (name == ChatTitleToolNameFor(provider) || name == TaskTitleToolNameFor(provider))
-            && !envelope.ContainsKey("file") && !envelope.ContainsKey("tool_input_file")
-            && envelope["tool_input"] is JsonObject arguments && arguments.Count == 1
-            && arguments["title"] is JsonValue title && title.TryGetValue<string>(out _);
+        return false;
     }
 
-    internal static bool IsChatTitleMcpName(string name) => name == ChatTitleToolName || name == ChatTitleToolNameFor("grok")
-        || name == TaskTitleToolName || name == TaskTitleToolNameFor("grok");
+    internal static bool IsChatTitleMcpName(string name) => name == ChatTitleToolName || name == ChatTitleToolNameFor("gemini")
+        || name == TaskTitleToolName || name == TaskTitleToolNameFor("gemini");
 
-    /// <summary>Our exact task-title tool as it appears on a transcript card: Claude/Codex/Kimi "mcp__server__tool",
-    /// Grok "server__tool", or GLM's bare function, which GLM only ever routes to this bridge. Never a lookalike.</summary>
     internal static bool IsTaskTitleToolName(string name) =>
-        name == TaskTitleToolName || name == TaskTitleToolNameFor("grok") || name == TaskTitleTool;
+    name == TaskTitleToolName || name == TaskTitleToolNameFor("gemini") || name == TaskTitleTool;
     private readonly CancellationTokenSource _stop = new();
     private readonly Dispatcher _dispatcher;
     private readonly Func<string, JsonObject, JsonObject> _invoke;
@@ -95,7 +85,7 @@ internal sealed class BridgeMcpConnection : IDisposable
         definition.Id = ManagedId;
         definition.Name = "bridge";
         definition.Arguments[^1] = "--bridge-mcp";
-        definition.UseClaude = definition.UseCodex = definition.UseKimi = definition.UseGrok = true;
+        definition.UseClaude = definition.UseCodex = definition.UseKimi = definition.UseGemini = true;
         definition.Environment[BridgeMcpClient.PipeEnvironment] = PipeName;
         // The helper is a second launch of the whole single-file VibeCode.exe, which unpacks its compressed bundle
         // first: ~1.6 s on an idle machine and 3-5 s when a Bridge starts several agents at once. The 5 s startup
@@ -136,7 +126,7 @@ internal sealed class BridgeMcpConnection : IDisposable
                         if (newline >= 0) break;
                     }
                     var request = JsonNode.Parse(line.ToString()) as JsonObject;
-                    var name = McpText.Text(request?["tool"]);
+                    var name = AgentStatusReport.Text(request?["tool"]);
                     var tool = BridgeMcpTools.Create(_invoke).FirstOrDefault(t => t.Name == name)
                         ?? throw new StatusValidationException("Unknown bridge tool.");
                     if (request?["arguments"] is not JsonObject args) throw new StatusValidationException("arguments must be an object.");

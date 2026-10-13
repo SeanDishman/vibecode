@@ -23,7 +23,7 @@ public sealed partial class ChatViewModel
         + "Each row shows tokens reported in the last 60 seconds. The per-second average appears only when new tokens "
         + "were reported or streamed in the last second. A working agent can be waiting on a tool or a usage report. "
         + "Batched reports are spread over the time since the previous "
-        + "report or prompt start. Codex and Grok streaming output is estimated at one token per four characters; "
+        + "report or prompt start. Codex streaming output is estimated at one token per four characters; "
         + "~ marks unconfirmed token estimates. Rates gradually fall during tool-only periods. "
         + "Zero rows are hidden, and rates disappear when the turn finishes.";
 
@@ -55,7 +55,7 @@ public sealed partial class ChatViewModel
     private void EstimateStreamingTokenRate(string? chunk)
     {
         // session/load can replay old ACP chunks while starting. Only an active prompt generates usage.
-        if ((!IsGrok && !IsCodex) || Status != "running" || string.IsNullOrEmpty(chunk)) return;
+        if ((!IsCodex) || Status != "running" || string.IsNullOrEmpty(chunk)) return;
         _streamedRateCharacters += chunk.Length;
         var total = _streamedRateConfirmedOutputTokens
             + Math.Floor((_streamedRateCharacters - _streamedRateConfirmedCharacters) / OutputCharsPerToken);

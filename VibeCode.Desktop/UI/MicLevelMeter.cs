@@ -45,7 +45,7 @@ public sealed class MicLevelMeter : Control
             "Captured audio from left to right. Taller blue bars show louder input; low bars show silence. Click the microphone again to stop and insert text.");
         ToolTip = "Recorded audio · latest 60 seconds · click the microphone again to stop and insert";
         _timer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
-            { Interval = TimeSpan.FromMilliseconds(50) };
+        { Interval = TimeSpan.FromMilliseconds(50) };
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         IsVisibleChanged += (_, _) => SyncRecording();

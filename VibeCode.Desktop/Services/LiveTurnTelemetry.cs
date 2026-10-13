@@ -141,7 +141,7 @@ public sealed class LiveTurnTelemetry
             Output = output,
             // Nothing reports a price mid-turn, so this is the list-price estimate by definition. It is replaced
             // wholesale by the committed row - including a provider-reported one - the moment the turn lands.
-            CostUsd = provider == "grok" ? 0 : Math.Max(0, estimatedCostUsd ?? ModelPricing.TurnCost(id, input, cacheWrite, cacheRead, output)),
+            CostUsd = Math.Max(0, estimatedCostUsd ?? ModelPricing.TurnCost(id, input, cacheWrite, cacheRead, output)),
             CostReported = false,
             SessionId = sessionId,
             Project = project,

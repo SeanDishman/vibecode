@@ -1097,8 +1097,11 @@ public sealed class TurnRollbackCheckpoint
     private void RecoverPendingJournal(string journalPath)
     {
         JsonObject journal;
-        try { journal = JsonNode.Parse(File.ReadAllText(journalPath, Encoding.UTF8))?.AsObject()
-                            ?? throw new InvalidDataException("empty journal"); }
+        try
+        {
+            journal = JsonNode.Parse(File.ReadAllText(journalPath, Encoding.UTF8))?.AsObject()
+                            ?? throw new InvalidDataException("empty journal");
+        }
         catch (Exception ex) { throw new IOException($"Couldn't read pending undo journal {Path.GetFileName(journalPath)}: {ex.Message}", ex); }
         if (journal["version"]?.GetValue<int>() != 1 || journal["changes"] is not JsonArray changes)
             throw new IOException($"Pending undo journal {Path.GetFileName(journalPath)} has an unsupported format.");

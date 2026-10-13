@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Buffers.Binary;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.Http;
+using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Authentication;
 using System.Reflection;
@@ -131,11 +133,22 @@ internal static class Program
             var endpoint = (IPEndPoint)socket.Client.LocalEndPoint!;
             Check(IPAddress.IsLoopback(endpoint.Address), "discovery fixture binds loopback only");
             using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-            var probe = Encoding.ASCII.GetBytes("VIBECODE-DISCOVER-1".PadRight(256));
+            using var key = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+            var clientPublic = key.ExportSubjectPublicKeyInfo();
+            var magic = PhoneAesChannel.DiscoveryMagic;
+            var probe = new byte[PhoneAesChannel.DiscoveryBytes];
+            magic.CopyTo(probe, 0);
+            BinaryPrimitives.WriteInt32BigEndian(probe.AsSpan(magic.Length, 4), clientPublic.Length);
+            clientPublic.CopyTo(probe, magic.Length + 4);
             await client.SendAsync(probe, endpoint);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             var reply = await client.ReceiveAsync(timeout.Token);
-            using var json = JsonDocument.Parse(reply.Buffer);
+            Check(reply.Buffer.AsSpan(0, magic.Length).SequenceEqual(magic), "discovery requires encrypted protocol");
+            Check(!Encoding.UTF8.GetString(reply.Buffer).Contains("fingerprint"), "discovery has no plaintext identity payload");
+            var publicLength = BinaryPrimitives.ReadInt32BigEndian(reply.Buffer.AsSpan(magic.Length, 4));
+            var serverPublic = reply.Buffer.AsSpan(magic.Length + 4, publicLength).ToArray();
+            using var channel = PhoneAesChannel.Create(key, clientPublic, serverPublic, false, "discovery");
+            using var json = JsonDocument.Parse(channel.Open(reply.Buffer.AsSpan(magic.Length + 4 + publicLength).ToArray()));
             Check(json.RootElement.GetProperty("app").GetString() == "vibecode"
                   && json.RootElement.GetProperty("fingerprint").GetString() == new string('A', 64), "discovery replies after rapid restarts");
             Check(reply.Buffer.Length <= probe.Length, "discovery response does not amplify request");
@@ -186,12 +199,71 @@ internal static class Program
             }
         }
         running.SetValue(PhoneBridgeService.Instance, false);
-        // Let queued UI callbacks run once, then close the fixture without starting the app or a listener.
+        EnrollmentWithSetupWindow(window);
+        // Let queued UI callbacks run once, then close the fixture after the loopback listener has stopped.
         window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
         window.Close();
         Check(typeof(PhoneBridgeService).GetField("_listener", HiddenInstance)!.GetValue(PhoneBridgeService.Instance) is null,
-            "setup rendering never starts the bridge");
+            "setup fixture leaves no bridge listener running");
         app.Shutdown();
+    }
+
+    private static void EnrollmentWithSetupWindow(PhoneBridgeWindow window)
+    {
+        var bridge = PhoneBridgeService.Instance;
+        var start = typeof(PhoneBridgeService).GetMethod("Start", HiddenInstance, new[] { typeof(IPAddress) })!;
+        var ui = typeof(PhoneBridgeService).GetField("_ui", HiddenInstance)!;
+        string Post(string target, string body)
+        {
+            var request = Task.Run(() => EncryptedGet(bridge.Port, bridge.Fingerprint, target,
+                method: "POST", body: body));
+            var frame = new DispatcherFrame();
+            var timer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(10),
+            };
+            timer.Tick += (_, _) => { if (request.IsCompleted) frame.Continue = false; };
+            timer.Start();
+            try { Dispatcher.PushFrame(frame); }
+            finally { timer.Stop(); }
+            return request.GetAwaiter().GetResult();
+        }
+        ui.SetValue(bridge, window.Dispatcher);
+        try
+        {
+            start.Invoke(bridge, new object[] { IPAddress.Loopback });
+            Check(bridge.Running, "enrollment fixture starts on loopback");
+            var secret = bridge.IssueEnrolment(out var enrollmentId);
+            using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var publicKey = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo());
+            var body = JsonSerializer.Serialize(new { secret, name = "Setup window fixture", devicePublicKey = publicKey });
+            var reply = Post("/api/enroll", body);
+            Check(reply.StartsWith("HTTP/1.1 200 "), "enrollment returns success while the setup window is open");
+            using var payload = JsonDocument.Parse(reply[(reply.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4)..]);
+            Check(payload.RootElement.GetProperty("token").GetString()?.Length == 43,
+                "the phone receives its connection key after claiming enrollment");
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+            Check(bridge.Devices.Count == 1 && bridge.PendingEnrolmentCount == 0
+                  && PhoneBridgeStore.LoadEnrolments().Single(e => e.Id == enrollmentId).UsedAt is not null,
+                "the open setup window reflects the completed, persisted enrollment");
+            Check(Post("/api/enroll", body).StartsWith("HTTP/1.1 403 "),
+                "the completed enrollment still cannot authorize a second claim");
+            Check(bridge.Revoke(bridge.Devices.Single()), "fixture phone can still be revoked");
+
+            bridge.OpenPairing();
+            var code = bridge.PairingDisplay.Replace(" ", "");
+            var paired = Post("/api/pair", JsonSerializer.Serialize(new { code, devicePublicKey = publicKey }));
+            Check(paired.StartsWith("HTTP/1.1 200 "), "manual pairing also succeeds with the setup window open");
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+            Check(!bridge.PairingOpen && bridge.Devices.Count == 1,
+                "the setup window reflects the consumed manual code and paired phone");
+            Check(bridge.Revoke(bridge.Devices.Single()), "manual fixture phone can be revoked");
+        }
+        finally
+        {
+            bridge.Stop(remember: false);
+            ui.SetValue(bridge, null);
+        }
     }
 
     private static async Task TlsLifecycle()
@@ -226,16 +298,53 @@ internal static class Program
                     && Convert.ToHexString(SHA256.HashData(cert.RawData)) == pin,
             };
             using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
-            using var ping = await client.GetAsync($"https://127.0.0.1:{port}/api/ping");
-            Check(ping.StatusCode == HttpStatusCode.OK, "real bridge responds to pinned TLS 1.2 ping");
-            using var chats = await client.GetAsync($"https://127.0.0.1:{port}/api/chats");
-            Check(chats.StatusCode == HttpStatusCode.Unauthorized, "real TLS listener requires credentials for chats");
+            var refusedLegacy = false;
+            try { using var legacy = await client.GetAsync($"https://127.0.0.1:{port}/api/ping"); }
+            catch (HttpRequestException) { refusedLegacy = true; }
+            Check(refusedLegacy, "real bridge refuses TLS-only clients without AES");
+            var ping = await EncryptedGet(port, pin, "/api/ping");
+            Check(ping.StartsWith("HTTP/1.1 200 ") && ping.Contains("authEpoch"), "real bridge responds to AES over pinned TLS 1.2 ping");
+            var chats = await EncryptedGet(port, pin, "/api/chats");
+            Check(chats.StartsWith("HTTP/1.1 401 "), "real AES listener encrypts credential failures");
+            var refusedTamper = false;
+            try { await EncryptedGet(port, pin, "/api/ping", tamper: true); }
+            catch (IOException) { refusedTamper = true; }
+            Check(refusedTamper, "real bridge rejects an altered AES frame before routing");
             bridge.Stop(remember: false);
             start.Invoke(bridge, new object[] { IPAddress.Loopback });
             Check(bridge.Fingerprint == pin, "stop/start preserves server TLS identity");
-            using var again = await client.GetAsync($"https://127.0.0.1:{port}/api/ping");
-            Check(again.StatusCode == HttpStatusCode.OK, "client reconnects with original certificate pin");
+            var again = await EncryptedGet(port, pin, "/api/ping");
+            Check(again.StartsWith("HTTP/1.1 200 "), "AES client reconnects with original certificate pin");
         }
         finally { bridge.Stop(); }
+    }
+
+    private static async Task<string> EncryptedGet(int port, string pin, string target, bool tamper = false,
+        string method = "GET", string body = "")
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var cancel = timeout.Token;
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, port, cancel);
+        using var tls = new SslStream(tcp.GetStream(), false, (_, cert, _, _) => cert is not null &&
+            Convert.ToHexString(SHA256.HashData(cert.GetRawCertData())) == pin);
+        await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+        {
+            TargetHost = "localhost",
+            EnabledSslProtocols = SslProtocols.Tls12
+        }, cancel);
+        using var key = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        var clientPublic = key.ExportSubjectPublicKeyInfo();
+        await tls.WriteAsync(PhoneAesChannel.Magic, cancel);
+        await PhoneAesChannel.WriteBlobAsync(tls, clientPublic, cancel);
+        var magic = new byte[PhoneAesChannel.Magic.Length];
+        await tls.ReadExactlyAsync(magic, cancel);
+        Check(magic.SequenceEqual(PhoneAesChannel.Magic), "server confirms mandatory AES protocol");
+        var serverPublic = await PhoneAesChannel.ReadBlobAsync(tls, PhoneAesChannel.MaxPublicKeyBytes, cancel);
+        using var channel = PhoneAesChannel.Create(key, clientPublic, serverPublic, false, "bridge");
+        var frame = channel.Seal(Encoding.UTF8.GetBytes($"{method} {target} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}"));
+        if (tamper) frame[^1] ^= 1;
+        await PhoneAesChannel.WriteBlobAsync(tls, frame, cancel);
+        return Encoding.UTF8.GetString(await channel.ReceiveAsync(tls, PhoneAesChannel.MaxResponseBytes, cancel));
     }
 }

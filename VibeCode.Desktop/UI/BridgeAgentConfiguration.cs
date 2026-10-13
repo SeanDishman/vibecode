@@ -5,13 +5,13 @@ namespace VibeCode.UI;
 
 /// <summary>A role's launch settings. Null effort means the provider's model default.</summary>
 public sealed record BridgeAgentConfiguration(string Provider, string? Model, string? Effort,
-    string ReviewLevel = BridgeReviewPolicy.Normal, bool? FastMode = null);
+    string ReviewLevel = BridgeReviewPolicy.Normal, bool? FastMode = null, bool UltrafastMode = false);
 
 internal static class BridgeAgentConfigurationPolicy
 {
-    public static readonly string[] Providers = ["claude", "codex", "kimi", "grok", GlmPreset.ProviderId];
+    public static readonly string[] Providers = ["claude", "codex", "kimi", "gemini", GlmPreset.ProviderId];
 
-    public static BridgeAgentConfiguration From(ChatViewModel chat) => new(chat.Provider, chat.Model, chat.Effort, chat.BridgeReviewLevel, chat.FastMode);
+    public static BridgeAgentConfiguration From(ChatViewModel chat) => new(chat.Provider, chat.Model, chat.Effort, chat.BridgeReviewLevel, chat.FastMode, chat.UltrafastMode);
 
     public static BridgeAgentConfiguration Defaults(string provider, ChatViewModel? host = null)
     {
@@ -22,11 +22,11 @@ internal static class BridgeAgentConfigurationPolicy
         {
             "codex" => (settings.DefaultCodexModel, settings.DefaultCodexEffort),
             "kimi" => (settings.DefaultKimiModel, settings.DefaultKimiEffort),
-            "grok" => (settings.DefaultGrokModel, settings.DefaultGrokEffort),
+            "gemini" => (settings.DefaultGeminiModel, (string?)null),
             GlmPreset.ProviderId => (settings.DefaultGlmModel, settings.DefaultGlmEffort),
             _ => (settings.DefaultModel, settings.DefaultEffort),
         };
-        return Normalize(new(provider, model, effort, FastMode: settings.FastMode));
+        return Normalize(new(provider, model, effort, FastMode: settings.FastMode, UltrafastMode: provider == "codex" && settings.CodexUltrafastMode));
     }
 
     public static IReadOnlyList<ModelChoice> ModelsFor(string provider)
@@ -41,15 +41,19 @@ internal static class BridgeAgentConfigurationPolicy
             var levels = model.EffortLevels;
             if (provider == "codex" && CodexModelCatalog.Find(model.Value) is { } spec)
                 levels = spec.EffortLevels;
-            else if (provider == "codex" && model.Value == CodexSession.SparkModelId)
-                levels = ["low", "medium", "high", "xhigh"];
             if (levels.Count == 0) return model;
             return new ModelChoice
             {
-                Provider = model.Provider, Value = model.Value, Display = model.Display,
-                Description = model.Description, ResolvedModel = model.ResolvedModel,
-                SupportsEffort = true, EffortLevels = levels, SupportsAutoMode = true,
+                Provider = model.Provider,
+                Value = model.Value,
+                Display = model.Display,
+                Description = model.Description,
+                ResolvedModel = model.ResolvedModel,
+                SupportsEffort = true,
+                EffortLevels = levels,
+                SupportsAutoMode = true,
                 SupportsFastMode = model.SupportsFastMode,
+                SupportsUltrafastMode = model.SupportsUltrafastMode,
             };
         }).ToArray();
     }
@@ -68,6 +72,9 @@ internal static class BridgeAgentConfigurationPolicy
     public static bool SupportsFastMode(string provider, ModelChoice? model) =>
         provider is "claude" or "codex" && model?.SupportsFastMode == true;
 
+    public static bool SupportsUltrafastMode(string provider, ModelChoice? model) =>
+        provider == "codex" && model?.SupportsUltrafastMode == true;
+
     public static BridgeAgentConfiguration Normalize(BridgeAgentConfiguration configuration)
     {
         var provider = ProviderModelCatalog.Normalize(configuration.Provider);
@@ -83,6 +90,8 @@ internal static class BridgeAgentConfigurationPolicy
         var effort = efforts.FirstOrDefault(row => string.Equals(row.Value, configuration.Effort, StringComparison.OrdinalIgnoreCase))?.Value;
         // Missing speed in older saved bridges leaves the chat's restored preference intact.
         bool? fastMode = configuration.FastMode is { } fast ? fast && SupportsFastMode(provider, model) : null;
-        return new(provider, model?.Value, effort, BridgeReviewPolicy.Normalize(configuration.ReviewLevel), fastMode);
+        var ultrafastMode = configuration.UltrafastMode && SupportsUltrafastMode(provider, model);
+        return new(provider, model?.Value, effort, BridgeReviewPolicy.Normalize(configuration.ReviewLevel),
+            ultrafastMode ? false : fastMode, ultrafastMode);
     }
 }

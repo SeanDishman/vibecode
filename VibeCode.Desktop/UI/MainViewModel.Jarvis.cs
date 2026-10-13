@@ -46,10 +46,13 @@ public sealed partial class MainViewModel : IJarvisActionHost, IJarvisContextHos
                 .Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Take(20).ToArray(),
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), AppSettings.Current.SecondBrainEnabled)
         {
-            MemoryAccess = _jarvisMemoryAccess, ReadMemoryPermission = ReadJarvisMemoryPermission,
+            MemoryAccess = _jarvisMemoryAccess,
+            ReadMemoryPermission = ReadJarvisMemoryPermission,
             CurrentChatId = ActiveChat?.BridgeAgentId,
+            CurrentChat = ActiveChat is { } active ? JarvisSummary(active) : null,
             OpenChats = Chats.Select(JarvisSummary).ToArray(),
             Settings = JarvisSettingsCatalog.Snapshot(AppSettings.Current),
+            ReadSettings = () => JarvisSettingsCatalog.Snapshot(AppSettings.Current),
         };
     }
 

@@ -86,9 +86,6 @@ public static class UsagePalette
         ["kimi-k2.7-code-highspeed"] = 6,
         ["kimi-for-coding-highspeed"] = 6,
         ["kimi-code/kimi-for-coding-highspeed"] = 6,
-        // 7 - xAI Grok
-        ["grok-4.5"] = 7,
-        ["grok-4-5"] = 7,
     };
 
     /// <summary>Slots handed to ids this build doesn't know about (a model released after it shipped). Assigned
@@ -176,7 +173,6 @@ public static class UsagePalette
         "kimi-k2.7-code" or "kimi-for-coding" or "kimi-code/kimi-for-coding" => "Kimi K2.7",
         "kimi-k2.7-code-highspeed" or "kimi-for-coding-highspeed" or "kimi-code/kimi-for-coding-highspeed"
             => "Kimi K2.7 Turbo",
-        "grok-4.5" or "grok-4-5" => "Grok 4.5",
         // GLM on Baseten. Named explicitly rather than left to the slug title-caser below: that path happens to
         // produce the right words for these four ids today, but only because of where the hyphens fall.
         // NB this switch is ordinal, so the casing has to be the id's own.

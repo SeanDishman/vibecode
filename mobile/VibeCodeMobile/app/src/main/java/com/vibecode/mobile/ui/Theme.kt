@@ -49,7 +49,6 @@ object VibeColors {
     fun provider(provider: String): Color = when (provider) {
         "codex" -> Green
         "kimi" -> Violet
-        "grok" -> Amber
         else -> Accent
     }
 }

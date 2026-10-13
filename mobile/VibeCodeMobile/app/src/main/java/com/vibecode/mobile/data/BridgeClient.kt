@@ -9,7 +9,6 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import javax.net.ssl.HttpsURLConnection
 
 /** A request the desktop refused, carried with the status so the UI can say something specific. */
 class BridgeException(val status: Int, message: String) : IOException(message)
@@ -17,9 +16,8 @@ class BridgeException(val status: Int, message: String) : IOException(message)
 /**
  * The phone's half of the bridge protocol.
  *
- * Deliberately built on the JDK's own HttpsURLConnection rather than a networking library: the whole surface is
- * one host, and the thing that actually needs to be right — which certificate is trusted — is easier to be sure
- * of when the socket factory is set explicitly on every connection.
+ * Every request and response is AES-256-GCM encrypted inside a pinned TLS connection, including pairing,
+ * authentication headers and URLs. The transport has no unencrypted compatibility mode.
  */
 class BridgeClient(
     private val host: String,
@@ -31,8 +29,6 @@ class BridgeClient(
     companion object {
         /** Long-poll ceiling on the desktop is 30s; stay just inside it so the server, not the phone, decides. */
         const val POLL_SECONDS = 25
-        private const val CONNECT_TIMEOUT_MS = 8_000
-        private const val READ_TIMEOUT_MS = 45_000
         private val authEpochs = ConcurrentHashMap<String, String>()
     }
 
@@ -246,41 +242,18 @@ class BridgeClient(
     }
 
     private fun exchange(method: String, path: String, bytes: ByteArray?, epoch: String?): JSONObject {
-        val connection = BridgeAddress(host, port).url(path).openConnection() as HttpsURLConnection
-        connection.sslSocketFactory = PinnedTls.socketFactory(fingerprint, onCertificateSeen)
-        connection.hostnameVerifier = PinnedTls.hostnameVerifier
-        connection.requestMethod = method
-        connection.connectTimeout = CONNECT_TIMEOUT_MS
-        connection.readTimeout = READ_TIMEOUT_MS
-        // A paired PC is an origin, not a starting point for credential-bearing redirects.
-        connection.instanceFollowRedirects = false
-        connection.useCaches = false
-        connection.setRequestProperty("Accept", "application/json")
+        val headers = mutableMapOf<String, String>()
         if (epoch != null) {
-            connection.setRequestProperty("Authorization", "Bearer $token")
-            DeviceIdentity.headers(method, path, bytes ?: byteArrayOf(), token!!, epoch)
-                .forEach { (name, value) -> connection.setRequestProperty(name, value) }
+            headers["Authorization"] = "Bearer $token"
+            headers.putAll(DeviceIdentity.headers(method, path, bytes ?: byteArrayOf(), token!!, epoch))
         }
-
-        try {
-            if (bytes != null) {
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                connection.setFixedLengthStreamingMode(bytes.size)
-                connection.outputStream.use { it.write(bytes) }
-            }
-
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (status !in 200..299) {
-                val reason = runCatching { JSONObject(text).optString("error") }.getOrNull()
-                throw BridgeException(status, reason?.takeIf { it.isNotBlank() } ?: describe(status))
-            }
-            return if (text.isBlank()) JSONObject() else JSONObject(text)
-        } finally {
-            connection.disconnect()
+        val reply = BridgeTransport.exchange(BridgeAddress(host, port), fingerprint, onCertificateSeen,
+            method, path, bytes, headers)
+        if (reply.status !in 200..299) {
+            val reason = runCatching { JSONObject(reply.body).optString("error") }.getOrNull()
+            throw BridgeException(reply.status, reason?.takeIf { it.isNotBlank() } ?: describe(reply.status))
         }
+        return if (reply.body.isBlank()) JSONObject() else JSONObject(reply.body)
     }
 
     private fun describe(status: Int) = when (status) {

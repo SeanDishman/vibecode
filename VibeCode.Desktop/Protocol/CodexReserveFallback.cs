@@ -16,7 +16,8 @@ internal static class CodexReserveFallback
 
     internal static bool CanActivate(JsonNode? result)
     {
-        if (result is not JsonObject) return false;
+        // Keep the selected model when existing credits can extend its included allowance.
+        if (result is not JsonObject || CodexCreditPolicy.CanUseCredits(result)) return false;
         var main = Bucket(result, "codex");
         var reserve = Bucket(result, LimitId);
         if (main is null || reserve is null) return false;

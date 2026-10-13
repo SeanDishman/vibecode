@@ -156,33 +156,33 @@ public sealed class WorkflowRun : Observable
                     Phase(Int(node["index"]), Str(node["title"]) ?? "");
                     break;
                 case "workflow_agent":
-                {
-                    // An agent with no phase (or one the script never declared) still has to appear somewhere, so
-                    // it lands in a synthetic phase 0 rather than being dropped on the floor.
-                    var phase = Phase(Int(node["phaseIndex"]), Str(node["phaseTitle"]) ?? "");
-                    var index = Int(node["index"]);
-                    var agent = phase.Agents.FirstOrDefault(a => a.Index == index);
-                    if (agent is null)
                     {
-                        agent = new WorkflowAgentVm { Index = index, Label = Str(node["label"]) ?? $"agent {index}" };
-                        // Same fan-out can report out of order; keep the list in the script's own order.
-                        var at = phase.Agents.Count;
-                        for (var i = 0; i < phase.Agents.Count; i++)
-                            if (phase.Agents[i].Index > index) { at = i; break; }
-                        phase.Agents.Insert(at, agent);
-                        phase.RaiseAgents();
+                        // An agent with no phase (or one the script never declared) still has to appear somewhere, so
+                        // it lands in a synthetic phase 0 rather than being dropped on the floor.
+                        var phase = Phase(Int(node["phaseIndex"]), Str(node["phaseTitle"]) ?? "");
+                        var index = Int(node["index"]);
+                        var agent = phase.Agents.FirstOrDefault(a => a.Index == index);
+                        if (agent is null)
+                        {
+                            agent = new WorkflowAgentVm { Index = index, Label = Str(node["label"]) ?? $"agent {index}" };
+                            // Same fan-out can report out of order; keep the list in the script's own order.
+                            var at = phase.Agents.Count;
+                            for (var i = 0; i < phase.Agents.Count; i++)
+                                if (phase.Agents[i].Index > index) { at = i; break; }
+                            phase.Agents.Insert(at, agent);
+                            phase.RaiseAgents();
+                        }
+                        if (Str(node["label"]) is { Length: > 0 } label) agent.Label = label;
+                        if (Str(node["model"]) is { Length: > 0 } model) agent.Model = model;
+                        if (Str(node["agentId"]) is { Length: > 0 } agentId) agent.AgentId = agentId;
+                        if (Str(node["promptPreview"]) is { Length: > 0 } prompt) agent.PromptPreview = prompt;
+                        if (Str(node["resultPreview"]) is { Length: > 0 } result) agent.ResultPreview = result;
+                        agent.Tokens = Num(node["tokens"], agent.Tokens);
+                        agent.ToolCalls = Num(node["toolCalls"], agent.ToolCalls);
+                        agent.DurationMs = Num(node["durationMs"], agent.DurationMs);
+                        agent.State = Str(node["state"]) ?? agent.State;
+                        break;
                     }
-                    if (Str(node["label"]) is { Length: > 0 } label) agent.Label = label;
-                    if (Str(node["model"]) is { Length: > 0 } model) agent.Model = model;
-                    if (Str(node["agentId"]) is { Length: > 0 } agentId) agent.AgentId = agentId;
-                    if (Str(node["promptPreview"]) is { Length: > 0 } prompt) agent.PromptPreview = prompt;
-                    if (Str(node["resultPreview"]) is { Length: > 0 } result) agent.ResultPreview = result;
-                    agent.Tokens = Num(node["tokens"], agent.Tokens);
-                    agent.ToolCalls = Num(node["toolCalls"], agent.ToolCalls);
-                    agent.DurationMs = Num(node["durationMs"], agent.DurationMs);
-                    agent.State = Str(node["state"]) ?? agent.State;
-                    break;
-                }
             }
         }
         RaiseTotals();

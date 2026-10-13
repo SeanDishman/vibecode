@@ -192,7 +192,9 @@ public sealed partial class OrbitSpinner
         });
         dc.DrawGeometry(null, Frozen(new Pen(fade, Math.Max(1.0, core * 1.25))
         {
-            StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round,
+            StartLineCap = PenLineCap.Round,
+            EndLineCap = PenLineCap.Round,
+            LineJoin = PenLineJoin.Round,
         }), Frozen(trail));
 
         DrawBead(dc, electron.At, core, half * 0.22 * (0.8 + 0.2 * lit), vis);

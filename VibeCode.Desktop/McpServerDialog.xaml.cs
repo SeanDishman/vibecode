@@ -35,7 +35,7 @@ public partial class McpServerDialog : Window
             ClaudeCheck.IsChecked = value.UseClaude;
             CodexCheck.IsChecked = value.UseCodex;
             KimiCheck.IsChecked = value.UseKimi;
-            GrokCheck.IsChecked = value.UseGrok;
+            GeminiCheck.IsChecked = value.UseGemini;
             EnabledCheck.IsChecked = value.Enabled;
             StartupTimeoutBox.Text = value.StartupTimeoutSeconds.ToString();
             ToolTimeoutBox.Text = value.ToolTimeoutSeconds.ToString();
@@ -73,7 +73,7 @@ public partial class McpServerDialog : Window
         if (sse) CodexCheck.IsChecked = false;
         CodexCheck.IsEnabled = !sse;
         TransportCompatibility.Text = sse
-            ? "Current Codex releases do not support legacy SSE. Claude, Kimi, and Grok remain available; use Streamable HTTP when the server offers it."
+            ? "Current Codex releases do not support legacy SSE. Claude, Kimi, and Gemini remain available; use Streamable HTTP when the server offers it."
             : "";
         TransportCompatibility.Visibility = sse ? Visibility.Visible : Visibility.Collapsed;
         HideValidation();
@@ -156,7 +156,7 @@ public partial class McpServerDialog : Window
         ClaudeCheck.IsChecked = value.UseClaude;
         CodexCheck.IsChecked = value.UseCodex && value.Transport != McpCatalog.SseTransport;
         KimiCheck.IsChecked = value.UseKimi;
-        GrokCheck.IsChecked = value.UseGrok;
+        GeminiCheck.IsChecked = value.UseGemini;
         EnabledCheck.IsChecked = true;
         StartupTimeoutBox.Text = value.StartupTimeoutSeconds.ToString();
         ToolTimeoutBox.Text = value.ToolTimeoutSeconds.ToString();
@@ -240,7 +240,7 @@ public partial class McpServerDialog : Window
             UseClaude = ClaudeCheck.IsChecked == true,
             UseCodex = CodexCheck.IsChecked == true && transport != McpCatalog.SseTransport,
             UseKimi = KimiCheck.IsChecked == true,
-            UseGrok = GrokCheck.IsChecked == true,
+            UseGemini = GeminiCheck.IsChecked == true,
             Command = CommandBox.Text.Trim(),
             Arguments = ArgumentsBox.Text.Replace("\r\n", "\n").Split('\n')
                 .Where(argument => argument.Length > 0).ToList(),

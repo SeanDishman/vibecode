@@ -69,7 +69,9 @@ public sealed partial class MainViewModel
         {
             work.CentralPlan = new BridgeCentralPlan
             {
-                Provider = centralSettings.Provider, Model = centralSettings.Model, Effort = centralSettings.Effort,
+                Provider = centralSettings.Provider,
+                Model = centralSettings.Model,
+                Effort = centralSettings.Effort,
                 Cancellation = new CancellationTokenSource(),
             };
             work.ConfirmedVersions.Clear();

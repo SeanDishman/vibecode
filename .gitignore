@@ -48,3 +48,15 @@ node_modules/
 
 # local drafts, not part of the project
 reddit-post.txt
+
+# Downloaded runtimes and compiled payloads never belong in the public source
+*.exe
+*.dll
+*.so
+*.lib
+*.apk
+*.jar
+*.zip
+*.7z
+*.msi
+*.nupkg

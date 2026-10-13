@@ -22,6 +22,7 @@ public sealed partial class CodexSession
         var reserveAvailable = reserve.Length > 0 && reserve.All(w => w.Percent is >= 0 and < 100 && string.IsNullOrEmpty(w.ReachedType));
         if (ApiModel(_model) == CodexReserveFallback.ModelId)
             return reserve.Length == 0 ? null : reserveAvailable;
+        if (account.CanUseCredits) return true;
         return !account.AtLimit || (_reserveModel is not null && reserveAvailable);
     }
 
@@ -51,7 +52,7 @@ public sealed partial class CodexSession
     private bool BeginReserveRecovery(JsonObject? turn, JsonObject? rejectedRequest)
     {
         if (_disposed || _interruptRequested || _reserveRetryAttempted || _reserveRecoveryPending
-            || HasActiveSubagents || SessionId is null || _reserveModel is null
+            || HasActiveSubagents || SessionId is null
             || ApiModel(_model) == CodexReserveFallback.ModelId || turn?["status"]?.GetValue<string>() != "failed"
             || !CodexReserveFallback.IsUsageLimitError(turn?["error"] ?? _lastTurnError)) return false;
 
@@ -68,18 +69,22 @@ public sealed partial class CodexSession
         CancellationTokenSource cancellation, int selectionVersion)
     {
         var submitted = false;
+        var retryStarted = false;
+        var usingCredits = false;
         try
         {
             // Read on THIS conversation's authenticated connection. Never use the globally selected account,
             // consume earned resets, switch credentials, buy credits, or reinterpret a generic 429 as quota.
+            // Existing purchased credits are applied by OpenAI on this same authenticated connection.
             var response = await RequestAsync("account/rateLimits/read")
                 .WaitAsync(TimeSpan.FromSeconds(10), cancellation.Token).ConfigureAwait(false);
             cancellation.Token.ThrowIfCancellationRequested();
-            if (_disposed || selectionVersion != Volatile.Read(ref _modelSelectionVersion)
-                || !CodexReserveFallback.CanActivate(response?["result"])) return;
+            if (_disposed || selectionVersion != Volatile.Read(ref _modelSelectionVersion)) return;
+            usingCredits = CodexCreditPolicy.CanUseCredits(response?["result"]);
+            if (!usingCredits && (_reserveModel is null || !CodexReserveFallback.CanActivate(response?["result"]))) return;
 
             var previous = ApiModel(_model);
-            var effort = CodexReserveFallback.Effort(_reserveModel!, _effort);
+            var effort = usingCredits ? _effort : CodexReserveFallback.Effort(_reserveModel!, _effort);
             var p = rejectedRequest ?? new JsonObject
             {
                 ["threadId"] = SessionId,
@@ -91,34 +96,67 @@ public sealed partial class CodexSession
                                + "Keep completed work and do not repeat actions that already succeeded.",
                 }),
             };
-            p["model"] = CodexReserveFallback.ModelId;
-            p["effort"] = effort;
-            p["serviceTierForTurn"] = "default";
-            p["serviceTier"] = "default";
+            if (usingCredits)
+            {
+                if (!string.IsNullOrWhiteSpace(previous) && previous != "default") p["model"] = previous;
+                if (!string.IsNullOrWhiteSpace(effort)) p["effort"] = effort;
+                ApplyServiceTier(p, previous);
+                ConfigureDialogueOnlyTurn(p);
+            }
+            else
+            {
+                p["model"] = CodexReserveFallback.ModelId;
+                p["effort"] = effort;
+                p["serviceTierForTurn"] = "default";
+                p["serviceTier"] = "default";
+                p["cyberAccessProgram"] = "standard";
+            }
             ApplySecurity(p, legacyThreadShape: false);
 
             cancellation.Token.ThrowIfCancellationRequested();
             // Commit the first model's usage without ending the host's logical turn or releasing its queue/rollback.
             // The continuation reports its own usage normally; no tokens are lost or counted twice at the switch.
             if (_lastUsage is not null)
-                Emit(new JsonObject { ["type"] = "system", ["subtype"] = "codex_usage_checkpoint",
-                    ["model"] = previous, ["usage"] = _lastUsage.DeepClone() });
+                Emit(new JsonObject
+                {
+                    ["type"] = "system",
+                    ["subtype"] = "codex_usage_checkpoint",
+                    ["model"] = previous,
+                    ["usage"] = _lastUsage.DeepClone()
+                });
             _turnUsage = default;
             _turnEstimatedCost = 0;
             _lastUsage = null;
             _lastError = null;
             _lastTurnError = null;
             cancellation.Token.ThrowIfCancellationRequested();
-            _model = CodexReserveFallback.ModelId;
-            _effort = effort;
-            Emit(new JsonObject
+            retryStarted = true;
+            if (usingCredits)
             {
-                ["type"] = "system", ["subtype"] = "codex_reserve_activated",
-                ["model"] = _model, ["previous_model"] = previous, ["effort"] = effort,
-                ["supportedEffortLevels"] = new JsonArray((_reserveModel!["supportedReasoningEfforts"] as JsonArray)?
-                    .OfType<JsonObject>().Select(e => e["reasoningEffort"]?.DeepClone()).ToArray() ?? []),
-                ["message"] = "Codex usage limit reached. Switching this chat to GPT Reserve to continue the interrupted task.",
-            });
+                Emit(new JsonObject
+                {
+                    ["type"] = "system",
+                    ["subtype"] = "codex_credits_available",
+                    ["model"] = previous,
+                    ["message"] = "Included Codex usage reached its limit. Retrying with your available credits on the selected model.",
+                });
+            }
+            else
+            {
+                _model = CodexReserveFallback.ModelId;
+                _effort = effort;
+                Emit(new JsonObject
+                {
+                    ["type"] = "system",
+                    ["subtype"] = "codex_reserve_activated",
+                    ["model"] = _model,
+                    ["previous_model"] = previous,
+                    ["effort"] = effort,
+                    ["supportedEffortLevels"] = new JsonArray((_reserveModel!["supportedReasoningEfforts"] as JsonArray)?
+                        .OfType<JsonObject>().Select(e => e["reasoningEffort"]?.DeepClone()).ToArray() ?? []),
+                    ["message"] = "Codex usage limit reached. Switching this chat to GPT Reserve to continue the interrupted task.",
+                });
+            }
 
             // Once sent, do not cancel the RPC wait: its acceptance is uncertain until it replies. Stop stays
             // latched and interrupts the replacement as soon as turn/started supplies the new turn id.
@@ -129,15 +167,21 @@ public sealed partial class CodexSession
             TrackAcceptedTurn(started);
             if (_interruptRequested && _turnId is not null)
                 await SafeRequest("turn/interrupt", new JsonObject { ["threadId"] = SessionId, ["turnId"] = _turnId });
+            ObserveMonitorAccess(p, usingCredits ? "credit-continuation" : "reserve-turn");
         }
         catch (OperationCanceledException) { /* Stop, model change, or close during the quota check. */ }
         catch (Exception ex)
         {
-            // A failed quota read leaves the original error visible. A rejected Reserve submission is terminal:
+            // A failed quota read leaves the original error visible. A rejected recovery submission is terminal:
             // never bounce between models or replay a request after an uncertain transport failure.
-            if (_model == CodexReserveFallback.ModelId)
-                failedTurn = new JsonObject { ["status"] = "failed", ["error"] = new JsonObject
-                    { ["message"] = "GPT Reserve could not continue: " + ex.Message } };
+            if (retryStarted)
+                failedTurn = new JsonObject
+                {
+                    ["status"] = "failed",
+                    ["error"] = ex is CodexRpcException rpc
+                    ? rpc.Error.DeepClone() : new JsonObject
+                    { ["message"] = (usingCredits ? "Codex could not continue with credits: " : "GPT Reserve could not continue: ") + ex.Message }
+                };
         }
         finally
         {

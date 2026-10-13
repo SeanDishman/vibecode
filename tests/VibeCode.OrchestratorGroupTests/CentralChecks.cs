@@ -36,14 +36,18 @@ internal static partial class Program
         if (Environment.GetEnvironmentVariable("REVIEW_CENTRAL_FAILURE") == "invalid") return "{\"assignments\":[]}";
         if (Environment.GetEnvironmentVariable("REVIEW_CENTRAL_DELAY") == "1") Thread.Sleep(1200);
         var groups = JsonNode.Parse(input[(input.IndexOf('\n') + 1)..])!["groups"]!.AsArray();
-        return new JsonObject { ["assignments"] = new JsonArray(groups.Select((group, index) => (JsonNode)new JsonObject
+        return new JsonObject
         {
-            ["agent_id"] = group!["agent_id"]!.DeepClone(), ["task_name"] = "Deliver area " + (index + 1),
-            ["scope"] = group["existing_scope"]?.ToString() ?? "Own bounded area " + (index + 1) + " for " + group["agent_id"],
-            ["exclusions"] = "Leave the other bounded areas to the other groups.",
-            ["verification"] = "Run focused checks for this assigned area.",
-            ["handoffs"] = "Share interfaces with peer workers; group one owns the final integration check.",
-        }).ToArray()) }.ToJsonString();
+            ["assignments"] = new JsonArray(groups.Select((group, index) => (JsonNode)new JsonObject
+            {
+                ["agent_id"] = group!["agent_id"]!.DeepClone(),
+                ["task_name"] = "Deliver area " + (index + 1),
+                ["scope"] = group["existing_scope"]?.ToString() ?? "Own bounded area " + (index + 1) + " for " + group["agent_id"],
+                ["exclusions"] = "Leave the other bounded areas to the other groups.",
+                ["verification"] = "Run focused checks for this assigned area.",
+                ["handoffs"] = "Share interfaces with peer workers; group one owns the final integration check.",
+            }).ToArray())
+        }.ToJsonString();
     }
 
     static void PublishCentralPlan(ChatViewModel manager, ChatViewModel[] panes)
@@ -54,7 +58,9 @@ internal static partial class Program
             ["plan_version"] = current["plan_version"]!.DeepClone(),
             ["steps"] = new JsonArray(panes.Where(p => p.BridgeCoordinatorAgentId == manager.BridgeAgentId).Select(p => (JsonNode)new JsonObject
             {
-                ["id"] = "central-" + p.BridgeAgentId, ["title"] = "Verify assigned area", ["owner_id"] = p.BridgeAgentId,
+                ["id"] = "central-" + p.BridgeAgentId,
+                ["title"] = "Verify assigned area",
+                ["owner_id"] = p.BridgeAgentId,
             }).ToArray()),
         });
     }
@@ -101,10 +107,13 @@ internal static partial class Program
     static void VerifyCentralParsing()
     {
         BridgeOrchestratorGroup[] groups = [new("a", 3, "Build and verify mobile remote coding"), new("b", 3, "Build and verify mobile remote coding")];
-        var request = new JsonObject { ["text"] = "[CENTRAL ORCHESTRATOR INPUT]\n" + JsonSerializer.Serialize(new
+        var request = new JsonObject
         {
-            groups = groups.Select(g => new { agent_id = g.AgentId, worker_count = g.WorkerCount, objective = g.Objective })
-        }) };
+            ["text"] = "[CENTRAL ORCHESTRATOR INPUT]\n" + JsonSerializer.Serialize(new
+            {
+                groups = groups.Select(g => new { agent_id = g.AgentId, worker_count = g.WorkerCount, objective = g.Objective })
+            })
+        };
         var valid = CentralFixtureReply(request)!;
         Check("central accepts a complete distinct division", BridgeCentralOrchestratorService.TryParse(valid, groups, out var parsed) && parsed.Count == 2);
         var json = JsonNode.Parse(valid)!;
@@ -142,6 +151,8 @@ internal static partial class Program
             Pump(() => Tool(host, "bridge_list_tasks")["central_orchestrator"]?["state"]?.ToString() == "failed");
             Check("invalid central output starts neither permanent objective", managers.All(m => !m.Items.OfType<UserItem>().Any()));
             Check("failure is visible with retry guidance", host.Items.OfType<BannerItem>().Any(b => b.Text.Contains("Worker dispatch is paused") && b.Text.Contains("Start a new team")));
+            Check("failed planner removes its pane and preserves an error log", vm.CentralPlanner is null &&
+                host.Items.OfType<ToolItem>().Any(t => t.Name == "Central orchestrator" && t.IsError && t.Result!.Contains("assignments")));
             Check("failure names the planner and exactly what was wrong with its answer", host.Items.OfType<BannerItem>().Any(b =>
                 b.Text.Contains("high effort") && b.Text.Contains("0 assignment(s) for 2 orchestrators")));
             RenderCentralNotice(Shell(vm), host, "central-failure");
@@ -254,8 +265,11 @@ internal static partial class Program
             Pump(() => (trace = Directory.GetFiles(Root, "trace-*.jsonl").FirstOrDefault(path => ReadTraceRows(path)
                 .Any(n => CentralInput(n)?.Contains(host.BridgeAgentId) == true))) is not null);
             Check("closing test observes an active central planner", central.State == "planning");
+            var activity = central.Activity;
+            Check("central pane exists before closing the bridge", activity is not null && vm.HasCentralPlanner);
             vm.CloseBridge();
             Pump(() => central.State == "interrupted" && central.Cancellation is null);
+            Check("closing bridge releases central display and timer", central.Activity is null && activity!.IsDisposed && !vm.HasCentralPlanner);
             Check("closing bridge cancels central handoff without dispatch", managers.All(m => !m.Items.OfType<UserItem>().Any()) &&
                 panes.All(p => !p.Items.OfType<UserItem>().Any()));
             var pid = int.Parse(Path.GetFileNameWithoutExtension(trace!)["trace-".Length..]);
@@ -271,8 +285,11 @@ internal static partial class Program
         var notice = manager.Items.OfType<BannerItem>().Last(b => b.Text.Contains("Central orchestrator"));
         foreach (var width in new[] { 400, 800 })
         {
-            var content = new ContentControl { Content = notice,
-                ContentTemplate = (DataTemplate)shell.FindResource(new DataTemplateKey(typeof(BannerItem))) };
+            var content = new ContentControl
+            {
+                Content = notice,
+                ContentTemplate = (DataTemplate)shell.FindResource(new DataTemplateKey(typeof(BannerItem)))
+            };
             var border = new Border { Child = content, Padding = new Thickness(16), Background = (Brush)shell.FindResource("Bg1") };
             border.Measure(new Size(width, double.PositiveInfinity));
             var height = (int)Math.Ceiling(border.DesiredSize.Height);

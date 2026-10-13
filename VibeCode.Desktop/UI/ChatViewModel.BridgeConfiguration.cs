@@ -32,6 +32,7 @@ public sealed partial class ChatViewModel
             Effort = configuration.Effort;
             BridgeReviewLevel = configuration.ReviewLevel;
             if (configuration.FastMode is { } fastMode) FastMode = fastMode;
+            UltrafastMode = configuration.UltrafastMode;
         }
         finally { _applyingBridgeConfiguration = false; }
         // Update only this session. SetModel/SetEffort also write global new-chat
@@ -75,7 +76,7 @@ public sealed partial class ChatViewModel
             _appliedFastMode = configuration.FastMode ?? EffectiveFastMode;
         }
         else if (session is CodexSession codex)
-            await codex.SetFastModeAsync(configuration.FastMode ?? FastMode);
+            await codex.SetSpeedAsync(configuration.FastMode ?? FastMode, configuration.UltrafastMode);
         _appliedEffort = configuration.Effort;
     }
 

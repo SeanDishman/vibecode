@@ -47,7 +47,6 @@ internal static class Program
         AppSettings.Current.PhoneBridgeEnabled = false;
         AppSettings.Current.AgentMemoryEnabled = false;
         AppSettings.Current.SecondBrainEnabled = false;
-        AppSettings.Current.AgentSwarmsEnabled = false;
 
         var workspace = Path.Combine(data, "synthetic-project");
         Directory.CreateDirectory(workspace);
@@ -62,15 +61,13 @@ internal static class Program
         chat.Status = "idle";
         chat.Items.Add(new UserItem { Text = "Synthetic desktop transcript", Owner = chat });
         chat.Items.Add(new TextItem { Text = "Synthetic .NET response" });
-        chat.Items.Add(new PermItem { RequestId = "permission-dotnet", ToolName = "Read", Owner = chat,
-            Input = new JsonObject { ["file_path"] = Path.Combine(workspace, "fixture.txt") } });
+        chat.Items.Add(new PermItem { RequestId = "permission-dotnet", ToolName = "Read", Owner = chat, Input = new JsonObject { ["file_path"] = Path.Combine(workspace, "fixture.txt") } });
         var question = new PermItem { RequestId = "question-dotnet", ToolName = "AskUserQuestion", Owner = chat, Input = new JsonObject() };
         var entry = new QuestionEntry { Question = "Which fixture?" };
         entry.Options.Add(new QuestionOption { Label = "First", Description = "Synthetic choice" });
         question.Questions.Add(entry);
         chat.Items.Add(question);
-        chat.Items.Add(new PermItem { RequestId = "plan-dotnet", ToolName = "ExitPlanMode", Owner = chat,
-            Input = new JsonObject { ["plan"] = "Synthetic plan only" } });
+        chat.Items.Add(new PermItem { RequestId = "plan-dotnet", ToolName = "ExitPlanMode", Owner = chat, Input = new JsonObject { ["plan"] = "Synthetic plan only" } });
         var pending = (IDictionary<string, PermItem>)typeof(ChatViewModel).GetField("_pendingPerms", Hidden)!.GetValue(chat)!;
         foreach (var permission in chat.Items.OfType<PermItem>()) pending.Add(permission.RequestId, permission);
         vm.Chats.Add(chat);
@@ -80,8 +77,11 @@ internal static class Program
         Set(bridge, "_pairingExpires", DateTime.UtcNow.AddHours(1));
         File.WriteAllText(Path.Combine(output, "fixture.json"), new JsonObject
         {
-            ["port"] = Port, ["controlPort"] = ControlPort, ["fingerprint"] = bridge.Fingerprint,
-            ["chatId"] = chat.BridgeId, ["dataDirectory"] = data,
+            ["port"] = Port,
+            ["controlPort"] = ControlPort,
+            ["fingerprint"] = bridge.Fingerprint,
+            ["chatId"] = chat.BridgeId,
+            ["dataDirectory"] = data
         }.ToJsonString());
         _ = Task.Run(ControlLoop);
         Console.WriteLine($"READY loopback bridge {Port}, controls {ControlPort}; no provider processes.");
@@ -130,9 +130,14 @@ internal static class Program
         else if (path != "/fixture/state") throw new InvalidOperationException("Unknown fixture route");
         return new JsonObject
         {
-            ["restarts"] = restarts, ["sends"] = session.Sends, ["lastContent"] = session.LastContent,
-            ["mode"] = chat.Mode, ["modelCalls"] = session.ModelCalls, ["interrupts"] = session.Interrupts,
-            ["permissionReplies"] = session.PermissionReplies, ["startCalls"] = session.StartCalls,
+            ["restarts"] = restarts,
+            ["sends"] = session.Sends,
+            ["lastContent"] = session.LastContent,
+            ["mode"] = chat.Mode,
+            ["modelCalls"] = session.ModelCalls,
+            ["interrupts"] = session.Interrupts,
+            ["permissionReplies"] = session.PermissionReplies,
+            ["startCalls"] = session.StartCalls
         };
     }
 

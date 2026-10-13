@@ -16,9 +16,6 @@ internal static partial class Program
         settings.JarvisModel = "gpt-6-luna";
         settings.DefaultProvider = "codex";
         settings.DefaultCodexModel = null;
-        settings.AgentSwarmsEnabled = false;
-
-        settings.GrokDeleteProxy = "private-proxy-credential";
         settings.OwnedSessions.Add("preserved-session");
         settings.TrySave();
         Check("invalid legacy MCP URLs cannot prevent settings inspection", JarvisSettingsCatalog.DescribeServer(
@@ -34,8 +31,7 @@ internal static partial class Program
         Check("settings requests reach the real host and persist both requested values", !settings.JarvisVoiceEnabled
             && settings.JarvisSpeechVolume == 50 && !persisted.JarvisVoiceEnabled && persisted.JarvisSpeechVolume == 50);
         Check("settings receipts use stored values and preserve unrelated state", reply.Contains("JarvisSpeechVolume = 50")
-            && persisted.OwnedSessions.Contains("preserved-session") && persisted.GrokDeleteProxy == "private-proxy-credential"
-            && !persisted.SecondBrainEnabled && !reply.Contains("unverified"));
+            && persisted.OwnedSessions.Contains("preserved-session") && !persisted.SecondBrainEnabled && !reply.Contains("unverified"));
         Check("setting names are canonical before dispatching live UI changes", JarvisPlanParser.Parse(
             SettingsPlan("Change theme", new JarvisSettingChange("uimode", "cli")).Json, "Change theme")
             .Actions.Single().Changes.Single().Name == "UiMode");
@@ -64,10 +60,14 @@ internal static partial class Program
         const string addRequest = "Add a docs MCP server at https://example.com/mcp for Codex only.";
         var addJson = PlanJson("configure_mcp", addRequest, new()
         {
-            ["target"] = "docs", ["config_json"] = new JsonObject
+            ["target"] = "docs",
+            ["config_json"] = new JsonObject
             {
-                ["transport"] = "http", ["url"] = "https://example.com/mcp", ["useClaude"] = false,
-                ["useCodex"] = true, ["useKimi"] = false, ["useGrok"] = false,
+                ["transport"] = "http",
+                ["url"] = "https://example.com/mcp",
+                ["useClaude"] = false,
+                ["useCodex"] = true,
+                ["useKimi"] = false,
                 ["headers"] = new JsonObject { ["Authorization"] = "Bearer private-existing-secret" },
             }.ToJsonString(),
         });
@@ -146,8 +146,9 @@ internal static partial class Program
     private static (string Request, string Json) SettingsPlan(string request, params JarvisSettingChange[] changes) =>
         (request, PlanJson("update_settings", request, new()
         {
-            ["target"] = "", ["changes"] = new JsonArray(changes.Select(change => (JsonNode?)new JsonObject
-                { ["name"] = change.Name, ["value"] = change.Value }).ToArray()),
+            ["target"] = "",
+            ["changes"] = new JsonArray(changes.Select(change => (JsonNode?)new JsonObject
+            { ["name"] = change.Name, ["value"] = change.Value }).ToArray()),
         }));
 
     private static AppSettings LoadJarvisSettings() => JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(Path.Combine(AppSettings.Dir, "settings.json")))!;

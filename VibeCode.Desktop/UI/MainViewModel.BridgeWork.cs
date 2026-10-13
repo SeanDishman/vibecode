@@ -19,9 +19,15 @@ public sealed partial class MainViewModel
 
     private static JsonObject TaskJson(BridgeWorkTask task, BridgeWorkState work) => new()
     {
-        ["task_id"] = task.Id, ["coordinator_id"] = task.CoordinatorId, ["owner_id"] = task.OwnerId,
-        ["task_name"] = task.Title, ["status"] = task.State, ["summary"] = task.Summary, ["evidence"] = task.Evidence,
-        ["attempt"] = task.Attempt, ["instruction"] = task.Instruction,
+        ["task_id"] = task.Id,
+        ["coordinator_id"] = task.CoordinatorId,
+        ["owner_id"] = task.OwnerId,
+        ["task_name"] = task.Title,
+        ["status"] = task.State,
+        ["summary"] = task.Summary,
+        ["evidence"] = task.Evidence,
+        ["attempt"] = task.Attempt,
+        ["instruction"] = task.Instruction,
         ["dependencies"] = new JsonArray(task.Dependencies.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
         ["dependencies_complete"] = work.Ready(task),
         ["files"] = new JsonArray(task.Files.Select(f => (JsonNode?)JsonValue.Create(f)).ToArray()),
@@ -33,12 +39,14 @@ public sealed partial class MainViewModel
         var work = WorkFor(bridge.Panes);
         return new()
         {
-            ["run_id"] = work.RunId, ["plan_version"] = work.PlanVersion,
+            ["run_id"] = work.RunId,
+            ["plan_version"] = work.PlanVersion,
             ["coordination_mode"] = work.CentralPlan is null ? "peer_agreement" : "central_assignment",
             ["central_orchestrator"] = CentralPlanJson(work),
             ["coordination_ready"] = CoordinationReady(bridge.Panes),
             ["orchestrator_communication_locked"] = work.DispatchStarted,
-            ["completed_steps"] = work.Tasks.Count(t => t.State == "completed"), ["total_steps"] = work.Tasks.Count,
+            ["completed_steps"] = work.Tasks.Count(t => t.State == "completed"),
+            ["total_steps"] = work.Tasks.Count,
             ["file_activity_policy"] = "Advisory only. Every agent may edit shared files; these are not exclusive claims or locks.",
             ["tasks"] = new JsonArray(work.Tasks.Select(t => (JsonNode?)TaskJson(t, work)).ToArray()),
         };
@@ -64,9 +72,12 @@ public sealed partial class MainViewModel
             throw new StatusValidationException($"Stale plan version. Read bridge_list_tasks; current plan_version is {work.PlanVersion}.");
         var steps = args["steps"]!.AsArray().Select(row => new BridgeWorkTask
         {
-            Id = row!["id"]!.GetValue<string>(), Title = row["title"]!.GetValue<string>(),
-            CoordinatorId = caller.BridgeAgentId, OwnerId = row["owner_id"]!.GetValue<string>(),
-            Dependencies = TaskStrings(row["dependencies"]), Files = TaskStrings(row["files"]),
+            Id = row!["id"]!.GetValue<string>(),
+            Title = row["title"]!.GetValue<string>(),
+            CoordinatorId = caller.BridgeAgentId,
+            OwnerId = row["owner_id"]!.GetValue<string>(),
+            Dependencies = TaskStrings(row["dependencies"]),
+            Files = TaskStrings(row["files"]),
         }).ToList();
         if (work.CentralPlan is not null && steps.Count == 0)
             throw new StatusValidationException("Publish at least one concrete worker step for your central assignment before dispatch can open.");
@@ -231,7 +242,7 @@ public sealed partial class MainViewModel
 
     private void RecordBridgeTaskTurn(ChatViewModel worker, LiveBridge bridge, bool turnEnded)
     {
-        if (worker.IsBridgeManager || worker.IsPeerNotificationTurn || worker.WaitingForLimitReset || worker.IsCompactingContext) return;
+        if (worker.IsBridgeManager || worker.IsPeerNotificationTurn || worker.WaitingForLimitReset || worker.WaitingForBridgeRetry || worker.IsCompactingContext) return;
         var work = WorkFor(bridge.Panes);
         var task = work.Tasks.FirstOrDefault(t => t.OwnerId == worker.BridgeAgentId && t.Active);
         if (task is not null && (turnEnded || worker.Status is "error" or "closed"))

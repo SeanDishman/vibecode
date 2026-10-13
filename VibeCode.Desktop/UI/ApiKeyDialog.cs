@@ -54,7 +54,9 @@ public sealed class ApiKeyDialog : Window
         root.Children.Add(new TextBlock
         {
             Text = isGlm ? "Connect a GLM account" : $"Sign in to {name} with an API key",
-            FontSize = 16, FontWeight = FontWeights.SemiBold, Foreground = Fg,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Fg,
             Margin = new Thickness(0, 0, 0, 4),
         });
         _hint.Text = HintFor(provider);
@@ -161,14 +163,16 @@ public sealed class ApiKeyDialog : Window
 
     private static TextBlock Caption(string text) => new()
     {
-        Text = text, FontSize = 11, Foreground = Faint, Margin = new Thickness(0, 0, 0, 4),
+        Text = text,
+        FontSize = 11,
+        Foreground = Faint,
+        Margin = new Thickness(0, 0, 0, 4),
     };
 
     private static string HintFor(string provider) => provider switch
     {
         "claude" => "Create one at console.anthropic.com → API keys. Starts with \"sk-ant-\".",
         "codex" => "Create one at platform.openai.com → API keys. Starts with \"sk-\".",
-        "grok" => "Create one in the xAI console → API keys. Starts with \"xai-\".",
         "kimi" => "Create one at platform.moonshot.ai → API keys. Kimi is used through its Anthropic-compatible endpoint.",
         _ => "Paste the provider's API key.",
     };

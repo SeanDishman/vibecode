@@ -51,7 +51,7 @@ internal static partial class Program
     {
         var observed = Requests(chat).First(n => n["fixture_user_received"]?.GetValue<bool>() == true);
         Check(label + " first task observes applied model AND effort", EffectiveAtFirstUser(chat) == Config(chat));
-        Check(label + " first task follows every pending configuration ACK", observed["pending_controls"]!.GetValue<int>() == 0);
+        Check(label + " first task follows every pending adapter ACK", observed["pending_controls"]!.GetValue<int>() == 0);
     }
 
     static BridgeAgentConfiguration EffectiveAtFirstUser(ChatViewModel chat)
@@ -96,8 +96,13 @@ internal static partial class Program
         var fastMode = LaunchFastMode(args);
         void Log(JsonObject row) { row["fixture_utc"] = DateTime.UtcNow.ToString("O"); File.AppendAllText(path, row.ToJsonString() + Environment.NewLine); }
         void Emit(JsonObject row) { Console.WriteLine(row.ToJsonString()); Console.Out.Flush(); }
-        lock (gate) Log(new() { ["fixture_provider"] = "claude", ["fixture_args"] = JsonSerializer.SerializeToNode(args), ["fixture_session"] = sessionId,
-            ["fixture_mode"] = "live reader, apply settings on delayed acknowledgment" });
+        lock (gate) Log(new()
+        {
+            ["fixture_provider"] = "claude",
+            ["fixture_args"] = JsonSerializer.SerializeToNode(args),
+            ["fixture_session"] = sessionId,
+            ["fixture_mode"] = "live reader, apply settings on delayed acknowledgment"
+        });
         while (Console.ReadLine() is { } line)
         {
             var node = JsonNode.Parse(line)!.AsObject();
@@ -107,18 +112,20 @@ internal static partial class Program
                 if (node["type"]?.ToString() == "control_request")
                 {
                     var request = node["request"]!.AsObject(); var requestId = node["request_id"]!.ToString();
-                    var subtype = request["subtype"]?.ToString();
-                    // Background MCP connection probes can overlap a turn. Only configuration controls
-                    // must be acknowledged before the first objective reaches the provider.
-                    if (subtype is "initialize" or "set_model" or "apply_flag_settings" or "set_permission_mode")
-                        pending.Add(requestId);
+                    var subtype = request["subtype"]?.ToString(); pending.Add(requestId);
                     var response = new JsonObject();
                     if (subtype == "initialize")
                     {
                         Emit(new() { ["type"] = "system", ["subtype"] = "init", ["session_id"] = sessionId, ["model"] = model });
-                        response["models"] = new JsonArray(new[] { "claude-opus-5", "claude-fable-5" }.Select(value => (JsonNode)new JsonObject {
-                            ["value"] = value, ["displayName"] = value, ["supportedEffortLevels"] = new JsonArray("low", "medium", "high", "xhigh", "max"),
-                            ["supportsEffort"] = true, ["supportsAutoMode"] = true, ["supportsFastMode"] = value == "claude-opus-5" }).ToArray());
+                        response["models"] = new JsonArray(new[] { "claude-opus-5", "claude-fable-5" }.Select(value => (JsonNode)new JsonObject
+                        {
+                            ["value"] = value,
+                            ["displayName"] = value,
+                            ["supportedEffortLevels"] = new JsonArray("low", "medium", "high", "xhigh", "max"),
+                            ["supportsEffort"] = true,
+                            ["supportsAutoMode"] = true,
+                            ["supportsFastMode"] = value == "claude-opus-5"
+                        }).ToArray());
                     }
                     _ = Task.Run(async () =>
                     {
@@ -139,6 +146,7 @@ internal static partial class Program
                 else if (node["type"]?.ToString() == "user")
                 {
                     Log(new() { ["fixture_user_received"] = true, ["effective_model"] = model, ["effective_effort"] = effort, ["effective_fast_mode"] = fastMode, ["pending_controls"] = pending.Count });
+                    StreamCentralFixture(node, "claude", sessionId, "", Emit);
                     Emit(new() { ["type"] = "result", ["session_id"] = sessionId, ["is_error"] = false, ["result"] = CentralFixtureReply(node) ?? "Local asynchronous acknowledgment fixture complete" });
                 }
             }

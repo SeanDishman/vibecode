@@ -11,11 +11,12 @@
     <!-- THE version number. MSBuild stamps it onto the assembly and Settings > About reads it back through
          AppVersion.Current. Keep it Major.Minor.Patch - AppVersion parses a leading 'v' and a 4th part, but
          nothing else. -->
-    <Version>1.1.3</Version>
-    <Deterministic>true</Deterministic>
-    <PathMap>$(MSBuildProjectDirectory)=/src/VibeCode.Desktop</PathMap>
+    <Version>1.1.4</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\assets\logo.ico</ApplicationIcon>
+    <!-- Program.Main starts the headless MCP helpers before WPF exists, then runs App exactly as the generated
+         App.Main did. -->
+    <StartupObject>VibeCode.Program</StartupObject>
     <LangVersion>latest</LangVersion>
     <!-- Bridge/dev builds use isolated intermediate folders. Keep every accumulated obj/bin variant out of the
          SDK's default source glob even when BaseIntermediateOutputPath points somewhere else. -->
@@ -28,67 +29,57 @@
   <ItemGroup>
     <!-- Desktop embeds the MCP assembly and owns the self-contained single-file host. The standalone MCP
          executable intentionally has UseAppHost=false; forwarding Desktop's publish flags makes it fail NETSDK1067. -->
-    <ProjectReference Include="..\VibeCode.AgentStatus.Mcp\VibeCode.AgentStatus.Mcp.csproj"
-                      GlobalPropertiesToRemove="SelfContained;PublishSingleFile">
+    <ProjectReference Include="..\VibeCode.AgentStatus.Mcp\VibeCode.AgentStatus.Mcp.csproj" GlobalPropertiesToRemove="SelfContained;PublishSingleFile">
       <!-- The embedded helper uses Desktop's runtime/dependency metadata. Its own standalone metadata would
            otherwise be copied beside VibeCode.exe and break the installer's single-file contract. -->
       <AdditionalProperties Condition="'$(PublishSingleFile)' == 'true'">GenerateDependencyFile=false;GenerateRuntimeConfigurationFiles=false</AdditionalProperties>
     </ProjectReference>
-    <PackageReference Include="MdXaml" Version="1.27.0" />
+    <PackageReference Include="MdXaml" Version="1.27.0"/>
     <!-- Already arrives with MdXaml, which renders every fenced code block as an AvalonEdit editor. Named here
          because UI/MarkdownView.cs matches on that type by name to swap those editors back into plain text. -->
-    <PackageReference Include="AvalonEdit" Version="6.3.0.90" />
+    <PackageReference Include="AvalonEdit" Version="6.3.0.90"/>
     <!-- Drives the user's real Chrome over CDP for the agent browser. WebView2 cannot be the agent's browser:
          it rejects Browser.setDownloadBehavior, blanks screenshots when hidden, and reads as an automated
          surface to ordinary bot checks. See Services/ChromeAgentBrowser.cs. -->
-    <PackageReference Include="PuppeteerSharp" Version="25.3.4" />
-    <PackageReference Include="WpfAnimatedGif" Version="2.0.2" />
+    <PackageReference Include="PuppeteerSharp" Version="25.3.4"/>
+    <PackageReference Include="WpfAnimatedGif" Version="2.0.2"/>
     <!-- offline speech-to-text (mic dictation): Whisper.net (whisper.cpp) + NAudio capture. All MIT. -->
-    <PackageReference Include='Microsoft.Web.WebView2' Version='1.0.4022.49' />
-    <PackageReference Include="Whisper.net" Version="1.9.1" />
-    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49"/>
+    <PackageReference Include="Whisper.net" Version="1.9.1"/>
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1"/>
     <!-- The GPU whisper build. Measured on this box (Ryzen 3600 + GTX 1660 SUPER) with a 4.6 s clip: 1.33 s on the
          CPU build vs 0.19 s on Vulkan idle, and 1.4 s vs 0.22 s with all 12 hardware threads saturated by other
          processes — 6-7x either way. Costs ~17 MB in the compressed single-file exe. Vulkan rather than CUDA
          deliberately: it needs only a normal GPU driver, where Whisper.net's CUDA runtime needs a CUDA toolkit
          install the user does not have. A machine with no usable Vulkan device falls back to the CPU build on its
          own — see WhisperNativeRuntime. -->
-    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
-    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1"/>
+    <PackageReference Include="NAudio" Version="2.2.1"/>
     <!-- Local natural British stock voice; engine MIT, Kokoro model/voices Apache-2.0. -->
-    <PackageReference Include="KokoroSharp.CPU" Version="0.8.4" />
+    <PackageReference Include="KokoroSharp.CPU" Version="0.8.4"/>
     <!-- DPAPI for API-key accounts: keys are sealed to the current Windows user, never stored in the clear. -->
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0"/>
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\background.gif" />
+    <Resource Include="Assets\background.gif"/>
     <!-- Embed stock British voices so the single-file app needs no loose package content folder. -->
-    <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\b*.npy"
-                      LogicalName="VibeCode.JarvisVoices.%(Filename)%(Extension)" />
-    <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\LICENSE"
-                      LogicalName="VibeCode.JarvisVoices.LICENSE" />
-    <EmbeddedResource Include="Assets\Jarvis.NOTICES.txt" LogicalName="VibeCode.Jarvis.NOTICES.txt" />
-    <EmbeddedResource Include="Assets\bridge-peer-chats\**\*"
-                      LogicalName="VibeCode.Assets.BridgePeerChats.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)" />
-    <Resource Include="..\assets\logo.png" Link="Assets\logo.png" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\b*.npy" LogicalName="VibeCode.JarvisVoices.%(Filename)%(Extension)"/>
+    <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\LICENSE" LogicalName="VibeCode.JarvisVoices.LICENSE"/>
+    <EmbeddedResource Include="Assets\Jarvis.NOTICES.txt" LogicalName="VibeCode.Jarvis.NOTICES.txt"/>
+    <EmbeddedResource Include="Assets\bridge-peer-chats\**\*" LogicalName="VibeCode.Assets.BridgePeerChats.$([System.String]::Copy('%(RecursiveDir)').Replace('\','.'))%(Filename)%(Extension)"/>
+    <Resource Include="..\assets\logo.png" Link="Assets\logo.png"/>
     <!-- Short free Mixkit notification chime played when a desktop toast appears (see Assets/notification.LICENSE.txt). -->
-    <EmbeddedResource Include="Assets\notification.mp3"
-                      LogicalName="VibeCode.Assets.notification.mp3" />
+    <EmbeddedResource Include="Assets\notification.mp3" LogicalName="VibeCode.Assets.notification.mp3"/>
     <!-- The selectable chime set. Synthesised by Assets\Sounds\_gen_sounds.py (which is deliberately
          NOT embedded - only the .wav output is), so the whole set is ours with no third-party licence.
          Users add their own by dropping files in %APPDATA%\VibeCode\Sounds instead. -->
-    <EmbeddedResource Include="Assets\Sounds\*.wav"
-                      LogicalName="VibeCode.Assets.Sounds.%(Filename)%(Extension)" />
-    <EmbeddedResource Include="Assets\Grok45NormalPrompt.txt"
-                      LogicalName="VibeCode.Assets.Grok45NormalPrompt.txt" />
+    <EmbeddedResource Include="Assets\Sounds\*.wav" LogicalName="VibeCode.Assets.Sounds.%(Filename)%(Extension)"/>
     <!-- The phone app, shipped so "turn on phone access" can hand the user a personalised, signed APK without
          needing an Android toolchain on their machine. Conditional because a clone that has never built
          mobile/VibeCodeMobile should still compile - PhoneApkBuilder.TemplateAvailable reports the absence. -->
-    <EmbeddedResource Include="Assets\vibecode-mobile.apk"
-                      LogicalName="VibeCode.Assets.vibecode-mobile.apk"
-                      Condition="Exists('Assets\vibecode-mobile.apk')" />
-  </ItemGroup>
+    <EmbeddedResource Include="Assets\vibecode-mobile.apk" LogicalName="VibeCode.Assets.vibecode-mobile.apk" Condition="Exists('Assets\vibecode-mobile.apk')"/>
+    </ItemGroup>
 
   <!-- Whisper.net.Runtime.Vulkan copies its Linux .so payload unconditionally - its win-x64 item group is guarded by
        a TFM check, its linux-x64 one is not. That is 59 MB of natives this app can never load: it is a net8.0-windows
@@ -97,9 +88,7 @@
        for foreign platforms is affected - runtimes/vulkan/win-x64 stays. -->
   <Target Name="DropNonWindowsVulkanNatives" BeforeTargets="AssignTargetPaths">
     <ItemGroup>
-      <None Remove="@(None)"
-            Condition="$([System.String]::Copy('%(None.TargetPath)').Replace('\','/').StartsWith('runtimes/vulkan/')) And
-                       !$([System.String]::Copy('%(None.TargetPath)').Replace('\','/').StartsWith('runtimes/vulkan/win-x64/'))" />
+      <None Remove="@(None)" Condition="$([System.String]::Copy('%(None.TargetPath)').Replace('\','/').StartsWith('runtimes/vulkan/')) And                        !$([System.String]::Copy('%(None.TargetPath)').Replace('\','/').StartsWith('runtimes/vulkan/win-x64/'))"/>
     </ItemGroup>
   </Target>
 
@@ -107,8 +96,7 @@
        installer's single-file check. They are documentation only - drop them from publish output. -->
   <Target Name="PruneWebView2DocXmlFromPublish" AfterTargets="ComputeFilesToPublish">
     <ItemGroup>
-      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
-                             Condition="'%(Extension)' == '.xml' And $([System.String]::Copy('%(Filename)').StartsWith('Microsoft.Web.WebView2'))" />
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.xml' And $([System.String]::Copy('%(Filename)').StartsWith('Microsoft.Web.WebView2'))"/>
     </ItemGroup>
   </Target>
 
@@ -117,7 +105,7 @@
        single-file check ("Publish still requires sidecar files: onnxruntime.lib, ..."). -->
   <Target Name="PruneNativeImportLibsFromPublish" AfterTargets="ComputeFilesToPublish">
     <ItemGroup>
-      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.lib'" />
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.lib'"/>
     </ItemGroup>
   </Target>
 

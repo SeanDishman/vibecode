@@ -50,68 +50,68 @@ public sealed class JarvisDesktopActions : IJarvisDesktopActions
         switch (action.Kind)
         {
             case "list_apps":
-            {
-                var windows = MatchingWindows(target);
-                result = windows.Count == 0 ? "No apps with visible windows match that request. Background processes aren't included."
-                    : $"Apps with open windows ({windows.Select(w => w.ProcessId).Distinct().Count()} running processes):\n"
-                      + string.Join("\n", windows.Take(60).Select(w => $"- {w.Name}: {w.Title}"))
-                      + (windows.Count > 60 ? $"\nShowing 60 of {windows.Count} windows. Ask for an app name to narrow the list." : "")
-                      + "\nThis lists visible app windows, not background services.";
-                break;
-            }
+                {
+                    var windows = MatchingWindows(target);
+                    result = windows.Count == 0 ? "No apps with visible windows match that request. Background processes aren't included."
+                        : $"Apps with open windows ({windows.Select(w => w.ProcessId).Distinct().Count()} running processes):\n"
+                          + string.Join("\n", windows.Take(60).Select(w => $"- {w.Name}: {w.Title}"))
+                          + (windows.Count > 60 ? $"\nShowing 60 of {windows.Count} windows. Ask for an app name to narrow the list." : "")
+                          + "\nThis lists visible app windows, not background services.";
+                    break;
+                }
             case "focus_app":
             case "close_app":
-            {
-                var windows = MatchingWindows(target);
-                if (windows.Count != 1) { result = Choice(windows, target); break; }
-                var window = windows[0];
-                cancellationToken.ThrowIfCancellationRequested();
-                if (action.Kind == "close_app")
                 {
-                    if (window.ProcessId == Environment.ProcessId)
-                        throw new InvalidOperationException("Use the window's Close button to close Jarvis or VibeCode itself.");
-                    if (!PostMessage(window.Handle, 0x0010, 0, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
-                    result = $"Asked {window.Name} to close \"{window.Title}\". If it has unsaved work, its save prompt stays in control.";
+                    var windows = MatchingWindows(target);
+                    if (windows.Count != 1) { result = Choice(windows, target); break; }
+                    var window = windows[0];
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (action.Kind == "close_app")
+                    {
+                        if (window.ProcessId == Environment.ProcessId)
+                            throw new InvalidOperationException("Use the window's Close button to close Jarvis or VibeCode itself.");
+                        if (!PostMessage(window.Handle, 0x0010, 0, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                        result = $"Asked {window.Name} to close \"{window.Title}\". If it has unsaved work, its save prompt stays in control.";
+                    }
+                    else
+                    {
+                        if (IsIconic(window.Handle)) ShowWindowAsync(window.Handle, 9);
+                        if (!SetForegroundWindow(window.Handle) && GetForegroundWindow() != window.Handle)
+                            throw new InvalidOperationException($"Windows did not allow {window.Name} to take focus. Select its taskbar icon.");
+                        result = $"Switched to {window.Name}: {window.Title}.";
+                    }
+                    break;
                 }
-                else
-                {
-                    if (IsIconic(window.Handle)) ShowWindowAsync(window.Handle, 9);
-                    if (!SetForegroundWindow(window.Handle) && GetForegroundWindow() != window.Handle)
-                        throw new InvalidOperationException($"Windows did not allow {window.Name} to take focus. Select its taskbar icon.");
-                    result = $"Switched to {window.Name}: {window.Title}.";
-                }
-                break;
-            }
             case "open_app":
-            {
-                var apps = InstalledApps();
-                var exact = apps.Where(a => string.Equals(a.Name, target, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(System.IO.Path.GetFileNameWithoutExtension(a.Path), target, StringComparison.OrdinalIgnoreCase)).ToArray();
-                var matches = exact.Length > 0 ? exact : apps.Where(a => a.Name.Contains(target, StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (matches.Length == 0) { result = $"I couldn't find an installed app named \"{target}\" in the Start menu or registered app paths. Tell me its Start menu name."; break; }
-                if (matches.Length > 1) { result = "Which app do you mean? " + string.Join(", ", matches.Take(12).Select(a => a.Name)); break; }
-                cancellationToken.ThrowIfCancellationRequested();
-                Launch(matches[0].Path);
-                result = $"Launched {matches[0].Name}.";
-                break;
-            }
-            case "open_path":
-            {
-                var path = JarvisPathPolicy.Normalize(target);
-                if (!Directory.Exists(path) && !File.Exists(path)) throw new FileNotFoundException("That file or folder doesn't exist: " + path);
-                cancellationToken.ThrowIfCancellationRequested();
-                // Opening a script should reveal it, not silently execute its associated command.
-                if (File.Exists(path) && new[] { ".exe", ".com", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".py", ".hta", ".reg", ".msi", ".lnk", ".scr" }
-                    .Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
                 {
-                    var info = new ProcessStartInfo(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe")) { UseShellExecute = false };
-                    info.ArgumentList.Add("/select,"); info.ArgumentList.Add(path);
-                    using var launched = Process.Start(info);
-                    result = $"Opened the file's location in Explorer: {path}.";
+                    var apps = InstalledApps();
+                    var exact = apps.Where(a => string.Equals(a.Name, target, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(System.IO.Path.GetFileNameWithoutExtension(a.Path), target, StringComparison.OrdinalIgnoreCase)).ToArray();
+                    var matches = exact.Length > 0 ? exact : apps.Where(a => a.Name.Contains(target, StringComparison.OrdinalIgnoreCase)).ToArray();
+                    if (matches.Length == 0) { result = $"I couldn't find an installed app named \"{target}\" in the Start menu or registered app paths. Tell me its Start menu name."; break; }
+                    if (matches.Length > 1) { result = "Which app do you mean? " + string.Join(", ", matches.Take(12).Select(a => a.Name)); break; }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Launch(matches[0].Path);
+                    result = $"Launched {matches[0].Name}.";
+                    break;
                 }
-                else { Launch(path); result = $"Opened {path}."; }
-                break;
-            }
+            case "open_path":
+                {
+                    var path = JarvisPathPolicy.Normalize(target);
+                    if (!Directory.Exists(path) && !File.Exists(path)) throw new FileNotFoundException("That file or folder doesn't exist: " + path);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // Opening a script should reveal it, not silently execute its associated command.
+                    if (File.Exists(path) && new[] { ".exe", ".com", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".py", ".hta", ".reg", ".msi", ".lnk", ".scr" }
+                        .Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                    {
+                        var info = new ProcessStartInfo(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe")) { UseShellExecute = false };
+                        info.ArgumentList.Add("/select,"); info.ArgumentList.Add(path);
+                        using var launched = Process.Start(info);
+                        result = $"Opened the file's location in Explorer: {path}.";
+                    }
+                    else { Launch(path); result = $"Opened {path}."; }
+                    break;
+                }
             case "open_url":
                 Launch(JarvisDesktopPolicy.WebAddress(target).AbsoluteUri);
                 result = $"Opened {target} in your browser.";
@@ -169,7 +169,7 @@ public sealed class JarvisDesktopActions : IJarvisDesktopActions
             var directory = Environment.GetFolderPath(root);
             if (!Directory.Exists(directory)) continue;
             foreach (var file in Directory.EnumerateFiles(directory, "*.lnk", new EnumerationOptions
-                { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint }))
+            { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint }))
                 apps.Add(new(System.IO.Path.GetFileNameWithoutExtension(file), file));
         }
         foreach (var hive in new[] { Registry.CurrentUser, Registry.LocalMachine })

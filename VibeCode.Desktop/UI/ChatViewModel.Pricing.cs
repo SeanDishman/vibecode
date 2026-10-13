@@ -31,10 +31,11 @@ public sealed partial class ChatViewModel
     {
         _unfinishedUsageRecorded = false;
         _costModelForTurn = CurrentModel?.ResolvedModel ?? _model;
-        _costTierForTurn = EffectiveFastMode && (IsClaude || IsCodex) ? "fast" : "standard";
+        _costTierForTurn = EffectiveUltrafastMode ? "ultrafast"
+            : EffectiveFastMode && (IsClaude || IsCodex) ? "fast" : "standard";
     }
 
-    private double LiveEstimatedCost => IsGrok ? 0 : _liveCostEstimate ?? ModelPricing.TurnCost(CostModel,
+    private double LiveEstimatedCost => IsGemini ? 0 : _liveCostEstimate ?? ModelPricing.TurnCost(CostModel,
         _liveTurnUsage.Input, _liveTurnUsage.CacheWrite, _liveTurnUsage.CacheRead, _liveTurnUsage.Output, _costTierForTurn);
 
     private void CaptureMessagePricing(string id, JsonNode? message, JsonNode? usage)

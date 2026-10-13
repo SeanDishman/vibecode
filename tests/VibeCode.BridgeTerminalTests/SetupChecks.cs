@@ -77,19 +77,22 @@ internal static partial class Program
         var regular = Panel();
         Check("regular bridge hides task and orchestration controls", !regular.IsAdvanced &&
             Find<FrameworkElement>(regular, "AdvancedFields").Visibility == Visibility.Collapsed);
-        Check("regular provider dropdown includes all supported providers", Find<ComboBox>(regular, "PeerProviderBox")
-            .Items.OfType<BridgeSetupPanel.ProviderChoice>().Select(p => p.Id).Order()
-            .SequenceEqual(new[] { "claude", "codex", "grok", "kimi", "glm" }.Order()));
+        var accountBox = Find<ComboBox>(regular, "PeerAccountBox");
+        var fixtureAccounts = BridgeSetupPanel.Providers.Select(p => new BridgeAccountChoice(p.Id,
+            "fixture-" + p.Id, p.Label + " account", p.Label + " · Fixture")).ToArray();
+        accountBox.ItemsSource = fixtureAccounts;
+        Check("regular dropdown lists account identities", accountBox.Items.Count == 5);
         var starts = 0;
         regular.StartRequested += (_, _) => starts++;
-        foreach (var provider in BridgeSetupPanel.Providers)
+        foreach (var account in fixtureAccounts)
         {
-            Find<ComboBox>(regular, "PeerProviderBox").SelectedValue = provider.Id;
+            accountBox.SelectedItem = account;
             Click(regular, "StartButton");
-            Check("regular starts the selected provider " + provider.Id, regular.Provider == provider.Id && !regular.SingleTerminal);
+            Check("regular starts the selected account " + account.Provider,
+                regular.PeerAccount == account && regular.Provider == account.Provider && !regular.SingleTerminal);
         }
         Check("regular bridge starts without an orchestrator task", starts == 5);
-        Find<ComboBox>(regular, "PeerProviderBox").SelectedValue = "claude";
+        accountBox.SelectedItem = fixtureAccounts[0];
         CaptureSetup(regular, 460, "start-bridge-regular.png");
 
         var panel = Panel();
@@ -145,9 +148,10 @@ internal static partial class Program
             reviewTop + workerReview.ActualHeight < panel.ActualHeight - 50 && workerReview.ActualHeight >= 36);
         Descendants<ScrollViewer>(panel).First().ScrollToTop();
         var content = (ScrollViewer)objective.Template.FindName("PART_ContentHost", objective);
+        // The box keeps its natural (minimum) height instead of stretching. A fixed "< 110" bound could never pass
+        // against the task box's MinHeight of 144.
         Check("task text begins at the top instead of floating in the middle", content.VerticalAlignment == VerticalAlignment.Top &&
-            objective.GetRectFromCharacterIndex(0).Top <= 14 && objective.ActualHeight >= objective.MinHeight &&
-            objective.ActualHeight <= objective.MaxHeight);
+            objective.GetRectFromCharacterIndex(0).Top <= 14 && objective.ActualHeight <= objective.MinHeight + 1);
         Capture(panel, 400, 420, "start-bridge-advanced-small.png");
         var taskRect = objective.GetRectFromCharacterIndex(0);
         Check("compact panel keeps caret and footer usable", taskRect.Top <= 14 && Find<Button>(panel, "StartButton").ActualHeight >= 36);

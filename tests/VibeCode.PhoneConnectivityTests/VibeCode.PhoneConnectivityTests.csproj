@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../VibeCode.Desktop/VibeCode.Desktop.csproj" />
+    <Compile Include="../../VibeCode.Desktop/Services/PhoneAesChannel.cs" Link="PhoneAesChannel.cs" />
   </ItemGroup>
 </Project>

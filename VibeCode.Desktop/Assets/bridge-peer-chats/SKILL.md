@@ -5,6 +5,10 @@ description: Find context in other agents' chats in your current VibeCode Bridge
 
 # Bridge peer chats
 
+When the user asks to read another agent's whole conversation, prefer the built-in `bridge_read_chat` tool. Pick the agent from `bridge_list_agents`, call `bridge_read_chat` with `agent` and no cursor, then keep passing `next_cursor` as `cursor` with the returned `agent_id` as `agent` until `has_more` is false. Each read captures a fixed snapshot from the beginning, so streaming updates cannot move messages between pages. Long messages continue across pages using `text_offset`; concatenate their `text` in order for the complete content. This includes grouped tool inputs and results. Cursors expire after 30 minutes without a read, with at most four snapshots retained per caller. The tool never messages, wakes or interrupts the chat owner. Do not routinely poll other agents' transcripts.
+
+For focused searches and archived conversations, use the helper below.
+
 Use the read-only helper `scripts/query-peer-chats.ps1` next to this skill. Resolve its absolute path from the skill path supplied by VibeCode; each bridge has its own copy and archive. It works with Windows PowerShell 5.1 or PowerShell 7 and needs no extra packages.
 
 Run these examples through your shell, replacing `<skill-directory>` with this skill's actual directory:

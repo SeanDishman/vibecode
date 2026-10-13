@@ -79,10 +79,16 @@ internal static partial class Program
         catch (Exception ex) { failure = ex.Message; Console.WriteLine("FAILED: " + name + " | " + failure); }
         var report = new JsonObject
         {
-            ["name"] = name, ["passed"] = failure is null, ["failure"] = failure,
-            ["model"] = "gpt-6-luna", ["live_agents"] = 2, ["live_turns"] = actors.Sum(p => p.Items.OfType<UserItem>().Count()),
-            ["elapsed_seconds"] = watch.Elapsed.TotalSeconds, ["bridge_calls"] = calls.Count,
-            ["input_tokens"] = actors.Sum(p => p.TotalIn), ["output_tokens"] = actors.Sum(p => p.TotalOut),
+            ["name"] = name,
+            ["passed"] = failure is null,
+            ["failure"] = failure,
+            ["model"] = "gpt-6-luna",
+            ["live_agents"] = 2,
+            ["live_turns"] = actors.Sum(p => p.Items.OfType<UserItem>().Count()),
+            ["elapsed_seconds"] = watch.Elapsed.TotalSeconds,
+            ["bridge_calls"] = calls.Count,
+            ["input_tokens"] = actors.Sum(p => p.TotalIn),
+            ["output_tokens"] = actors.Sum(p => p.TotalOut),
             ["calls"] = new JsonArray(calls.Select(c => (JsonNode?)c.DeepClone()).ToArray()),
             ["peer_model_turns"] = passive.Sum(p => Session(p).Sent.Count),
             ["messages"] = new JsonArray(actors.Select(p => (JsonNode?)new JsonObject

@@ -22,8 +22,6 @@ internal static partial class Program
         AppSettings.Current.DefaultProvider = "codex";
         AppSettings.Current.DefaultCodexModel = "gpt-6-luna";
         AppSettings.Current.DefaultCodexEffort = "low";
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.McpServers.Clear();
         Application.Current.Resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(
             new Uri("/VibeCode;component/Themes/Dark.xaml", UriKind.Relative)));
@@ -89,7 +87,7 @@ internal static partial class Program
         Directory.CreateDirectory(workspace);
         var vm = new MainViewModel();
         var host = new ChatViewModel(workspace, title: "Bridge verification · " + name, provider: "codex")
-            { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true };
+        { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true };
         // Plan mode keeps the tiny arithmetic tasks read-only; built-in bridge MCP tools stay available.
         host.SetMode("plan");
         Chats.Add(host); vm.Chats.Add(host); Call(vm, "Track", host); Property(vm, "ActiveChat", host);
@@ -164,7 +162,9 @@ internal static partial class Program
         }, TimeSpan.FromMinutes(3), team);
         File.WriteAllText(Path.Combine(_root, name + "-diagnostic.json"), JsonSerializer.Serialize(team.Select(chat => new
         {
-            agent = chat.BridgeTerminalIdentity, state = chat.Status, review = chat.BridgeReviewState,
+            agent = chat.BridgeTerminalIdentity,
+            state = chat.Status,
+            review = chat.BridgeReviewState,
             messages = chat.Items.OfType<TextItem>().Select(t => t.Text).ToArray(),
             tools = chat.Items.OfType<ToolItem>().Select(t => new { t.Name, t.Status, t.Result }).ToArray(),
         }), new JsonSerializerOptions { WriteIndented = true }));
@@ -199,9 +199,15 @@ internal static partial class Program
         SaveLiveShell(shell, 900, 700, name + "-worker-narrow.png");
         var transcript = team.Select(chat => new
         {
-            agent = chat.BridgeTerminalIdentity, task = chat.BridgeTaskName, model = chat.Model,
-            status = chat.Status, input_tokens = chat.TotalIn, output_tokens = chat.TotalOut,
-            task_state = chat.BridgeTaskState, review_state = chat.BridgeReviewState, review_summary = chat.BridgeReviewSummary,
+            agent = chat.BridgeTerminalIdentity,
+            task = chat.BridgeTaskName,
+            model = chat.Model,
+            status = chat.Status,
+            input_tokens = chat.TotalIn,
+            output_tokens = chat.TotalOut,
+            task_state = chat.BridgeTaskState,
+            review_state = chat.BridgeReviewState,
+            review_summary = chat.BridgeReviewSummary,
             messages = chat.Items.OfType<TextItem>().Select(t => t.Text).ToArray(),
         }).ToArray();
         File.WriteAllText(Path.Combine(_root, name + ".json"), JsonSerializer.Serialize(transcript, new JsonSerializerOptions { WriteIndented = true }));
@@ -214,9 +220,16 @@ internal static partial class Program
         File.WriteAllText(Path.Combine(_root, name + "-plan.json"), finalPlan.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         File.WriteAllText(Path.Combine(_root, name + "-metrics.json"), JsonSerializer.Serialize(new
         {
-            name, model = "gpt-6-luna", effort = "low", workers, elapsed_seconds = caseWatch.Elapsed.TotalSeconds,
-            input_tokens = team.Sum(c => c.TotalIn), output_tokens = team.Sum(c => c.TotalOut), bridge_calls = calls.Count,
-            completed_steps = finalPlan["completed_steps"]!.GetValue<int>(), passed = true,
+            name,
+            model = "gpt-6-luna",
+            effort = "low",
+            workers,
+            elapsed_seconds = caseWatch.Elapsed.TotalSeconds,
+            input_tokens = team.Sum(c => c.TotalIn),
+            output_tokens = team.Sum(c => c.TotalOut),
+            bridge_calls = calls.Count,
+            completed_steps = finalPlan["completed_steps"]!.GetValue<int>(),
+            passed = true,
             process_peak_bytes = Process.GetCurrentProcess().PeakWorkingSet64,
         }, new JsonSerializerOptions { WriteIndented = true }));
         Console.WriteLine($"COMPLETE: {name}; input={team.Sum(c => c.TotalIn)}, output={team.Sum(c => c.TotalOut)} tokens.");

@@ -4,6 +4,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.vibecode.mobile.data.BridgeClient
 import com.vibecode.mobile.data.BridgeException
+import com.vibecode.mobile.data.BridgeAddress
+import com.vibecode.mobile.data.BridgeTransport
 import com.vibecode.mobile.data.DeviceIdentity
 import com.vibecode.mobile.data.PinnedTls
 import kotlinx.coroutines.runBlocking
@@ -34,17 +36,12 @@ class DotNetBridgeFlowTest {
     }
 
     private fun status(path: String, token: String?, epoch: String, validProof: Boolean = true): Int {
-        val connection = URL("https://$host:$port$path").openConnection() as HttpsURLConnection
-        connection.sslSocketFactory = PinnedTls.socketFactory(pin)
-        connection.hostnameVerifier = PinnedTls.hostnameVerifier
-        connection.connectTimeout = 5000
-        connection.readTimeout = 5000
+        val headers = mutableMapOf<String, String>()
         if (token != null) {
-            connection.setRequestProperty("Authorization", "Bearer $token")
-            DeviceIdentity.headers("GET", if (validProof) path else "$path-tampered", byteArrayOf(), token, epoch)
-                .forEach { (key, value) -> connection.setRequestProperty(key, value) }
+            headers["Authorization"] = "Bearer $token"
+            headers.putAll(DeviceIdentity.headers("GET", if (validProof) path else "$path-tampered", byteArrayOf(), token, epoch))
         }
-        return try { connection.responseCode } finally { connection.disconnect() }
+        return BridgeTransport.exchange(BridgeAddress(host, port), pin, null, "GET", path, null, headers).status
     }
 
     @Test fun actualDotNetValidatesAndroidSignaturesDispatchAndRestart() = runBlocking {

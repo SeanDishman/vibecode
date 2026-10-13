@@ -180,15 +180,15 @@ public sealed class MemoryGraphControl : FrameworkElement
         {
             var forces = new Vector[count];
             for (var a = 0; a < count; a++)
-            for (var b = a + 1; b < count; b++)
-            {
-                var delta = points[a] - points[b];
-                var distanceSquared = Math.Max(100, delta.LengthSquared);
-                if (delta.LengthSquared < 0.01) delta = new Vector(1, 0);
-                var repulsion = delta * (11000 / distanceSquared / Math.Sqrt(distanceSquared));
-                forces[a] += repulsion;
-                forces[b] -= repulsion;
-            }
+                for (var b = a + 1; b < count; b++)
+                {
+                    var delta = points[a] - points[b];
+                    var distanceSquared = Math.Max(100, delta.LengthSquared);
+                    if (delta.LengthSquared < 0.01) delta = new Vector(1, 0);
+                    var repulsion = delta * (11000 / distanceSquared / Math.Sqrt(distanceSquared));
+                    forces[a] += repulsion;
+                    forces[b] -= repulsion;
+                }
 
             foreach (var (a, b) in links)
             {
@@ -344,8 +344,8 @@ public sealed class MemoryGraphControl : FrameworkElement
         var offsetY = (ActualHeight / 2 + _pan.Y) % spacing;
         var dot = BrushFor(Color.FromArgb(38, 100, 104, 118));
         for (var x = offsetX; x < ActualWidth; x += spacing)
-        for (var y = offsetY; y < ActualHeight; y += spacing)
-            dc.DrawEllipse(dot, null, new Point(x, y), 0.75, 0.75);
+            for (var y = offsetY; y < ActualHeight; y += spacing)
+                dc.DrawEllipse(dot, null, new Point(x, y), 0.75, 0.75);
     }
 
     private void DrawEdgeLabel(DrawingContext dc, string label, Point source, Point target)
@@ -436,8 +436,6 @@ public sealed class MemoryGraphControl : FrameworkElement
 
     private bool IsMatch(AgentMemoryGraphNode node) => Matches(node, SearchText);
 
-    /// <summary>Every whitespace-separated term must appear somewhere on the node, so "grok error" narrows
-    /// instead of matching everything that mentions either word.</summary>
     internal static bool Matches(AgentMemoryGraphNode node, string? search)
     {
         var terms = (search ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

@@ -175,8 +175,13 @@ internal static partial class Program
         panel.Review(team[2]);
         Check("recipient and review selection do not narrow team usage totals", panel.UsageText == total);
         panel.ShowAll();
-        var live = new JsonObject { ["input_tokens"] = 50, ["cache_creation_input_tokens"] = 10,
-            ["cache_read_input_tokens"] = 20, ["output_tokens"] = 5 };
+        var live = new JsonObject
+        {
+            ["input_tokens"] = 50,
+            ["cache_creation_input_tokens"] = 10,
+            ["cache_read_input_tokens"] = 20,
+            ["output_tokens"] = 5
+        };
         Call(team[1], "SetLiveUsage", Call(team[1], "UsageOf", live));
         var liveCost = ModelPricing.TurnCost("gpt-6.1-sol", 50, 10, 20, 5);
         Check("background worker live usage includes cache reads, cache creation and estimated cost",
@@ -199,9 +204,10 @@ internal static partial class Program
         foreach (var agent in team) agent.Status = "idle";
         var a = team[0]; var b = team[3];
         vm.ConfigureBridgeOrchestrator(a, 2, "Build a store website.", true);
-        // Exercise peer scope negotiation in a manually arranged group. The central
-        // planner used by the setup UI is covered by OrchestratorGroupTests.
-        Call(vm, "PrepareBridgeOrchestrator", b, 2, true, null, null);
+        vm.ConfigureBridgeOrchestrator(b, 2, "Coordinate marketing and discovery for the store.", true);
+        // Exercise restored groups that predate the central planner. New central handoffs are covered by
+        // VibeCode.OrchestratorGroupTests using the actual provider adapters and isolated CLI fixtures.
+        ((BridgeWorkState)Property(a, "BridgeWork")!).CentralPlan = null;
         var kickoff = a.Items.OfType<UserItem>().First(u => u.Text.StartsWith("[BRIDGE ORCHESTRATOR]"));
         Check("orchestrator kickoff stays an automated turn with readable goal presentation",
             (bool)Call(a, "IsSystemInjectedPrompt", kickoff.Text)! && kickoff.IsAgentMessage && kickoff.AgentKind == "Goal" &&
@@ -217,7 +223,7 @@ internal static partial class Program
             listing["agents"]!.AsArray().Count(p => p!["role"]!.ToString() == "orchestrator") == 2 &&
             listing["agents"]![0]!["worker_ids"]!.AsArray().Count == 2);
         Reject("dispatch waits until orchestrators agree scopes", () => Tool(a, "bridge_dispatch_task", new()
-            { ["recipient"] = team[1].BridgeAgentId, ["task_name"] = "Build catalogue", ["message"] = "Own the catalogue." }));
+        { ["recipient"] = team[1].BridgeAgentId, ["task_name"] = "Build catalogue", ["message"] = "Own the catalogue." }));
         Reject("scope cannot be confirmed without reading peer proposals", () => Tool(a, "bridge_agree_scope", new() { ["plan_version"] = 1, ["scope"] = "Catalogue and checkout." }));
         Tool(a, "bridge_send_message", new() { ["recipient"] = b.BridgeAgentId, ["message"] = "My group will own catalogue and checkout. Can your group own marketing pages and search?" });
         Tool(b, "bridge_send_message", new() { ["recipient"] = a.BridgeAgentId, ["message"] = "Agreed. My group owns marketing pages and search; your group owns catalogue and checkout." });
@@ -231,9 +237,9 @@ internal static partial class Program
         Check("repeated confirmation cannot silently replace the agreed division", unchanged["already_confirmed"]!.ToString() == "true" &&
             a.BridgeOrchestrationScope == "Catalogue and checkout, excluding marketing pages and search.");
         Reject("orchestrator cannot take another group's worker", () => Tool(a, "bridge_dispatch_task", new()
-            { ["recipient"] = team[4].BridgeAgentId, ["task_name"] = "Steal search", ["message"] = "Own search." }));
+        { ["recipient"] = team[4].BridgeAgentId, ["task_name"] = "Steal search", ["message"] = "Own search." }));
         Reject("orchestrator cannot dispatch its peer as a worker", () => Tool(a, "bridge_dispatch_task", new()
-            { ["recipient"] = b.BridgeAgentId, ["task_name"] = "Peer assignment", ["message"] = "Implement my task." }));
+        { ["recipient"] = b.BridgeAgentId, ["task_name"] = "Peer assignment", ["message"] = "Implement my task." }));
         Tool(a, "bridge_dispatch_task", new() { ["recipient"] = team[1].BridgeAgentId, ["task_name"] = "Build catalogue", ["message"] = "Own catalogue.cs. Verify product filtering." });
         Tool(b, "bridge_dispatch_task", new() { ["recipient"] = team[4].BridgeAgentId, ["task_name"] = "Implement search", ["message"] = "Own search.cs. Verify empty results." });
         PumpUntil(() => Session(team[1]).Sent.Count > 0 && Session(team[4]).Sent.Count > 0);
@@ -269,9 +275,6 @@ internal static partial class Program
             Tool(resumed[0], "bridge_list_agents")["coordination_ready"]!.ToString() == "true");
         var shared = vm.SharedBridgeTerminal;
         Check("roster groups each orchestrator with its own workers", shared.Agents[0] == a && shared.Agents[1] == team[1] && shared.Agents[3] == b && shared.Agents[4] == team[4]);
-        vm.ToggleBridgeManager(b);
-        Check("stepping one orchestrator down preserves the other group", a.IsBridgeManager && !b.IsBridgeManager &&
-            team[1].BridgeCoordinatorAgentId == a.BridgeAgentId && team[4].BridgeCoordinatorAgentId is null);
         RejectArgument("invalid new-group requests do not create sessions", () => vm.LaunchBridgeOrchestrator(a, 0, "Invalid"));
         Check("invalid group request preserves the roster", vm.BridgePanes.Count == 6);
     }
@@ -284,7 +287,7 @@ internal static partial class Program
         Check("destination agent_id alias sends without changing caller identity", alias["delivered"]!.AsArray().Count == 1 &&
             Tool(team[1], "bridge_read_messages")["messages"]![0]!["sender_id"]!.ToString() == team[0].BridgeAgentId);
         Reject("conflicting destination aliases are rejected", () => Tool(team[0], "bridge_send_message", new()
-            { ["agent_id"] = team[1].BridgeAgentId, ["recipient"] = team[0].BridgeAgentId, ["message"] = "Ambiguous." }));
+        { ["agent_id"] = team[1].BridgeAgentId, ["recipient"] = team[0].BridgeAgentId, ["message"] = "Ambiguous." }));
         try
         {
             Tool(team[0], "bridge_send_message", new() { ["recipient"] = team[1].BridgeAgentId, ["message"] = "Spoof", ["sender_id"] = team[1].BridgeAgentId });
@@ -299,7 +302,7 @@ internal static partial class Program
         File.WriteAllText(receiver.FilePath, "User-replaced metadata must stay intact.");
         for (var i = 0; i < 5; i++)
             Reject("failed durable sends do not consume retry slots " + i, () => Tool(failureTeam[0], "bridge_send_message", new()
-                { ["recipient"] = failureTeam[1].BridgeAgentId, ["message"] = "Retry after storage recovers." }));
+            { ["recipient"] = failureTeam[1].BridgeAgentId, ["message"] = "Retry after storage recovers." }));
         Check("failed sends preserve the replacement file", File.ReadAllText(receiver.FilePath) == "User-replaced metadata must stay intact.");
         File.Move(receiver.FilePath, receiver.FilePath + ".held");
         var retry = Tool(failureTeam[0], "bridge_send_message", new() { ["recipient"] = failureTeam[1].BridgeAgentId, ["message"] = "Retry after storage recovers." });

@@ -8,15 +8,15 @@ namespace VibeCode.Services;
 /// looks a session up under its own CLAUDE_CONFIG_DIR only, so opening an old account's chat under the currently
 /// selected account made Claude Code answer "No conversation found with session ID" - the chat read as gone.</param>
 public sealed record SessionEntry(string SessionId, string Title, string Cwd, DateTime LastModified, string? GitBranch,
-    string Provider = "claude", string? AccountId = null)
+    string Provider = "claude", string? AccountId = null, DateTimeOffset? LastAssistantAt = null)
 {
-    public string ProviderBadge => Provider switch { "kimi" => "Kimi", "grok" => "Grok", "glm" => "GLM", _ => "" };
+    public string ProviderBadge => Provider switch { "kimi" => "Kimi", "gemini" => "Gemini", "glm" => "GLM", _ => "" };
 }
 public sealed record ProjectEntry(string Cwd, string Name, DateTime LastModified, List<SessionEntry> Sessions);
 public sealed record TranscriptMessage(string Type, JsonNode Message, string? ParentToolUseId);
 
 /// <summary>Reads Claude Code's on-disk session store (~/.claude) - same data the CLI uses.</summary>
-public static class SessionCatalog
+public static partial class SessionCatalog
 {
     public static string ClaudeDir =>
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")
@@ -25,10 +25,6 @@ public static class SessionCatalog
     public static string KimiDir =>
         Environment.GetEnvironmentVariable("KIMI_CODE_HOME")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".kimi-code");
-
-    public static string GrokDir =>
-        Environment.GetEnvironmentVariable("GROK_HOME")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".grok");
 
     /// <summary>
     /// Every Claude home whose transcripts belong to this user: the shared <c>~/.claude</c> plus each saved
@@ -119,8 +115,9 @@ public static class SessionCatalog
         }
 
         AddKimiSessions(byCwd, allowedSessionIds);
-        AddGrokSessions(byCwd, allowedSessionIds);
+        AddGeminiSessions(byCwd, allowedSessionIds);
         AddGlmSessions(byCwd, allowedSessionIds);
+        AddCodexSessions(byCwd, allowedSessionIds);
 
         return byCwd
             .Select(kv => new ProjectEntry(
@@ -146,44 +143,6 @@ public static class SessionCatalog
             if (!byCwd.TryGetValue(snapshot.Cwd, out var list)) byCwd[snapshot.Cwd] = list = new();
             list.Add(new SessionEntry(snapshot.SessionId, title, snapshot.Cwd, snapshot.Updated, null, "glm",
                 snapshot.AccountId));
-        }
-    }
-
-    /// <summary>Merge Grok's summary.json session store (~/.grok/sessions/&lt;cwd&gt;/&lt;id&gt;) into history.</summary>
-    private static void AddGrokSessions(Dictionary<string, List<SessionEntry>> byCwd,
-        IReadOnlySet<string>? allowedSessionIds)
-    {
-        var root = Path.Combine(GrokDir, "sessions");
-        if (!Directory.Exists(root)) return;
-        IEnumerable<string> files;
-        try { files = Directory.EnumerateFiles(root, "summary.json", SearchOption.AllDirectories).ToArray(); }
-        catch { return; }
-        foreach (var file in files)
-        {
-            try
-            {
-                var summary = JsonNode.Parse(File.ReadAllText(file));
-                if (summary is null || summary["hidden"]?.GetValue<bool>() == true) continue;
-                var kind = summary["session_kind"]?.GetValue<string>();
-                if (kind?.StartsWith("subagent", StringComparison.OrdinalIgnoreCase) == true) continue;
-                var id = summary["info"]?["id"]?.GetValue<string>()
-                         ?? Directory.GetParent(file)?.Name;
-                if (id is null || (allowedSessionIds is not null && !allowedSessionIds.Contains(id))) continue;
-                var cwd = summary["info"]?["cwd"]?.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(cwd)) continue;
-                var title = summary["generated_title"]?.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(title)) title = summary["session_summary"]?.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(title)) title = id.Length > 8 ? id[..8] : id;
-                title = title!.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ').Trim();
-                if (title.Length > 80) title = title[..80] + "…";
-                var updated = ParseDate(summary["last_active_at"]?.GetValue<string>())
-                              ?? ParseDate(summary["updated_at"]?.GetValue<string>())
-                              ?? File.GetLastWriteTime(file);
-                var branch = summary["head_branch"]?.GetValue<string>();
-                if (!byCwd.TryGetValue(cwd, out var list)) byCwd[cwd] = list = new();
-                list.Add(new SessionEntry(id, title, cwd, updated, branch, "grok"));
-            }
-            catch { /* one partial/corrupt summary must not hide other Grok sessions */ }
         }
     }
 
@@ -301,7 +260,8 @@ public static class SessionCatalog
         // \r breaks a TextBlock line just like \n does, so flatten both or the session row renders double height.
         var finalTitle = (histTitle ?? title ?? sessionId[..8]).Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
         if (finalTitle.Length > 80) finalTitle = finalTitle[..80] + "…";
-        return new SessionEntry(sessionId, finalTitle, cwd, File.GetLastWriteTime(file), branch, "claude", accountId);
+        return new SessionEntry(sessionId, finalTitle, cwd, File.GetLastWriteTime(file), branch, "claude", accountId,
+            ReadLastAssistantTime(file));
     }
 
     /// <summary>Best-effort transcript replay for resumed sessions (main thread only).</summary>

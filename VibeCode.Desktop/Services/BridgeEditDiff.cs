@@ -37,12 +37,6 @@ public sealed record BridgeEditObservation(string Tool, JsonObject Input, JsonOb
 public sealed record BridgeEditChange(string FullPath, string Change, IReadOnlyList<BridgeEditRange> Ranges,
     int Added, int Removed, bool Exact);
 
-/// <summary>
-/// Turns provider edit payloads into line ranges. Exact hunks are used whenever the provider supplies them (Claude's
-/// structuredPatch, numbered unified-diff headers); otherwise the new text is located in the file as it is right after
-/// the edit. Every provider funnels its edits into the same tool names (Edit, MultiEdit, Write, NotebookEdit,
-/// CodexEdit), so this covers Claude, Codex, Kimi, Grok and GLM alike.
-/// </summary>
 public static class BridgeEditDiff
 {
     public const int MaxRanges = 40;
@@ -82,16 +76,16 @@ public static class BridgeEditDiff
         switch (edit.Tool)
         {
             case "CodexEdit":
-            {
-                var kind = Text(input["kind"]);
-                var diff = Text(input["diff"]) ?? "";
-                var change = kind switch { "add" => "create", "delete" => "delete", _ => "edit" };
-                // app-server sends full source text for add/delete and a unified diff for update.
-                if (Text(input["diff_format"]) == "content" || (kind is "add" or "delete" && !LooksLikeDiff(diff)))
-                    return kind == "delete" ? Deleted(full, CountLines(diff)) : Whole(full, "create", diff);
-                lines.UnifiedDiff(diff, Source);
-                return change == "delete" ? Deleted(full, lines.Removed) : lines.Result(full, change);
-            }
+                {
+                    var kind = Text(input["kind"]);
+                    var diff = Text(input["diff"]) ?? "";
+                    var change = kind switch { "add" => "create", "delete" => "delete", _ => "edit" };
+                    // app-server sends full source text for add/delete and a unified diff for update.
+                    if (Text(input["diff_format"]) == "content" || (kind is "add" or "delete" && !LooksLikeDiff(diff)))
+                        return kind == "delete" ? Deleted(full, CountLines(diff)) : Whole(full, "create", diff);
+                    lines.UnifiedDiff(diff, Source);
+                    return change == "delete" ? Deleted(full, lines.Removed) : lines.Result(full, change);
+                }
             case "Write":
                 return Whole(full, "write", Text(input["content"]) ?? "");
             case "Edit":
@@ -105,16 +99,16 @@ public static class BridgeEditDiff
                 // Notebook cells have no stable file line numbers; record the file without inventing any.
                 return new BridgeEditChange(full, "edit", [], 0, 0, Exact: false);
             case "Shell":
-            {
-                var current = readFile(full);
-                if (current is null && File.Exists(full)) return null; // unreadable or oversized now: nothing reliable to say
-                if (!edit.BeforeKnown) return current is null ? null : new BridgeEditChange(full, "edit", [], 0, 0, Exact: false);
-                if (edit.Before is null)
-                    return current is null ? null : Whole(full, "create", current) with { Exact = !edit.Shared };
-                if (current is null) return Deleted(full, CountLines(edit.Before)) with { Exact = !edit.Shared };
-                lines.Files(edit.Before, current);
-                return lines.Result(full, "edit") is { } changed ? changed with { Exact = changed.Exact && !edit.Shared } : null;
-            }
+                {
+                    var current = readFile(full);
+                    if (current is null && File.Exists(full)) return null; // unreadable or oversized now: nothing reliable to say
+                    if (!edit.BeforeKnown) return current is null ? null : new BridgeEditChange(full, "edit", [], 0, 0, Exact: false);
+                    if (edit.Before is null)
+                        return current is null ? null : Whole(full, "create", current) with { Exact = !edit.Shared };
+                    if (current is null) return Deleted(full, CountLines(edit.Before)) with { Exact = !edit.Shared };
+                    lines.Files(edit.Before, current);
+                    return lines.Result(full, "edit") is { } changed ? changed with { Exact = changed.Exact && !edit.Shared } : null;
+                }
             default:
                 return null;
         }

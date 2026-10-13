@@ -29,11 +29,19 @@ internal static partial class Program
             new(manager.Provider, manager.Model, manager.Effort, "normal"),
             new(worker.Provider, worker.Model, worker.Effort, "low"));
         PumpUntil(() => Session(manager).Sent.Count == 1);
-        Tool(manager, "bridge_dispatch_task", new() { ["recipient"] = worker.BridgeAgentId,
-            ["task_name"] = "Repair first area", ["message"] = "Repair the first assigned area." });
+        Tool(manager, "bridge_dispatch_task", new()
+        {
+            ["recipient"] = worker.BridgeAgentId,
+            ["task_name"] = "Repair first area",
+            ["message"] = "Repair the first assigned area."
+        });
         PumpUntil(() => Session(worker).Sent.Count == 1);
-        Tool(manager, "bridge_dispatch_task", new() { ["recipient"] = worker.BridgeAgentId,
-            ["task_name"] = "Repair next area", ["message"] = "Repair the next assigned area." });
+        Tool(manager, "bridge_dispatch_task", new()
+        {
+            ["recipient"] = worker.BridgeAgentId,
+            ["task_name"] = "Repair next area",
+            ["message"] = "Repair the next assigned area."
+        });
         Check("a busy worker retains its next durable assignment before review settings change",
             Tool(manager, "bridge_list_tasks")["tasks"]!.AsArray().Any(t => t!["status"]!.ToString() == "queued"));
         vm.SetBridgeReviewLevel(worker, "none");

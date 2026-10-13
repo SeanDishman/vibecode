@@ -60,17 +60,19 @@ public sealed partial class ChatViewModel
             : GoalPolicy.EndsWithMarker(reply, waiting) ? waiting : null;
         if (marker is null) return;
 
-        // A model may remember the check protocol when answering a later user message. Hide our status line
-        // there too, but only an app-generated check can settle the goal. Raw text stays intact for reconciliation.
+        // Every active work turn carries this goal's protocol. Honor its terminal signal immediately,
+        // including after a user answer, instead of sending another request for already completed work.
+        // Raw text stays intact for transcript reconciliation.
         foreach (var item in Items.OfType<TextItem>().Reverse())
         {
             if (!GoalPolicy.EndsWithMarker(item.Text, marker)) continue;
             item.HideGoalStatus(marker);
             break;
         }
-        if (!turn.IsCheck) return;
         Goal = turn.Goal with { Completed = marker == complete, Paused = marker == waiting };
         CancelGoalCheck();
+        if (Goal.Completed)
+            Items.Add(new BannerItem { Level = "info", Text = "Goal completed: " + Goal.Text });
     }
 
     private void PauseGoal()

@@ -33,7 +33,7 @@ internal static partial class Program
             PumpUntil(() => run.IsCompleted);
             run.GetAwaiter().GetResult();
             VerifyConfirmationAndComposers();
-            Console.WriteLine($"PASS: {_checks} rewind checks across Claude, Codex, Kimi, Grok and GLM; normal chats and Bridge panes. No live model calls.");
+            Console.WriteLine($"PASS: {_checks} rewind checks across Claude, Codex, Kimi and GLM; normal chats and Bridge panes. No live model calls.");
             return 0;
         }
         catch (Exception error)
@@ -56,7 +56,7 @@ internal static partial class Program
 
     private static async Task Run()
     {
-        foreach (var provider in new[] { "claude", "codex", "kimi", "grok", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
             foreach (var bridge in new[] { false, true })
                 await VerifyStopAndCascade(provider, bridge);
         await VerifyFileConflict();

@@ -10,8 +10,11 @@ internal static partial class Program
     {
         var start = new ProcessStartInfo(registration.Command)
         {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         foreach (var arg in registration.Arguments) start.ArgumentList.Add(arg);
         foreach (var pair in registration.Environment) start.Environment[pair.Key] = pair.Value;
@@ -28,7 +31,22 @@ internal static partial class Program
                 await process.StandardInput.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"bridge_list_agents\",\"arguments\":{}}}");
                 await process.StandardInput.FlushAsync();
                 var reply = await process.StandardOutput.ReadLineAsync(timeout.Token);
-                var valid = init?.Contains("vibecode-bridge") == true && reply?.Contains(agentId) == true;
+                await process.StandardInput.WriteLineAsync(new JsonObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = 3,
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
+                    {
+                        ["name"] = "bridge_read_chat",
+                        ["arguments"] = new JsonObject { ["agent"] = agentId },
+                    },
+                }.ToJsonString());
+                await process.StandardInput.FlushAsync();
+                var transcript = await process.StandardOutput.ReadLineAsync(timeout.Token);
+                var read = transcript is null ? null : JsonNode.Parse(transcript)?["result"]?["structuredContent"];
+                var valid = init?.Contains("vibecode-bridge") == true && reply?.Contains(agentId) == true
+                    && read?["agent_id"]?.ToString() == agentId && read?["has_more"]?.GetValue<bool>() == false;
                 if (!valid) Console.WriteLine("MCP fixture response: " + init + " / " + reply);
                 return valid;
             }
@@ -39,7 +57,7 @@ internal static partial class Program
             }
         });
         PumpUntil(() => operation.IsCompleted);
-        Check("bundled executable serves MCP end to end", operation.GetAwaiter().GetResult());
+        Check("bundled executable serves roster and transcript MCP tools end to end", operation.GetAwaiter().GetResult());
     }
 
     private static void VerifyFreshTeamStartup()
@@ -87,10 +105,12 @@ internal static partial class Program
             var request = JsonNode.Parse(line)!;
             if (request["id"] is not { } id) continue;
             var method = request["method"]!.ToString();
+            if (Environment.GetEnvironmentVariable("VIBECODE_PROTOCOL_FIXTURE_LOG") is { Length: > 0 } fixtureLog)
+                System.IO.File.AppendAllText(fixtureLog, line + "\n");
             if (method == "thread/resume") thread = request["params"]?["threadId"]?.ToString() ?? thread;
             var result = method switch
             {
-                "model/list" => new JsonObject { ["data"] = new JsonArray() },
+                "model/list" => new JsonObject { },
                 "thread/start" => new JsonObject { ["thread"] = new JsonObject { ["id"] = thread } },
                 "thread/resume" => new JsonObject { ["thread"] = new JsonObject { ["id"] = request["params"]?["threadId"]?.ToString() ?? thread } },
                 "turn/start" => new JsonObject { ["turn"] = new JsonObject { ["id"] = "fixture-turn" } },
@@ -101,9 +121,12 @@ internal static partial class Program
             Notify("turn/started", new() { ["threadId"] = thread, ["turn"] = new JsonObject { ["id"] = "fixture-turn" } });
             Notify("item/completed", new()
             {
-                ["threadId"] = thread, ["turnId"] = "fixture-turn", ["item"] = new JsonObject
+                ["threadId"] = thread,
+                ["turnId"] = "fixture-turn",
+                ["item"] = new JsonObject
                 {
-                    ["type"] = "agentMessage", ["id"] = "fixture-reply",
+                    ["type"] = "agentMessage",
+                    ["id"] = "fixture-reply",
                     ["text"] = line.Contains("invalid team size fixture")
                         ? "{\"worker_count\":99,\"reason\":\"Invalid fixture response.\"}"
                         : "{\"worker_count\":2,\"reason\":\"One implementation lane and one verification lane.\"}",
@@ -112,7 +135,8 @@ internal static partial class Program
             for (var repeat = 0; repeat < 2; repeat++)
                 Notify("thread/tokenUsage/updated", new()
                 {
-                    ["threadId"] = thread, ["tokenUsage"] = new JsonObject
+                    ["threadId"] = thread,
+                    ["tokenUsage"] = new JsonObject
                     {
                         ["total"] = new JsonObject { ["inputTokens"] = 100, ["cachedInputTokens"] = 20, ["outputTokens"] = 5 },
                         ["last"] = new JsonObject { ["inputTokens"] = 100, ["cachedInputTokens"] = 20, ["outputTokens"] = 5 },

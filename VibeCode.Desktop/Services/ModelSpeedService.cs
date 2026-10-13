@@ -246,8 +246,10 @@ public sealed class ModelSpeedService
         ["claude"] = "anthropic/",
         ["codex"] = "openai/",
         ["kimi"] = "moonshotai/",
-        ["grok"] = "x-ai/",
     };
+
+    /// <summary>In-app presets wrap a real backend model; the wrapper prompt doesn't change how fast it runs.</summary>
+    private static readonly string[] PresetSuffixes = [];
 
     // Claude Code writes versions with dashes (claude-opus-4-8) where OpenRouter writes dots (claude-opus-4.8).
     private static readonly Regex VersionDots = new(@"(?<=\d)-(?=\d)", RegexOptions.Compiled);
@@ -277,6 +279,8 @@ public sealed class ModelSpeedService
         if (bracket >= 0) id = id[..bracket];                   // "claude-opus-5[1m]" is the same model, longer context
         if (id.StartsWith("vibecode:", StringComparison.Ordinal)) id = id["vibecode:".Length..];
         if (id.StartsWith("kimi-code/", StringComparison.Ordinal)) id = id["kimi-code/".Length..];
+        foreach (var suffix in PresetSuffixes)
+            if (id.EndsWith(suffix, StringComparison.Ordinal)) { id = id[..^suffix.Length]; break; }
         id = DateSuffix.Replace(id, "");                        // strip the snapshot date before dashes become dots
         return VersionDots.Replace(id, ".").Trim();
     }

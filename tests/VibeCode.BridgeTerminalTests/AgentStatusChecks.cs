@@ -46,7 +46,9 @@ internal static partial class Program
         team[2].Status = "running";
         Call(team[2], "ApplyResult", new JsonObject
         {
-            ["type"] = "result", ["subtype"] = "success", ["is_error"] = true,
+            ["type"] = "result",
+            ["subtype"] = "success",
+            ["is_error"] = true,
             ["result"] = "You've hit your session limit · resets 5:40pm (America/Chicago)",
         });
         var paused = Tool(team[0], "bridge_agent_status", new() { ["agent"] = "3" });

@@ -1,42 +1,31 @@
-<Window x:Class="VibeCode.UI.UsageDashboardWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:ui="clr-namespace:VibeCode.UI"
-        Title="VibeCode telemetry wall" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
-        Height="900" Width="1600" WindowStartupLocation="Manual" WindowStyle="None" ResizeMode="NoResize"
-        Background="{DynamicResource Bg0}" TextOptions.TextFormattingMode="Ideal"
-        UseLayoutRounding="True" SnapsToDevicePixels="True"
-        FontFamily="{DynamicResource Ui}" FontSize="12" ShowInTaskbar="False"
-        Loaded="OnLoaded" Closed="OnClosed" KeyDown="OnKeyDown">
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="clr-namespace:VibeCode.UI" x:Class="VibeCode.UI.UsageDashboardWindow" Title="VibeCode telemetry wall" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png" Height="900" Width="1600" WindowStartupLocation="Manual" WindowStyle="None" ResizeMode="NoResize" Background="{DynamicResource Bg0}" TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True" SnapsToDevicePixels="True" FontFamily="{DynamicResource Ui}" FontSize="12" ShowInTaskbar="False" Loaded="OnLoaded" Closed="OnClosed" KeyDown="OnKeyDown">
 
     <Window.Resources>
         <!-- The speed board hides its "tok/s" unit until a reading actually lands, so a tile with no data reads
              as "— / no data" rather than as a model running at zero. -->
-        <BooleanToVisibilityConverter x:Key="BoolVis" />
+        <BooleanToVisibilityConverter x:Key="BoolVis"/>
         <!-- Local copies of the HUD's chip and caption idiom. Local rather than shared for the same reason the
              HUD keeps its own: the originals live in SettingsWindow's resources, and hoisting them into
              Dark.xaml would leave the CLI theme without them. DynamicResource so this follows either theme. -->
         <Style x:Key="WallChip" TargetType="RadioButton">
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Padding" Value="12,4"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="chip" CornerRadius="{DynamicResource Rad8}" Background="Transparent"
-                                Padding="{TemplateBinding Padding}">
-                            <TextBlock x:Name="label" Text="{TemplateBinding Content}" FontSize="11.5"
-                                       Foreground="{DynamicResource Muted}" />
+                        <Border x:Name="chip" CornerRadius="{DynamicResource Rad8}" Background="Transparent" Padding="{TemplateBinding Padding}">
+                            <TextBlock x:Name="label" Text="{TemplateBinding Content}" FontSize="11.5" Foreground="{DynamicResource Muted}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="chip" Property="Background" Value="{DynamicResource Bg3}" />
-                                <Setter TargetName="label" Property="Foreground" Value="{DynamicResource Text}" />
+                                <Setter TargetName="chip" Property="Background" Value="{DynamicResource Bg3}"/>
+                                <Setter TargetName="label" Property="Foreground" Value="{DynamicResource Text}"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="chip" Property="Background" Value="{DynamicResource AccentSoft}" />
-                                <Setter TargetName="label" Property="Foreground" Value="{DynamicResource Accent}" />
-                                <Setter TargetName="label" Property="FontWeight" Value="SemiBold" />
+                                <Setter TargetName="chip" Property="Background" Value="{DynamicResource AccentSoft}"/>
+                                <Setter TargetName="label" Property="Foreground" Value="{DynamicResource Accent}"/>
+                                <Setter TargetName="label" Property="FontWeight" Value="SemiBold"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -45,64 +34,47 @@
         </Style>
 
         <Style x:Key="WallCaption" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="10.5" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="{DynamicResource Faint}" />
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource Faint}"/>
         </Style>
     </Window.Resources>
 
     <Grid Margin="14">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />   <!-- header -->
-            <RowDefinition Height="Auto" />   <!-- ticker row -->
-            <RowDefinition Height="1.2*" />   <!-- the ranged throughput -->
-            <RowDefinition Height="*" />      <!-- the two live panels -->
-            <RowDefinition Height="Auto" />   <!-- share + models + system -->
-            <RowDefinition Height="Auto" />   <!-- model speed board (OpenRouter) -->
+            <RowDefinition Height="Auto"/>   <!-- header -->
+            <RowDefinition Height="Auto"/>   <!-- ticker row -->
+            <RowDefinition Height="1.2*"/>   <!-- the ranged throughput -->
+            <RowDefinition Height="*"/>      <!-- the two live panels -->
+            <RowDefinition Height="Auto"/>   <!-- share + models + system -->
+            <RowDefinition Height="Auto"/>   <!-- model speed board (OpenRouter) -->
         </Grid.RowDefinitions>
 
         <!-- Header -->
         <DockPanel Grid.Row="0" LastChildFill="False" Margin="4,0,4,12">
-            <Ellipse x:Name="LiveDot" Width="9" Height="9" Fill="{DynamicResource Green}"
-                     VerticalAlignment="Center" DockPanel.Dock="Left" />
-            <TextBlock Text="VIBECODE" FontFamily="{DynamicResource Mono}" FontSize="17" FontWeight="Bold"
-                       Foreground="{DynamicResource Text}" Margin="10,0,0,0" VerticalAlignment="Center"
-                       DockPanel.Dock="Left" />
-            <TextBlock Text="TELEMETRY WALL" FontFamily="{DynamicResource Mono}" FontSize="17"
-                       Foreground="{DynamicResource Accent}" Margin="8,0,0,0" VerticalAlignment="Center"
-                       DockPanel.Dock="Left" />
-            <TextBlock x:Name="DashRange" Text="LIVE" FontFamily="{DynamicResource Mono}" FontSize="11"
-                       Foreground="{DynamicResource Faint}" Margin="16,0,0,0" VerticalAlignment="Center"
-                       DockPanel.Dock="Left" />
+            <Ellipse x:Name="LiveDot" Width="9" Height="9" Fill="{DynamicResource Green}" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+            <TextBlock Text="VIBECODE" FontFamily="{DynamicResource Mono}" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="10,0,0,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+            <TextBlock Text="TELEMETRY WALL" FontFamily="{DynamicResource Mono}" FontSize="17" Foreground="{DynamicResource Accent}" Margin="8,0,0,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+            <TextBlock x:Name="DashRange" Text="LIVE" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Faint}" Margin="16,0,0,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
 
             <!-- The range lives in the WINDOW header, not on a card, because it scopes almost every panel below it:
                  tickers, the throughput graph, the donut, the model list and the system stats all redraw against
                  the one span. A chip on a single card would imply the rest were something else.
                  The two LIVE panels are the deliberate exception: they are a readout of what is streaming right
                  now, so they hold their 5 s / 10 s buckets whichever span is picked, and say so in their captions. -->
-            <Border DockPanel.Dock="Left" Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}"
-                    Padding="3" Margin="20,0,0,0" VerticalAlignment="Center">
+            <Border DockPanel.Dock="Left" Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}" Padding="3" Margin="20,0,0,0" VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal">
-                    <RadioButton x:Name="Range1H" Style="{StaticResource WallChip}" Content="1 H"
-                                 GroupName="WallRange" IsChecked="True" Checked="OnRangeChanged" />
-                    <RadioButton x:Name="Range6H" Style="{StaticResource WallChip}" Content="6 H"
-                                 GroupName="WallRange" Checked="OnRangeChanged" />
-                    <RadioButton x:Name="Range12H" Style="{StaticResource WallChip}" Content="12 H"
-                                 GroupName="WallRange" Checked="OnRangeChanged" />
-                    <RadioButton x:Name="Range24H" Style="{StaticResource WallChip}" Content="24 H"
-                                 GroupName="WallRange" Checked="OnRangeChanged" />
-                    <RadioButton x:Name="Range7D" Style="{StaticResource WallChip}" Content="7 D"
-                                 GroupName="WallRange" Checked="OnRangeChanged" />
-                    <RadioButton x:Name="Range30D" Style="{StaticResource WallChip}" Content="30 D"
-                                 GroupName="WallRange" Checked="OnRangeChanged" />
+                    <RadioButton x:Name="Range1H" Style="{StaticResource WallChip}" Content="1 H" GroupName="WallRange" IsChecked="True" Checked="OnRangeChanged"/>
+                    <RadioButton x:Name="Range6H" Style="{StaticResource WallChip}" Content="6 H" GroupName="WallRange" Checked="OnRangeChanged"/>
+                    <RadioButton x:Name="Range12H" Style="{StaticResource WallChip}" Content="12 H" GroupName="WallRange" Checked="OnRangeChanged"/>
+                    <RadioButton x:Name="Range24H" Style="{StaticResource WallChip}" Content="24 H" GroupName="WallRange" Checked="OnRangeChanged"/>
+                    <RadioButton x:Name="Range7D" Style="{StaticResource WallChip}" Content="7 D" GroupName="WallRange" Checked="OnRangeChanged"/>
+                    <RadioButton x:Name="Range30D" Style="{StaticResource WallChip}" Content="30 D" GroupName="WallRange" Checked="OnRangeChanged"/>
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="ESC TO CLOSE" FontFamily="{DynamicResource Mono}" FontSize="10"
-                       Foreground="{DynamicResource Faint}" VerticalAlignment="Center"
-                       Margin="14,0,0,0" DockPanel.Dock="Right" />
-            <TextBlock x:Name="DashClock" Text="" FontFamily="{DynamicResource Mono}" FontSize="15"
-                       Foreground="{DynamicResource Text}" VerticalAlignment="Center" DockPanel.Dock="Right" />
+            <TextBlock Text="ESC TO CLOSE" FontFamily="{DynamicResource Mono}" FontSize="10" Foreground="{DynamicResource Faint}" VerticalAlignment="Center" Margin="14,0,0,0" DockPanel.Dock="Right"/>
+            <TextBlock x:Name="DashClock" Text="" FontFamily="{DynamicResource Mono}" FontSize="15" Foreground="{DynamicResource Text}" VerticalAlignment="Center" DockPanel.Dock="Right"/>
         </DockPanel>
 
         <!-- Tickers. Five equal cards: the number over the selected range, its shape across that range, and how
@@ -112,76 +84,56 @@
             <Border Style="{DynamicResource Card}" Padding="16,12" Margin="0,0,5,0">
                 <StackPanel>
                     <DockPanel LastChildFill="False">
-                        <TextBlock Text="SPEND" Style="{StaticResource WallCaption}" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="TickSpendDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5"
-                                   DockPanel.Dock="Right" />
+                        <TextBlock Text="SPEND" Style="{StaticResource WallCaption}" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="TickSpendDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5" DockPanel.Dock="Right"/>
                     </DockPanel>
-                    <TextBlock x:Name="TickSpend" Text="$0" FontFamily="{DynamicResource Mono}" FontSize="30"
-                               FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0" />
-                    <ui:HudSparkline x:Name="SparkSpend" Height="26" Margin="0,6,0,0"
-                                     Tint="{DynamicResource Accent}" />
-                    <TextBlock x:Name="TickSpendSub" FontSize="10" Foreground="{DynamicResource Faint}"
-                               Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="TickSpend" Text="$0" FontFamily="{DynamicResource Mono}" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0"/>
+                    <ui:HudSparkline x:Name="SparkSpend" Height="26" Margin="0,6,0,0" Tint="{DynamicResource Accent}"/>
+                    <TextBlock x:Name="TickSpendSub" FontSize="10" Foreground="{DynamicResource Faint}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
             </Border>
             <Border Style="{DynamicResource Card}" Padding="16,12" Margin="5,0">
                 <StackPanel>
                     <DockPanel LastChildFill="False">
-                        <TextBlock Text="TOKENS" Style="{StaticResource WallCaption}" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="TickTokensDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5"
-                                   DockPanel.Dock="Right" />
+                        <TextBlock Text="TOKENS" Style="{StaticResource WallCaption}" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="TickTokensDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5" DockPanel.Dock="Right"/>
                     </DockPanel>
-                    <TextBlock x:Name="TickTokens" Text="0" FontFamily="{DynamicResource Mono}" FontSize="30"
-                               FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0" />
-                    <ui:HudSparkline x:Name="SparkTokens" Height="26" Margin="0,6,0,0"
-                                     Tint="{DynamicResource Accent}" />
-                    <TextBlock x:Name="TickTokensSub" FontSize="10" Foreground="{DynamicResource Faint}"
-                               Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="TickTokens" Text="0" FontFamily="{DynamicResource Mono}" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0"/>
+                    <ui:HudSparkline x:Name="SparkTokens" Height="26" Margin="0,6,0,0" Tint="{DynamicResource Accent}"/>
+                    <TextBlock x:Name="TickTokensSub" FontSize="10" Foreground="{DynamicResource Faint}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
             </Border>
             <Border Style="{DynamicResource Card}" Padding="16,12" Margin="5,0">
                 <StackPanel>
                     <DockPanel LastChildFill="False">
-                        <TextBlock Text="ELECTRICITY" Style="{StaticResource WallCaption}" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="TickEnergyDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5"
-                                   DockPanel.Dock="Right" />
+                        <TextBlock Text="ELECTRICITY" Style="{StaticResource WallCaption}" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="TickEnergyDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5" DockPanel.Dock="Right"/>
                     </DockPanel>
-                    <TextBlock x:Name="TickEnergy" Text="0 Wh" FontFamily="{DynamicResource Mono}" FontSize="30"
-                               FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0" />
-                    <ui:HudSparkline x:Name="SparkEnergy" Height="26" Margin="0,6,0,0"
-                                     Tint="{DynamicResource Amber}" />
-                    <TextBlock x:Name="TickEnergySub" FontSize="10" Foreground="{DynamicResource Faint}"
-                               Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="TickEnergy" Text="0 Wh" FontFamily="{DynamicResource Mono}" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0"/>
+                    <ui:HudSparkline x:Name="SparkEnergy" Height="26" Margin="0,6,0,0" Tint="{DynamicResource Amber}"/>
+                    <TextBlock x:Name="TickEnergySub" FontSize="10" Foreground="{DynamicResource Faint}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
             </Border>
             <Border Style="{DynamicResource Card}" Padding="16,12" Margin="5,0">
                 <StackPanel>
                     <DockPanel LastChildFill="False">
-                        <TextBlock Text="WATER" Style="{StaticResource WallCaption}" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="TickWaterDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5"
-                                   DockPanel.Dock="Right" />
+                        <TextBlock Text="WATER" Style="{StaticResource WallCaption}" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="TickWaterDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5" DockPanel.Dock="Right"/>
                     </DockPanel>
-                    <TextBlock x:Name="TickWater" Text="0 mL" FontFamily="{DynamicResource Mono}" FontSize="30"
-                               FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0" />
-                    <ui:HudSparkline x:Name="SparkWater" Height="26" Margin="0,6,0,0"
-                                     Tint="{DynamicResource Green}" />
-                    <TextBlock x:Name="TickWaterSub" FontSize="10" Foreground="{DynamicResource Faint}"
-                               Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="TickWater" Text="0 mL" FontFamily="{DynamicResource Mono}" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0"/>
+                    <ui:HudSparkline x:Name="SparkWater" Height="26" Margin="0,6,0,0" Tint="{DynamicResource Green}"/>
+                    <TextBlock x:Name="TickWaterSub" FontSize="10" Foreground="{DynamicResource Faint}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
             </Border>
             <Border Style="{DynamicResource Card}" Padding="16,12" Margin="5,0,0,0">
                 <StackPanel>
                     <DockPanel LastChildFill="False">
-                        <TextBlock Text="TURNS" Style="{StaticResource WallCaption}" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="TickTurnsDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5"
-                                   DockPanel.Dock="Right" />
+                        <TextBlock Text="TURNS" Style="{StaticResource WallCaption}" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="TickTurnsDelta" FontFamily="{DynamicResource Mono}" FontSize="10.5" DockPanel.Dock="Right"/>
                     </DockPanel>
-                    <TextBlock x:Name="TickTurns" Text="0" FontFamily="{DynamicResource Mono}" FontSize="30"
-                               FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0" />
-                    <ui:HudSparkline x:Name="SparkTurns" Height="26" Margin="0,6,0,0"
-                                     Tint="{DynamicResource Accent}" />
-                    <TextBlock x:Name="TickTurnsSub" FontSize="10" Foreground="{DynamicResource Faint}"
-                               Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="TickTurns" Text="0" FontFamily="{DynamicResource Mono}" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource Text}" Margin="0,4,0,0"/>
+                    <ui:HudSparkline x:Name="SparkTurns" Height="26" Margin="0,6,0,0" Tint="{DynamicResource Accent}"/>
+                    <TextBlock x:Name="TickTurnsSub" FontSize="10" Foreground="{DynamicResource Faint}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
             </Border>
         </UniformGrid>
@@ -193,24 +145,19 @@
         <Border Grid.Row="2" Style="{DynamicResource Card}" Padding="16,12" Margin="0,0,0,12">
             <DockPanel>
                 <DockPanel DockPanel.Dock="Top" LastChildFill="False" Margin="0,0,0,8">
-                    <TextBlock x:Name="GraphFineCaption" Style="{StaticResource WallCaption}"
-                               VerticalAlignment="Center" DockPanel.Dock="Left" />
-                    <Border DockPanel.Dock="Right" Background="{DynamicResource Bg1}"
-                            CornerRadius="{DynamicResource Rad8}" Padding="3">
+                    <TextBlock x:Name="GraphFineCaption" Style="{StaticResource WallCaption}" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                    <Border DockPanel.Dock="Right" Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}" Padding="3">
                         <StackPanel Orientation="Horizontal">
-                            <RadioButton x:Name="WallByTokens" Style="{StaticResource WallChip}" Content="Tokens"
-                                         GroupName="WallMetric" IsChecked="True" Checked="OnMetricChanged" />
-                            <RadioButton x:Name="WallByCost" Style="{StaticResource WallChip}" Content="Cost"
-                                         GroupName="WallMetric" Checked="OnMetricChanged" />
-                            <RadioButton x:Name="WallByEnergy" Style="{StaticResource WallChip}" Content="Electricity"
-                                         GroupName="WallMetric" Checked="OnMetricChanged" />
+                            <RadioButton x:Name="WallByTokens" Style="{StaticResource WallChip}" Content="Tokens" GroupName="WallMetric" IsChecked="True" Checked="OnMetricChanged"/>
+                            <RadioButton x:Name="WallByCost" Style="{StaticResource WallChip}" Content="Cost" GroupName="WallMetric" Checked="OnMetricChanged"/>
+                            <RadioButton x:Name="WallByEnergy" Style="{StaticResource WallChip}" Content="Electricity" GroupName="WallMetric" Checked="OnMetricChanged"/>
                         </StackPanel>
                     </Border>
                 </DockPanel>
                 <!-- Plot=Line on all three throughput panels: they are the wall's time series, and a time series
                      of mostly-idle buckets reads as a broken field of columns. Every other chart here (share,
                      by-model, the tile sparklines) stays as it is. -->
-                <ui:HourlyThroughput x:Name="GraphFine" Plot="Line" />
+                <ui:HourlyThroughput x:Name="GraphFine" Plot="Line"/>
             </DockPanel>
         </Border>
 
@@ -222,21 +169,19 @@
              committed them, which is what stops a four-minute turn landing as one spike. -->
         <Grid Grid.Row="3" Margin="0,0,0,12">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <Border Grid.Column="0" Style="{DynamicResource Card}" Padding="16,12" Margin="0,0,6,0">
                 <DockPanel>
-                    <TextBlock x:Name="GraphLiveFastCaption" DockPanel.Dock="Top"
-                               Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
-                    <ui:HourlyThroughput x:Name="GraphLiveFast" Plot="Line" />
+                    <TextBlock x:Name="GraphLiveFastCaption" DockPanel.Dock="Top" Style="{StaticResource WallCaption}" Margin="0,0,0,8"/>
+                    <ui:HourlyThroughput x:Name="GraphLiveFast" Plot="Line"/>
                 </DockPanel>
             </Border>
             <Border Grid.Column="1" Style="{DynamicResource Card}" Padding="16,12" Margin="6,0,0,0">
                 <DockPanel>
-                    <TextBlock x:Name="GraphLiveSlowCaption" DockPanel.Dock="Top"
-                               Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
-                    <ui:HourlyThroughput x:Name="GraphLiveSlow" Plot="Line" />
+                    <TextBlock x:Name="GraphLiveSlowCaption" DockPanel.Dock="Top" Style="{StaticResource WallCaption}" Margin="0,0,0,8"/>
+                    <ui:HourlyThroughput x:Name="GraphLiveSlow" Plot="Line"/>
                 </DockPanel>
             </Border>
         </Grid>
@@ -246,78 +191,61 @@
              actual figures, so nothing on this wall is readable only as an angle. -->
         <Grid Grid.Row="4">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="1.25*" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="1.25*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <Border Grid.Column="0" Style="{DynamicResource Card}" Padding="16,12" Margin="0,0,6,0">
                 <StackPanel>
-                    <TextBlock x:Name="WallShareCaption" Text="SHARE BY MODEL · LAST 1 H"
-                               Style="{StaticResource WallCaption}" Margin="0,0,0,4" />
+                    <TextBlock x:Name="WallShareCaption" Text="SHARE BY MODEL · LAST 1 H" Style="{StaticResource WallCaption}" Margin="0,0,0,4"/>
                     <!-- No Height. The ring derives its radius from the box it is arranged in, and pinning that
                          box shorter than the height the chart asks for does not shrink the ring - WPF arranges
                          at the unclipped size and clips the difference away, which is how this donut shipped
                          with its bottom sliced off. -->
-                    <ui:ModelShareDonut x:Name="WallDonut" SurfaceKey="Bg2" />
+                    <ui:ModelShareDonut x:Name="WallDonut" SurfaceKey="Bg2"/>
                 </StackPanel>
             </Border>
             <Border Grid.Column="1" Style="{DynamicResource Card}" Padding="16,12" Margin="6,0,6,0">
                 <StackPanel>
-                    <TextBlock x:Name="WallModelsCaption" Text="BY MODEL · LAST 1 H"
-                               Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
+                    <TextBlock x:Name="WallModelsCaption" Text="BY MODEL · LAST 1 H" Style="{StaticResource WallCaption}" Margin="0,0,0,8"/>
                     <ItemsControl x:Name="WallModels">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel Margin="0,3">
-                                    <Rectangle Width="9" Height="9" Fill="{Binding Swatch}" RadiusX="2" RadiusY="2"
-                                               VerticalAlignment="Center" DockPanel.Dock="Left" />
-                                    <TextBlock Text="{Binding Value}" FontFamily="{DynamicResource Mono}" FontSize="12"
-                                               Foreground="{DynamicResource Text}" DockPanel.Dock="Right" />
-                                    <TextBlock Text="{Binding Display}" FontSize="12" Margin="9,0,0,0"
-                                               Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis" />
+                                    <Rectangle Width="9" Height="9" Fill="{Binding Swatch}" RadiusX="2" RadiusY="2" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                                    <TextBlock Text="{Binding Value}" FontFamily="{DynamicResource Mono}" FontSize="12" Foreground="{DynamicResource Text}" DockPanel.Dock="Right"/>
+                                    <TextBlock Text="{Binding Display}" FontSize="12" Margin="9,0,0,0" Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis"/>
                                 </DockPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                    <TextBlock x:Name="WallModelsEmpty" Text="No model activity in this range."
-                               FontSize="11" Foreground="{DynamicResource Faint}" />
+                    <TextBlock x:Name="WallModelsEmpty" Text="No model activity in this range." FontSize="11" Foreground="{DynamicResource Faint}"/>
                 </StackPanel>
             </Border>
             <Border Grid.Column="2" Style="{DynamicResource Card}" Padding="16,12" Margin="6,0,0,0">
                 <StackPanel>
-                    <TextBlock Text="SYSTEM" Style="{StaticResource WallCaption}" Margin="0,0,0,8" />
+                    <TextBlock Text="SYSTEM" Style="{StaticResource WallCaption}" Margin="0,0,0,8"/>
                     <!-- The only row here that is about RIGHT NOW rather than the selected range, which is why
                          it sits first: everything under it is a window of history, this is the turn being
                          generated while you read it. "—" when nothing is streaming. -->
                     <DockPanel Margin="0,2">
-                        <TextBlock Text="IN FLIGHT" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="WallLive" Text="—" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Text}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="IN FLIGHT" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="WallLive" Text="—" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Text}" TextTrimming="CharacterEllipsis"/>
                     </DockPanel>
                     <DockPanel Margin="0,2">
-                        <TextBlock Text="CACHE HIT" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="WallCache" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Text}" Width="52" TextAlignment="Right"
-                                   DockPanel.Dock="Right" />
-                        <ui:HudMeter x:Name="WallCacheMeter" Height="10" Margin="0,0,10,0"
-                                     Tint="{DynamicResource Green}" />
+                        <TextBlock Text="CACHE HIT" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="WallCache" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Text}" Width="52" TextAlignment="Right" DockPanel.Dock="Right"/>
+                        <ui:HudMeter x:Name="WallCacheMeter" Height="10" Margin="0,0,10,0" Tint="{DynamicResource Green}"/>
                     </DockPanel>
                     <DockPanel Margin="0,2">
-                        <TextBlock Text="BURN RATE" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="WallBurn" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Text}" />
+                        <TextBlock Text="BURN RATE" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="WallBurn" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Text}"/>
                     </DockPanel>
                     <DockPanel Margin="0,2">
-                        <TextBlock Text="BUSIEST" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left" />
-                        <TextBlock x:Name="WallPeak" FontFamily="{DynamicResource Mono}" FontSize="11"
-                                   Foreground="{DynamicResource Text}" />
+                        <TextBlock Text="BUSIEST" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Muted}" Width="110" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="WallPeak" FontFamily="{DynamicResource Mono}" FontSize="11" Foreground="{DynamicResource Text}"/>
                     </DockPanel>
-                    <TextBlock x:Name="WallNote" FontSize="10.5" Foreground="{DynamicResource Faint}"
-                               TextWrapping="Wrap" Margin="0,10,0,0" />
+                    <TextBlock x:Name="WallNote" FontSize="10.5" Foreground="{DynamicResource Faint}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                 </StackPanel>
             </Border>
         </Grid>
@@ -329,47 +257,31 @@
         <Border Grid.Row="5" Style="{DynamicResource Card}" Padding="16,12" Margin="0,12,0,0">
             <StackPanel>
                 <DockPanel LastChildFill="False" Margin="0,0,0,10">
-                    <TextBlock Text="MODEL SPEED · OPENROUTER" Style="{StaticResource WallCaption}"
-                               DockPanel.Dock="Left" />
-                    <TextBlock x:Name="WallSpeedAge" FontFamily="{DynamicResource Mono}" FontSize="10"
-                               Foreground="{DynamicResource Faint}" VerticalAlignment="Center"
-                               Margin="0,0,0,0" DockPanel.Dock="Right" />
+                    <TextBlock Text="MODEL SPEED · OPENROUTER" Style="{StaticResource WallCaption}" DockPanel.Dock="Left"/>
+                    <TextBlock x:Name="WallSpeedAge" FontFamily="{DynamicResource Mono}" FontSize="10" Foreground="{DynamicResource Faint}" VerticalAlignment="Center" Margin="0,0,0,0" DockPanel.Dock="Right"/>
                 </DockPanel>
                 <ItemsControl x:Name="WallModelSpeeds">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <!-- One row, one column per model: the board is a comparison, and a wrapped second row
                                  would put two models at different sizes on a wall read from across the room. -->
-                            <UniformGrid Rows="1" />
+                            <UniformGrid Rows="1"/>
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}"
-                                    Padding="12,10" Margin="3,0">
+                            <Border Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}" Padding="12,10" Margin="3,0">
                                 <StackPanel>
                                     <DockPanel LastChildFill="True">
-                                        <Rectangle Width="9" Height="9" Fill="{Binding Swatch}" RadiusX="2" RadiusY="2"
-                                                   VerticalAlignment="Center" DockPanel.Dock="Left" />
-                                        <TextBlock Text="{Binding DisplayName}" FontSize="11.5" FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource Text}" Margin="7,0,0,0"
-                                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        <Rectangle Width="9" Height="9" Fill="{Binding Swatch}" RadiusX="2" RadiusY="2" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                                        <TextBlock Text="{Binding DisplayName}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="7,0,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
                                     </DockPanel>
-                                    <TextBlock Text="{Binding Vendor}" FontSize="9.5"
-                                               Foreground="{DynamicResource Faint}" Margin="16,1,0,0"
-                                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    <TextBlock Text="{Binding Vendor}" FontSize="9.5" Foreground="{DynamicResource Faint}" Margin="16,1,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
                                     <DockPanel Margin="0,8,0,0" LastChildFill="False">
-                                        <TextBlock Text="{Binding Throughput}" FontFamily="{DynamicResource Mono}"
-                                                   FontSize="26" FontWeight="Bold" DockPanel.Dock="Left"
-                                                   Foreground="{DynamicResource Text}" />
-                                        <TextBlock Text="tok/s" FontFamily="{DynamicResource Mono}" FontSize="10"
-                                                   Foreground="{DynamicResource Muted}" DockPanel.Dock="Left"
-                                                   VerticalAlignment="Bottom" Margin="4,0,0,4"
-                                                   Visibility="{Binding HasData, Converter={StaticResource BoolVis}}" />
+                                        <TextBlock Text="{Binding Throughput}" FontFamily="{DynamicResource Mono}" FontSize="26" FontWeight="Bold" DockPanel.Dock="Left" Foreground="{DynamicResource Text}"/>
+                                        <TextBlock Text="tok/s" FontFamily="{DynamicResource Mono}" FontSize="10" Foreground="{DynamicResource Muted}" DockPanel.Dock="Left" VerticalAlignment="Bottom" Margin="4,0,0,4" Visibility="{Binding HasData, Converter={StaticResource BoolVis}}"/>
                                     </DockPanel>
-                                    <TextBlock Text="{Binding Latency}" FontFamily="{DynamicResource Mono}"
-                                               FontSize="10.5" Foreground="{DynamicResource Muted}"
-                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    <TextBlock Text="{Binding Latency}" FontFamily="{DynamicResource Mono}" FontSize="10.5" Foreground="{DynamicResource Muted}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

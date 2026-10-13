@@ -5,7 +5,8 @@ namespace VibeCode.UI;
 public sealed partial class MainViewModel
 {
     private static JarvisChatSummary JarvisSummary(ChatViewModel chat) =>
-        new(chat.BridgeAgentId, chat.Title, chat.Cwd, chat.Status, chat.IsLocked);
+        new(chat.BridgeAgentId, chat.Title, chat.Cwd, chat.Status, chat.IsLocked)
+        { Provider = chat.Provider, Model = chat.Model, Effort = chat.Effort };
 
     Task<JarvisActionReceipt> IJarvisChatActionHost.ExecuteChatActionAsync(JarvisAction action,
         CancellationToken cancellationToken)
@@ -39,8 +40,8 @@ public sealed partial class MainViewModel
         {
             if (cancellationToken.IsCancellationRequested) { cancelled = true; break; }
             if (!Chats.Contains(chat)) continue;
-            // A bridge host closes its peers too. Preserve their locks as well as the sidebar row's lock.
-            if (chat.IsLocked || PeersOf(chat).Any(peer => peer.IsLocked)) { locked.Add(chat); continue; }
+            // Bridge closure preserves each conversation's history and lock; ordinary protected chats stay open.
+            if (!chat.CanCloseChat) { locked.Add(chat); continue; }
             try
             {
                 CloseChat(chat);
@@ -61,7 +62,7 @@ public sealed partial class MainViewModel
         var message = closed.Count == 0 ? "No chats were closed."
             : $"Closed {closed.Count} chat{(closed.Count == 1 ? "" : "s")}: {Names(closed)}. Chat history is preserved.";
         if (locked.Count > 0)
-            message += $" Left {locked.Count} locked chat{(locked.Count == 1 ? "" : "s")} or bridges with locked chats open: {Names(locked)}.";
+            message += $" Left {locked.Count} locked chat{(locked.Count == 1 ? "" : "s")} open: {Names(locked)}.";
         if (failed.Count > 0) message += " Could not close: " + string.Join(", ", failed) + ".";
         if (cancelled) message += " Stopped before closing the remaining chats.";
         return Receipt(message);

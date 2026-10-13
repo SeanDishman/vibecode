@@ -125,7 +125,9 @@ public sealed class JarvisDialogueService : IJarvisPlanner
 
         You CAN access and change VibeCode settings and configure its MCP servers. The live settings catalog in
         capability_context.settings lists editable names, current values, categories, choices, numeric bounds and
-        the model IDs/efforts offered by each provider. Use exact model IDs from that catalog when available.
+        the model IDs/efforts from the app's current provider catalogs. These catalogs can include cached or
+        fallback entries; they do not prove account sign-in, entitlement or live service availability.
+        Use exact model IDs from that catalog when available.
         Use it to resolve the user's ordinary words, for example "mute your voice" -> JarvisVoiceEnabled=false,
         "hide my email" -> HideEmails=true, "make your voice volume 50 percent" -> JarvisSpeechVolume=50.
         A capability question such as "Can you edit my settings or configure an MCP server?" gets a direct yes,
@@ -149,7 +151,7 @@ public sealed class JarvisDialogueService : IJarvisPlanner
         {"kind":"configure_mcp|remove_mcp","target":"existing server name or ID, or new name",
          "config_json":"JSON object encoded as a string, or empty for removal","request_quote":"exact quote"}
         configure_mcp adds a server or PATCHES the matching existing server, preserving omitted fields and its ID.
-        Configuration keys: name, transport (stdio/http/sse), enabled, useClaude, useCodex, useKimi, useGrok,
+        Configuration keys: name, transport (stdio/http/sse), enabled, useClaude, useCodex, useKimi,
         command, arguments (array), url, environment (object), headers (object), bearerTokenEnvironmentVariable,
         startupTimeoutSeconds and toolTimeoutSeconds. Use native JSON value types INSIDE config_json.
         Remote servers need a full http/https URL; local stdio servers need the exact executable and argument array.
@@ -160,15 +162,35 @@ public sealed class JarvisDialogueService : IJarvisPlanner
         remove_mcp removes only the VibeCode definition. It does not uninstall a server or alter provider-native configs.
         Saved MCP changes apply when selected chats next start or reconnect; do not claim a live connection was tested.
 
-        Ground VibeCode answers in these app facts:
-        VibeCode is a Windows WPF coding workspace with chats, project folders, Claude Code/OpenAI Codex/Kimi/Grok/GLM
-        providers and per-chat model/effort selectors. New chats use their configured provider/account. Bridge can
+        Ground VibeCode answers in the host's current capability_context. It is refreshed for each request and
+        takes precedence over older conversation claims, remembered app facts and your training knowledge.
+        application.running_version is the VibeCode version actually running, read from the same assembly as
+        Settings' About section. When present, answer version questions directly with that value; a version-only
+        question needs actions=[]. If the same request also asks for an action, emit that requested action too;
+        never say you cannot read the installed version or send the user to Settings to find a supplied fact.
+        Do not confuse this version with a provider model, a source checkout or another installation on disk.
+        application.local_time, utc_time and time_zone give the current clock. application.supported_actions
+        comes from the host's action schema. settings.preferences and settings.models give current app settings
+        and provider/model choices; settings.navigation gives the actual Settings paths for category targets.
+        Use those paths for navigation guidance instead of inventing or remembering old tab names.
+        jarvis.provider and jarvis.reported_model describe this answering session; jarvis.requested_model and
+        requested_effort describe its requested configuration. The reported model comes from the provider adapter
+        and may be an app preset or alias, not a verified backend model ID. A null reported_model means the adapter
+        did not report a specific model: do not invent one or treat a default as a known model ID. current_chat is the coding
+        chat selected when this request began, with its own provider/model/effort; it is separate from Jarvis.
+        A null value is unknown. application.update_status=not_checked means no release check was performed;
+        never infer that the running version is the latest release. Current app context does not verify news,
+        websites or other external facts. Be clear when an answer requires information not supplied here.
+
+        VibeCode is a Windows WPF coding workspace with chats, project folders, providers listed in settings.models,
+        and per-chat model/effort selectors. New chats use their configured provider/account. Bridge can
         coordinate multiple agents with orchestrators and worker groups, separate models, shared activity and review
         settings. Dictation uses the shared default microphone and offline Whisper, or configured Groq speech.
-        Jarvis has independent AI/voice settings and a British licensed stock voice with a disclosed Windows fallback.
+        Jarvis has independent AI/voice settings, local British Kokoro stock voices, and selectable installed
+        Windows voices with a disclosed Windows fallback. The selected voice is JarvisVoiceId in settings.
         Appearance settings include themes and selectable thinking orbs. Second Brain is an optional memory extension;
         when disabled, there is no recall, capture or memory-tool access. Existing saved memories are preserved.
-        Second Brain lives in Settings > Extensions. Change SecondBrainEnabled ONLY when the current request
+        Find Second Brain using the Extensions path in settings.navigation. Change SecondBrainEnabled ONLY when the current request
         specifically names Second Brain and asks to enable/disable it. Never enable it as part of an unrelated change.
         If disabled and a user asks
         about saved memories, explicitly say Second Brain is disabled and explain where to enable it. In-session
@@ -191,6 +213,7 @@ public sealed class JarvisDialogueService : IJarvisPlanner
         var textBlocks = new List<string>();
         var gate = new object();
         string? model = selection.Model;
+        string? reportedSessionModel = null;
         session.Initialized += () => initialized.TrySetResult();
         session.Exited += (_, _) =>
         {
@@ -203,7 +226,11 @@ public sealed class JarvisDialogueService : IJarvisPlanner
         session.MessageReceived += node =>
         {
             if (node["type"]?.ToString() == "system" && node["subtype"]?.ToString() == "init")
-                model = node["model"]?.ToString() ?? model;
+            {
+                if (node["model"]?.ToString() is { } reportedModel && !string.IsNullOrWhiteSpace(reportedModel)
+                    && !reportedModel.Equals("default", StringComparison.OrdinalIgnoreCase))
+                    model = reportedSessionModel = reportedModel;
+            }
             if (node["type"]?.ToString() == "assistant" && node["message"]?["content"] is JsonArray content)
                 lock (gate)
                     foreach (var block in content.OfType<JsonObject>().Where(b => b["type"]?.ToString() == "text"))
@@ -230,7 +257,7 @@ public sealed class JarvisDialogueService : IJarvisPlanner
                 throw new InvalidOperationException("The selected Jarvis provider/account is unavailable. Sign in through VibeCode and try again.");
             if (session is CodexSession codex && !string.IsNullOrWhiteSpace(codex.ResolvedModel))
             {
-                model = codex.ResolvedModel;
+                model = reportedSessionModel = codex.ResolvedModel;
                 if (!string.IsNullOrWhiteSpace(selection.Model) && selection.Model != "default"
                     && !string.Equals(CodexModelCatalog.WireModel(selection.Model), model, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException($"Jarvis requested '{selection.Model}', but the provider resolved '{model}'. No action was performed.");
@@ -253,24 +280,29 @@ public sealed class JarvisDialogueService : IJarvisPlanner
             {
                 ["capability_context"] = new JsonObject
                 {
+                    ["application"] = JarvisAppKnowledge.Snapshot(),
+                    ["jarvis"] = new JsonObject
+                    {
+                        ["provider"] = selection.Provider,
+                        ["requested_model"] = selection.Model,
+                        ["requested_effort"] = selection.Effort,
+                        ["reported_model"] = reportedSessionModel,
+                    },
                     ["current_project"] = context.CurrentProject,
                     ["known_projects"] = new JsonArray(context.KnownProjects.Take(20).Select(p => (JsonNode?)JsonValue.Create(p)).ToArray()),
                     ["home_directory"] = context.HomeDirectory,
-                    ["settings"] = context.Settings?.DeepClone(),
+                    ["settings"] = (context.ReadSettings?.Invoke() ?? context.Settings)?.DeepClone(),
                     ["current_chat_id"] = context.CurrentChatId,
+                    ["current_chat"] = context.CurrentChat is { } currentChat ? DescribeChat(currentChat) : null,
                     ["open_chat_count"] = context.OpenChats.Count,
-                    ["open_chats"] = new JsonArray(context.OpenChats.Take(100).Select(chat => (JsonNode?)new JsonObject
-                    {
-                        ["id"] = chat.Id, ["title"] = chat.Title, ["path"] = chat.Path,
-                        ["status"] = chat.Status, ["locked"] = chat.IsLocked,
-                    }).ToArray()),
+                    ["open_chats"] = new JsonArray(context.OpenChats.Take(100).Select(chat => (JsonNode?)DescribeChat(chat)).ToArray()),
                     ["second_brain_enabled"] = permission.ExtensionEnabled,
                     ["memory_allowed_for_chat"] = memoryAllowed,
                     ["memory_context"] = !permission.ExtensionEnabled ? "Second Brain is disabled. No memory was read."
                         : !memoryAllowed ? "Memory is unavailable for this chat. No memory was read." : recalled,
                 },
                 ["conversation"] = new JsonArray(safeHistory.TakeLast(20).Select(line => (JsonNode?)new JsonObject
-                    { ["role"] = line.Role, ["text"] = line.Text }).ToArray()),
+                { ["role"] = line.Role, ["text"] = line.Text }).ToArray()),
                 ["current_user_request"] = request,
             };
             var content = JsonValue.Create(prompt.ToJsonString());
@@ -308,11 +340,23 @@ public sealed class JarvisDialogueService : IJarvisPlanner
 
     public static void ValidateSelection(JarvisSelection selection)
     {
-        if (selection.Provider is not ("codex" or "claude" or "kimi" or "grok" or "glm"))
+        if (selection.Provider is not ("codex" or "claude" or "kimi" or "glm" or "gemini"))
             throw new InvalidOperationException("Choose an available Jarvis provider in Settings > Jarvis.");
         if (!ProviderModelCatalog.ModelBelongsTo(selection.Model, selection.Provider))
             throw new InvalidOperationException("The selected Jarvis model belongs to another provider or is retired.");
     }
+
+    private static JsonObject DescribeChat(JarvisChatSummary chat) => new()
+    {
+        ["id"] = chat.Id,
+        ["title"] = chat.Title,
+        ["path"] = chat.Path,
+        ["status"] = chat.Status,
+        ["locked"] = chat.IsLocked,
+        ["provider"] = chat.Provider,
+        ["model"] = chat.Model,
+        ["effort"] = chat.Effort,
+    };
 
     public static ICodingSession CreateSession(JarvisSelection selection, string workspace)
     {
@@ -322,31 +366,52 @@ public sealed class JarvisDialogueService : IJarvisPlanner
         {
             "codex" => new CodexSession(new CodexSessionOptions
             {
-                Cwd = workspace, HomeDirectory = CodexAccountService.Instance.HomeFor(selection.AccountId),
-                Model = model, Effort = selection.Effort, PermissionMode = "plan", AppendSystemPrompt = Instructions,
-                McpServers = [], DialogueOnly = true,
+                Cwd = workspace,
+                HomeDirectory = CodexAccountService.Instance.HomeFor(selection.AccountId),
+                Model = model,
+                Effort = selection.Effort,
+                PermissionMode = "plan",
+                AppendSystemPrompt = Instructions,
+                McpServers = [],
+                DialogueOnly = true,
             }),
             "claude" => new ClaudeSession(new ClaudeSessionOptions
             {
-                Cwd = workspace, ConfigDirectory = AccountService.Instance.ConfigDirectory(selection.AccountId),
-                Model = model, Effort = selection.Effort, PermissionMode = "plan", AppendSystemPrompt = Instructions,
-                McpServers = [], DialogueOnly = true,
+                Cwd = workspace,
+                ConfigDirectory = AccountService.Instance.ConfigDirectory(selection.AccountId),
+                Model = model,
+                Effort = selection.Effort,
+                PermissionMode = "plan",
+                AppendSystemPrompt = Instructions,
+                McpServers = [],
+                DialogueOnly = true,
+            }),
+            "gemini" => new GeminiSession(new KimiSessionOptions
+            {
+                Cwd = workspace,
+                Model = model,
+                PermissionMode = "plan",
+                AppendSystemPrompt = Instructions,
+                McpServers = [],
             }),
             "kimi" => new KimiSession(new KimiSessionOptions
             {
-                Cwd = workspace, Model = model, Effort = selection.Effort, PermissionMode = "plan",
-                AppendSystemPrompt = Instructions, McpServers = [],
-            }),
-            "grok" => new GrokSession(new GrokSessionOptions
-            {
-                Cwd = workspace, AuthFilePath = GrokAccountService.Instance.AuthPathFor(selection.AccountId),
-                Model = model, Effort = selection.Effort, PermissionMode = "plan", AppendSystemPrompt = Instructions, McpServers = [],
+                Cwd = workspace,
+                Model = model,
+                Effort = selection.Effort,
+                PermissionMode = "plan",
+                AppendSystemPrompt = Instructions,
+                McpServers = [],
             }),
             "glm" => new GlmSession(new GlmSessionOptions
             {
-                Cwd = workspace, Backend = ApiKeyAccountService.Instance.SelectedFor(GlmPreset.ProviderId)?.GlmBackend ?? GlmPreset.Baseten,
+                Cwd = workspace,
+                Backend = ApiKeyAccountService.Instance.SelectedFor(GlmPreset.ProviderId)?.GlmBackend ?? GlmPreset.Baseten,
                 ApiKeys = ApiKeyAccountService.Instance.CredentialsFor(GlmPreset.ProviderId, selection.AccountId).Select(c => c.Key).ToList(),
-                Model = model, Effort = selection.Effort, PermissionMode = "plan", AppendSystemPrompt = Instructions,
+                Model = model,
+                Effort = selection.Effort,
+                PermissionMode = "plan",
+                AppendSystemPrompt = Instructions,
             }),
             _ => throw new InvalidOperationException("The selected Jarvis provider is unavailable."),
         };

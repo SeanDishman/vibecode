@@ -53,7 +53,8 @@ public readonly record struct AppVersion : IComparable<AppVersion>
     {
         // InformationalVersion first: it carries <Version> verbatim, where AssemblyVersion has already been
         // widened to four parts and would report "1.2" as "1.2.0.0".
-        var assembly = Assembly.GetEntryAssembly() ?? typeof(AppVersion).Assembly;
+        // The product owns its version even when loaded by a test runner or another host executable.
+        var assembly = typeof(AppVersion).Assembly;
         var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
         if (TryParse(informational, out var parsed)) return parsed;
         return TryParse(assembly.GetName().Version?.ToString(), out var fallback) ? fallback : default;

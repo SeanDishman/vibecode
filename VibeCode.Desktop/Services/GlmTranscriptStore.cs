@@ -5,15 +5,6 @@ using System.Text.Json.Nodes;
 
 namespace VibeCode.Services;
 
-/// <summary>
-/// The on-disk home of GLM conversations, because no provider keeps one for us.
-///
-/// Every other provider is a CLI that writes its own transcript (~/.claude, ~/.codex, ~/.kimi-code, ~/.grok) and resumes
-/// from it. GLM runs in-process (see <see cref="Protocol.GlmSession"/>), so its conversation used to live only in
-/// memory: restarting VibeCode, reopening the chat from history, or anything that rebuilt the pane started the model
-/// from nothing and showed a blank transcript. One file per session holds the exact OpenAI message array the next
-/// request needs, so a resumed session sends the model what it would have sent had it never stopped.
-/// </summary>
 public static class GlmTranscriptStore
 {
     private const int Version = 1;
@@ -129,41 +120,41 @@ public static class GlmTranscriptStore
                         new JsonObject { ["role"] = "user", ["content"] = text }, null));
                     break;
                 case "assistant":
-                {
-                    var blocks = new JsonArray();
-                    if (Text(message["reasoning_content"]) is { Length: > 0 } thinking)
-                        blocks.Add(new JsonObject { ["type"] = "thinking", ["thinking"] = thinking });
-                    if (Text(message["content"]) is { Length: > 0 } text)
-                        blocks.Add(new JsonObject { ["type"] = "text", ["text"] = text });
-                    foreach (var call in (message["tool_calls"] as JsonArray)?.OfType<JsonObject>() ?? [])
-                        blocks.Add(new JsonObject
-                        {
-                            ["type"] = "tool_use",
-                            ["id"] = Text(call["id"]) ?? "",
-                            ["name"] = Text(call["function"]?["name"]) ?? "?",
-                            ["input"] = Arguments(Text(call["function"]?["arguments"])),
-                        });
-                    if (blocks.Count > 0)
-                        result.Add(new TranscriptMessage("assistant",
-                            new JsonObject { ["role"] = "assistant", ["content"] = blocks }, null));
-                    break;
-                }
-                case "tool":
-                {
-                    var id = Text(message["tool_call_id"]) ?? "";
-                    result.Add(new TranscriptMessage("user", new JsonObject
                     {
-                        ["role"] = "user",
-                        ["content"] = new JsonArray(new JsonObject
+                        var blocks = new JsonArray();
+                        if (Text(message["reasoning_content"]) is { Length: > 0 } thinking)
+                            blocks.Add(new JsonObject { ["type"] = "thinking", ["thinking"] = thinking });
+                        if (Text(message["content"]) is { Length: > 0 } text)
+                            blocks.Add(new JsonObject { ["type"] = "text", ["text"] = text });
+                        foreach (var call in (message["tool_calls"] as JsonArray)?.OfType<JsonObject>() ?? [])
+                            blocks.Add(new JsonObject
+                            {
+                                ["type"] = "tool_use",
+                                ["id"] = Text(call["id"]) ?? "",
+                                ["name"] = Text(call["function"]?["name"]) ?? "?",
+                                ["input"] = Arguments(Text(call["function"]?["arguments"])),
+                            });
+                        if (blocks.Count > 0)
+                            result.Add(new TranscriptMessage("assistant",
+                                new JsonObject { ["role"] = "assistant", ["content"] = blocks }, null));
+                        break;
+                    }
+                case "tool":
+                    {
+                        var id = Text(message["tool_call_id"]) ?? "";
+                        result.Add(new TranscriptMessage("user", new JsonObject
                         {
-                            ["type"] = "tool_result",
-                            ["tool_use_id"] = id,
-                            ["content"] = Text(message["content"]) ?? "",
-                            ["is_error"] = failed.Contains(id),
-                        }),
-                    }, null));
-                    break;
-                }
+                            ["role"] = "user",
+                            ["content"] = new JsonArray(new JsonObject
+                            {
+                                ["type"] = "tool_result",
+                                ["tool_use_id"] = id,
+                                ["content"] = Text(message["content"]) ?? "",
+                                ["is_error"] = failed.Contains(id),
+                            }),
+                        }, null));
+                        break;
+                    }
             }
         }
         return result;

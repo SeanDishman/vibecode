@@ -20,8 +20,6 @@ internal static partial class Program
     {
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CODEX_HOME")))
             throw new InvalidOperationException("Live test requires signed-in CODEX_HOME.");
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.McpServers.Clear();
         var planner = new JarvisDialogueService(Path.Combine(_root, "jarvis-dialogue-" + Guid.NewGuid().ToString("N")));
         var context = new JarvisContext(null, [], @"C:\Users\Fixture", false);
@@ -92,8 +90,16 @@ internal static partial class Program
 
         // Read-only check against the real Win32 inventory using our own off-screen test window.
         var title = "Jarvis desktop fixture " + Guid.NewGuid().ToString("N");
-        var window = new Window { Title = title, Left = 6100, Top = 300, Width = 240, Height = 120, ShowInTaskbar = false,
-            WindowStartupLocation = WindowStartupLocation.Manual };
+        var window = new Window
+        {
+            Title = title,
+            Left = 6100,
+            Top = 300,
+            Width = 240,
+            Height = 120,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual
+        };
         window.Show();
         try
         {
@@ -225,7 +231,7 @@ internal static partial class Program
         Check("the second real button click sends exactly one request", !jarvis.IsListening && jarvis.Messages.Count == 4);
         talk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window), 0, Key.Escape)
-            { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+        { RoutedEvent = Keyboard.PreviewKeyDownEvent });
         Check("Escape cancels a toggle recording and clears its audio", !jarvis.IsListening && jarvis.MicrophoneLevel == 0 && window.IsVisible);
         var review = Path.Combine(Environment.CurrentDirectory, ".impeccable", "review");
         Directory.CreateDirectory(review);

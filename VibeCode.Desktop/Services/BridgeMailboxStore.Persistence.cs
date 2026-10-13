@@ -74,11 +74,28 @@ public sealed partial class BridgeMailboxStore
         {
             SetupPairs = _setupPairs,
             Sequence = _sequence,
-            Boxes = boxes.Select(b => new BoxRecord { Id = b.AgentId, Number = b.Number, Label = b.Label,
-                Closed = b.Closed, Entries = b.Entries.Select(m => m.Id).ToList() }).ToList(),
-            Messages = messages.Select(m => new MessageRecord { Id = m.Id, Sequence = m.Sequence, From = m.From.AgentId, To = m.To.AgentId,
-                FromNumber = m.FromAtSend, ToNumber = m.ToAtSend, Body = m.Body, Hop = m.Hop,
-                Sent = m.SentAt, Read = m.ReadAt, Answered = m.AnsweredAt }).ToList(),
+            Boxes = boxes.Select(b => new BoxRecord
+            {
+                Id = b.AgentId,
+                Number = b.Number,
+                Label = b.Label,
+                Closed = b.Closed,
+                Entries = b.Entries.Select(m => m.Id).ToList()
+            }).ToList(),
+            Messages = messages.Select(m => new MessageRecord
+            {
+                Id = m.Id,
+                Sequence = m.Sequence,
+                From = m.From.AgentId,
+                To = m.To.AgentId,
+                FromNumber = m.FromAtSend,
+                ToNumber = m.ToAtSend,
+                Body = m.Body,
+                Hop = m.Hop,
+                Sent = m.SentAt,
+                Read = m.ReadAt,
+                Answered = m.AnsweredAt
+            }).ToList(),
         };
         var temporary = WriteTemporary(Stamp + "\n" + JsonSerializer.Serialize(snapshot));
         try { File.Move(temporary, SnapshotPath, true); }
@@ -101,8 +118,20 @@ public sealed partial class BridgeMailboxStore
             foreach (var message in snapshot.Messages.Where(m => m.Sequence <= 0).OrderBy(m => m.Sent)) message.Sequence = ++_sequence;
             var boxes = snapshot.Boxes.ToDictionary(b => b.Id, b => new Mailbox(this, b.Number, b.Label, b.Id) { Closed = b.Closed });
             var messages = snapshot.Messages.Where(m => m.Sent >= DateTimeOffset.UtcNow - Retention).ToDictionary(m => m.Id,
-                m => new Message { Id = m.Id, Sequence = m.Sequence, From = boxes[m.From], To = boxes[m.To], FromAtSend = m.FromNumber,
-                    ToAtSend = m.ToNumber, Body = m.Body, Hop = m.Hop, SentAt = m.Sent, ReadAt = m.Read, AnsweredAt = m.Answered });
+                m => new Message
+                {
+                    Id = m.Id,
+                    Sequence = m.Sequence,
+                    From = boxes[m.From],
+                    To = boxes[m.To],
+                    FromAtSend = m.FromNumber,
+                    ToAtSend = m.ToNumber,
+                    Body = m.Body,
+                    Hop = m.Hop,
+                    SentAt = m.Sent,
+                    ReadAt = m.Read,
+                    AnsweredAt = m.Answered
+                });
             foreach (var row in snapshot.Boxes.Where(b => !b.Closed))
             {
                 var box = boxes[row.Id];

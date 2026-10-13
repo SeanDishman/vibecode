@@ -107,16 +107,24 @@ public sealed partial class MainViewModel
         var replacement = new ChatViewModel(old.Cwd, resume: old.SessionId, title: old.Title,
             accountId: old.AccountId, provider: old.Provider)
         {
-            Pinned = old.Pinned, Draft = old.Draft, ExcludeFromMemory = old.ExcludeFromMemory,
-            BridgeLabel = old.BridgeLabel, IsBridgeHost = old.IsBridgeHost, IsAdvancedBridgeHost = old.IsAdvancedBridgeHost,
+            Pinned = old.Pinned,
+            Draft = old.Draft,
+            ExcludeFromMemory = old.ExcludeFromMemory,
+            BridgeLabel = old.BridgeLabel,
+            IsBridgeHost = old.IsBridgeHost,
+            IsAdvancedBridgeHost = old.IsAdvancedBridgeHost,
             IsBridgeManager = old.IsBridgeManager,
-            BridgeVisible = old.BridgeVisible, BridgeExpanded = old.BridgeExpanded,
-            BridgeMinimized = old.BridgeMinimized, OnSecondMonitor = old.OnSecondMonitor,
-            AppendSystemPrompt = old.AppendSystemPrompt, Prelude = old.Prelude,
+            BridgeVisible = old.BridgeVisible,
+            BridgeExpanded = old.BridgeExpanded,
+            BridgeMinimized = old.BridgeMinimized,
+            OnSecondMonitor = old.OnSecondMonitor,
+            AppendSystemPrompt = old.AppendSystemPrompt,
+            Prelude = old.Prelude,
         };
         replacement.SetMode(old.Mode);
         replacement.ApplyBridgeConfiguration(BridgeAgentConfigurationPolicy.From(old));
         replacement.FastMode = old.FastMode;
+        replacement.UltrafastMode = old.UltrafastMode;
         replacement.RestoreGoal(old.Goal);
         // Keep retained messages while replacing only the failed provider process.
         replacement.PeerMailbox = old.PeerMailbox;

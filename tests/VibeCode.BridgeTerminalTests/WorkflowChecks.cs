@@ -81,8 +81,14 @@ internal static partial class Program
         Check("cleanup never deletes a directory containing unowned files", BridgeMailboxStore.CleanupExpired(workspace, DateTimeOffset.UtcNow.AddDays(8)) == 0 && File.ReadAllText(userFile) == "Keep my data");
 
         File.WriteAllText(Path.Combine(_root, "mailbox-performance.json"), JsonSerializer.Serialize(new
-        { agents = 9, messages = 224, delivery_ms = deliveryMs, page_read_ms = pageMs, disk_bytes = bytes,
-            notes = "Actual production store I/O on this machine. No model turns, timers or polling needed for delivery." }, new JsonSerializerOptions { WriteIndented = true }));
+        {
+            agents = 9,
+            messages = 224,
+            delivery_ms = deliveryMs,
+            page_read_ms = pageMs,
+            disk_bytes = bytes,
+            notes = "Actual production store I/O on this machine. No model turns, timers or polling needed for delivery."
+        }, new JsonSerializerOptions { WriteIndented = true }));
         Console.WriteLine($"MEASURED: 224 durable deliveries {deliveryMs:F1} ms; paginated reads {pageMs:F1} ms; retained metadata {bytes:N0} bytes.");
     }
 
@@ -99,7 +105,9 @@ internal static partial class Program
 
     private static JsonObject PlanStep(string id, string title, ChatViewModel worker, params string[] dependencies) => new()
     {
-        ["id"] = id, ["title"] = title, ["owner_id"] = worker.BridgeAgentId,
+        ["id"] = id,
+        ["title"] = title,
+        ["owner_id"] = worker.BridgeAgentId,
         ["dependencies"] = new JsonArray(dependencies.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()),
         ["files"] = new JsonArray("shared.cs"),
     };
@@ -210,8 +218,11 @@ internal static partial class Program
         for (var seed = 0; seed < 150; seed++)
         {
             var random = new Random(seed);
-            var tasks = Enumerable.Range(0, 100).Select(i => new BridgeWorkTask { Id = "task-" + i,
-                Dependencies = Enumerable.Range(0, i).Where(_ => random.Next(20) == 0).Select(n => "task-" + n).ToList() }).ToList();
+            var tasks = Enumerable.Range(0, 100).Select(i => new BridgeWorkTask
+            {
+                Id = "task-" + i,
+                Dependencies = Enumerable.Range(0, i).Where(_ => random.Next(20) == 0).Select(n => "task-" + n).ToList()
+            }).ToList();
             BridgeWorkState.ValidateGraph(tasks);
             tasks[0].Dependencies.Add("task-99"); tasks[99].Dependencies.Add("task-0");
             var rejected = false;

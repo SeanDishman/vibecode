@@ -1,6 +1,5 @@
 namespace VibeCode.Protocol;
 
-/// <summary>Known model metadata and validation for Codex model selections.</summary>
 public static class CodexModelCatalog
 {
 
@@ -44,11 +43,16 @@ public static class CodexModelCatalog
         return null;
     }
 
-    public static string? WireModel(string? model) => model?.Trim();
+    /// <summary>A VibeCode-owned id. Real OpenAI slugs are not owned and may be sent to Codex as-is.</summary>
+    public static bool IsOwnedPreset(string? model) => IsLegacyAlias(model);
+
+    public static bool IsLegacyAlias(string? model) => model?.StartsWith("vibecode:", StringComparison.OrdinalIgnoreCase) == true;
+
+    public static string? WireModel(string? model) => IsLegacyAlias(model) ? null : model?.Trim();
 
     /// <summary>
-    /// Models Codex no longer serves for ChatGPT sign-in. Spark is the one GPT-5.3 id still offered,
-    /// and only when the account catalog actually contains it. GPT-5.5 retires from Codex on
+    /// Models Codex no longer serves for ChatGPT sign-in. GPT-5.3-Codex-Spark retired on
+    /// 2026-09-14. GPT-5.5 retires from Codex on
     /// 2026-10-14 and is already withheld. GPT-5.4 and GPT-5.4-mini retired on 2026-08-31.
     /// GPT-5.2 and GPT-5.3-Codex were deprecated before that.
     /// </summary>
@@ -56,7 +60,6 @@ public static class CodexModelCatalog
     {
         var backend = WireModel(id)?.Trim();
         if (string.IsNullOrWhiteSpace(backend)) return false;
-        if (backend.Equals(CodexSession.SparkModelId, StringComparison.OrdinalIgnoreCase)) return false;
         return Family(backend, "gpt-5.5")
                || Family(backend, "gpt-5.4")
                || Family(backend, "gpt-5.3")
@@ -67,16 +70,21 @@ public static class CodexModelCatalog
                || backend.Equals("gpt-5", StringComparison.OrdinalIgnoreCase);
     }
 
-    public static string? NormalizeSelection(string? id)
-        {
-            if (string.IsNullOrWhiteSpace(id)) return id;
-            return id.StartsWith("vibecode:", StringComparison.OrdinalIgnoreCase) || IsRetiredModel(id) ? null : id.Trim();
-        }
+    public static string? NormalizeSelection(string? id) => IsLegacyAlias(id) || IsRetiredModel(id) ? null : id?.Trim();
 
-    public static bool ShouldList(string? id) => !string.IsNullOrWhiteSpace(id)
-            && !id.StartsWith("vibecode:", StringComparison.OrdinalIgnoreCase) && !IsRetiredModel(id);
+    public static bool ShouldList(string? id) =>
+        !string.IsNullOrWhiteSpace(id)
+        && !IsRetiredModel(id)
+        && !IsLegacyAlias(id);
 
     private static bool Family(string backend, string id) =>
         backend.Equals(id, StringComparison.OrdinalIgnoreCase)
         || backend.StartsWith(id + "-", StringComparison.OrdinalIgnoreCase);
+
+    private static string Tail(string? id)
+    {
+        var value = id?.Trim() ?? "";
+        var slash = value.LastIndexOf('/');
+        return slash >= 0 ? value[(slash + 1)..] : value;
+    }
 }

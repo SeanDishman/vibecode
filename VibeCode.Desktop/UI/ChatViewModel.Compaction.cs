@@ -23,7 +23,7 @@ public sealed partial class ChatViewModel
         else if (IsWorking || (!recovering && HasPendingDispatch) || RewindHoldsDispatch || _pendingPerms.Count > 0)
             problem = "Wait for the current turn and queued messages to finish, then use /compact.";
         else if (attachments is { Count: > 0 }) problem = "Remove attachments before using /compact.";
-        else if (IsCodex && instructions.Length > 0) problem = "Use /compact on its own for Codex. Claude also accepts focus instructions.";
+        else if ((IsCodex || IsGemini) && instructions.Length > 0) problem = $"Use /compact on its own for {ProviderDisplay}. Claude also accepts focus instructions.";
         if (problem is not null)
         {
             Items.Add(new BannerItem { Level = "info", Text = problem });
@@ -31,6 +31,7 @@ public sealed partial class ChatViewModel
             return false;
         }
 
+        CancelBridgeErrorRecovery();
         CancelLimitRecovery();
         CancelGoalCheck();
         BeginTurnPricing();
@@ -57,7 +58,9 @@ public sealed partial class ChatViewModel
             if (!ReferenceEquals(_session, session) || Status == "closed" || _manualCompactCommand is null) return;
             ApplyResult(new JsonObject
             {
-                ["type"] = "result", ["is_error"] = true, ["subtype"] = "compaction_failed",
+                ["type"] = "result",
+                ["is_error"] = true,
+                ["subtype"] = "compaction_failed",
                 ["result"] = ex.Message,
             });
             ItemsChanged?.Invoke();
@@ -73,8 +76,12 @@ public sealed partial class ChatViewModel
         if (_manualCompactBanner is not null) Items.Remove(_manualCompactBanner);
         _manualCompactBanner = null;
         if (!failed && !_manualCompactSucceeded)
-            Items.Add(new BannerItem { Level = "info", Text = interrupted ? "Compaction stopped."
-                : result["result"]?.ToString() is { Length: > 0 } detail ? detail : "Compaction finished." });
+            Items.Add(new BannerItem
+            {
+                Level = "info",
+                Text = interrupted ? "Compaction stopped."
+                : result["result"]?.ToString() is { Length: > 0 } detail ? detail : "Compaction finished."
+            });
         return command;
     }
 }

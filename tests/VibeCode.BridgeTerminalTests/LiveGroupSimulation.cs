@@ -15,7 +15,7 @@ internal static partial class Program
         Directory.CreateDirectory(workspace);
         var vm = new MainViewModel();
         var host = new ChatViewModel(workspace, title: "Bridge verification · two groups", provider: "codex")
-            { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true };
+        { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true };
         host.SetMode("plan"); Chats.Add(host); vm.Chats.Add(host); Call(vm, "Track", host); Property(vm, "ActiveChat", host);
         host.Start();
         LiveWait(() => host.Status is "idle" or "error", TimeSpan.FromSeconds(45), [host]);
@@ -95,10 +95,17 @@ internal static partial class Program
         File.WriteAllText(Path.Combine(_root, name + "-tools.json"), JsonSerializer.Serialize(calls.Select(c => new { agent = c.Agent, tool = c.Tool, input = c.Input, result = c.Result }), new JsonSerializerOptions { WriteIndented = true }));
         File.WriteAllText(Path.Combine(_root, name + ".json"), JsonSerializer.Serialize(team.Select(chat => new
         {
-            agent = chat.BridgeTerminalIdentity, model = chat.Model, status = chat.Status, task_state = chat.BridgeTaskState,
-            coordinator = chat.BridgeCoordinatorAgentId, scope = chat.BridgeOrchestrationScope,
-            review_state = chat.BridgeReviewState, review_summary = chat.BridgeReviewSummary,
-            input_tokens = chat.TotalIn, output_tokens = chat.TotalOut, messages = chat.Items.OfType<TextItem>().Select(t => t.Text).ToArray(),
+            agent = chat.BridgeTerminalIdentity,
+            model = chat.Model,
+            status = chat.Status,
+            task_state = chat.BridgeTaskState,
+            coordinator = chat.BridgeCoordinatorAgentId,
+            scope = chat.BridgeOrchestrationScope,
+            review_state = chat.BridgeReviewState,
+            review_summary = chat.BridgeReviewSummary,
+            input_tokens = chat.TotalIn,
+            output_tokens = chat.TotalOut,
+            messages = chat.Items.OfType<TextItem>().Select(t => t.Text).ToArray(),
         }), new JsonSerializerOptions { WriteIndented = true }));
         Console.WriteLine($"COMPLETE: {name}; input={team.Sum(c => c.TotalIn)}, output={team.Sum(c => c.TotalOut)} tokens.");
         vm.CloseBridge(); foreach (var chat in team) chat.Close();

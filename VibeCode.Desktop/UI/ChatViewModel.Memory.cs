@@ -42,9 +42,13 @@ public sealed partial class ChatViewModel
         }
         if (extensionChanged && _session is not null)
         {
-            Items.Add(new BannerItem { Level = "info", Text = active
+            Items.Add(new BannerItem
+            {
+                Level = "info",
+                Text = active
                 ? "Second Brain extension enabled. This chat's saved memory preference is active again."
-                : MemoryAgentPolicy });
+                : MemoryAgentPolicy
+            });
             ItemsChanged?.Invoke();
         }
         Raise(nameof(MemoryControlsAvailable));

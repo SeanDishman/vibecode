@@ -120,6 +120,8 @@ internal static class ProcessJob
 
 public sealed class ClaudeSessionOptions
 {
+    /// <summary>Captured account identity; null uses the provider default, empty uses the shared subscription login.</summary>
+    public string? AccountId { get; init; }
     /// <summary>Isolated conversational planning with all native tools removed.</summary>
     public bool DialogueOnly { get; init; }
     public required string Cwd { get; init; }
@@ -165,7 +167,7 @@ public sealed class PermissionRequest
 /// (the same wire protocol the official Agent SDK speaks). Spawns `claude` with
 /// --input-format/--output-format stream-json and exchanges NDJSON on stdio.
 /// </summary>
-public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompactableSession
+public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, ICompactableSession
 {
     public event Action<JsonNode>? MessageReceived;       // SDK messages: system/assistant/user/stream_event/result/...
     public event Action<PermissionRequest>? PermissionRequested;
@@ -215,7 +217,12 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
     public Task WhenInitialized => _initTcs.Task;
     public string StderrTail { get { lock (_stderr) return _stderr.ToString(); } }
 
-    public ClaudeSession(ClaudeSessionOptions options) => _options = options;
+    public ClaudeSession(ClaudeSessionOptions options)
+    {
+        _options = options;
+        _selectedModel = options.Model;
+        _selectedEffort = IsUltracodeLevel(options.Effort) ? "xhigh" : options.Effort;
+    }
 
     public static string ResolveCliPath()
     {
@@ -224,6 +231,7 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
         // Windows CLI into its own Wine prefix and points at it this way, since that path is on no standard PATH.
         if (Environment.GetEnvironmentVariable("VIBECODE_CLAUDE_PATH") is { Length: > 0 } configured)
             candidates.Add(configured.Trim('"'));
+        if (CliInstallationService.ManagedPath("claude") is { } managed) candidates.Add(managed);
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         candidates.Add(Path.Combine(appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"));
@@ -248,8 +256,7 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
                     && candidateVersion >= ClaudeModelCatalog.MinimumCliVersion) ?? preferred;
             return preferred;
         }
-        throw new FileNotFoundException(
-            "Could not find the Claude Code CLI (claude.exe). Install it with `npm install -g @anthropic-ai/claude-code` and sign in with /login.");
+        throw new FileNotFoundException("Claude Code CLI is missing. Open the account menu, select Claude Code, and click Install Claude Code CLI.");
     }
 
     internal static Version? OfficialCliVersion(string path)
@@ -268,7 +275,7 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
     /// of the user's Claude subscription login, plus the entrypoint markers. This is why a machine
     /// with ANTHROPIC_API_KEY set was hitting "402 API key budget exhausted" - the key overrode the sub.
     /// </summary>
-    public static void StripInheritedEnv(ProcessStartInfo psi)
+    public static void StripInheritedEnv(ProcessStartInfo psi, string? accountId = null)
     {
         foreach (var name in McpCatalog.ClaudeSuppressedEnvironmentVariables)
             psi.Environment.Remove(name);
@@ -276,7 +283,7 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
         // Scrub first, then deliberately put back a key the user actually chose. Order matters: the
         // strip above exists so an ambient machine-level key can never hijack a subscription run, and
         // this only fires when the selected Claude account IS an API-key account.
-        ApiKeyAccountService.Instance.ApplyTo(psi, "claude");
+        ApiKeyAccountService.Instance.ApplyTo(psi, "claude", accountId);
     }
 
     public void Start()
@@ -393,7 +400,7 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
             StandardInputEncoding = new UTF8Encoding(false),
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
-        StripInheritedEnv(psi);
+        StripInheritedEnv(psi, options.AccountId);
         if (options.SwarmsEnabled)
         {
             var max = SwarmPolicy.ClampMaxWorkers(options.SwarmMaxWorkers).ToString();
@@ -456,75 +463,87 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
         switch (type)
         {
             case "control_response":
-            {
-                var resp = node["response"];
-                var id = resp?["request_id"]?.GetValue<string>();
-                if (id is not null && _pending.TryRemove(id, out var tcs))
                 {
-                    if (resp!["subtype"]?.GetValue<string>() == "success") tcs.TrySetResult(resp);
-                    else tcs.TrySetException(new InvalidOperationException(resp["error"]?.ToString() ?? "CLI error"));
+                    var resp = node["response"];
+                    var id = resp?["request_id"]?.GetValue<string>();
+                    if (id is not null && _pending.TryRemove(id, out var tcs))
+                    {
+                        if (resp!["subtype"]?.GetValue<string>() == "success") tcs.TrySetResult(resp);
+                        else tcs.TrySetException(new InvalidOperationException(resp["error"]?.ToString() ?? "CLI error"));
+                    }
+                    break;
                 }
-                break;
-            }
             case "control_request":
-            {
-                var requestId = node["request_id"]!.GetValue<string>();
-                var request = node["request"]!;
-                var subtype = request["subtype"]?.GetValue<string>();
-                if (subtype == "can_use_tool")
                 {
-                    _incomingPermissions[requestId] = 1;
-                    PermissionRequested?.Invoke(new PermissionRequest
+                    var requestId = node["request_id"]!.GetValue<string>();
+                    var request = node["request"]!;
+                    var subtype = request["subtype"]?.GetValue<string>();
+                    if (subtype == "can_use_tool")
                     {
-                        RequestId = requestId,
-                        ToolName = request["tool_name"]?.GetValue<string>() ?? "?",
-                        Input = request["input"],
-                        Suggestions = request["permission_suggestions"],
-                        ToolUseId = request["tool_use_id"]?.GetValue<string>(),
-                        AgentId = request["agent_id"]?.GetValue<string>(),
-                        DecisionReason = request["decision_reason"]?.ToString(),
-                    });
-                }
-                else
-                {
-                    // Subtypes we don't serve (hooks, SDK MCP) - reply with an error so the CLI isn't left waiting.
-                    WriteJson(new JsonObject
-                    {
-                        ["type"] = "control_response",
-                        ["response"] = new JsonObject
+                        _incomingPermissions[requestId] = 1;
+                        PermissionRequested?.Invoke(new PermissionRequest
                         {
-                            ["subtype"] = "error",
-                            ["request_id"] = requestId,
-                            ["error"] = $"Unsupported control request: {subtype}",
-                        },
-                    });
+                            RequestId = requestId,
+                            ToolName = request["tool_name"]?.GetValue<string>() ?? "?",
+                            Input = request["input"],
+                            Suggestions = request["permission_suggestions"],
+                            ToolUseId = request["tool_use_id"]?.GetValue<string>(),
+                            AgentId = request["agent_id"]?.GetValue<string>(),
+                            DecisionReason = request["decision_reason"]?.ToString(),
+                        });
+                    }
+                    else
+                    {
+                        // Subtypes we don't serve (hooks, SDK MCP) - reply with an error so the CLI isn't left waiting.
+                        WriteJson(new JsonObject
+                        {
+                            ["type"] = "control_response",
+                            ["response"] = new JsonObject
+                            {
+                                ["subtype"] = "error",
+                                ["request_id"] = requestId,
+                                ["error"] = $"Unsupported control request: {subtype}",
+                            },
+                        });
+                    }
+                    break;
                 }
-                break;
-            }
             case "control_cancel_request":
-            {
-                var id = node["request_id"]?.GetValue<string>();
-                if (id is not null && _incomingPermissions.TryRemove(id, out _))
-                    PermissionCancelled?.Invoke(id);
-                break;
-            }
+                {
+                    var id = node["request_id"]?.GetValue<string>();
+                    if (id is not null && _incomingPermissions.TryRemove(id, out _))
+                        PermissionCancelled?.Invoke(id);
+                    break;
+                }
             default:
-            {
-                if (type == "system" && node["subtype"]?.GetValue<string>() == "init")
-                    SessionId = node["session_id"]?.GetValue<string>();
+                {
+                    if (type == "system" && node["subtype"]?.GetValue<string>() == "init")
+                        SessionId = node["session_id"]?.GetValue<string>();
 
-                // Claude can finish the root response while background Agent tasks (run_in_background) keep working.
-                // The result is forwarded straight away so the chat goes idle and queued prompts flush - the same
-                // feel as the CLI, where you keep talking while background work continues. This used to be held back
-                // until every child reached a terminal event, which pinned the pane to "running" for the whole swarm:
-                // Stop stayed armed and send-now went through Interrupt(), killing the children the user was waiting on.
-                if (type == "result") _rootTurnActive = false;
+                    ObserveOpusFallback(node, type);
 
-                ObserveClaudeSubagents(node, type);
-                MessageReceived?.Invoke(node);
-                if (type == "result") EmitTurnActivity();
-                break;
-            }
+                    // Claude can finish the root response while background Agent tasks (run_in_background) keep working.
+                    // The result is forwarded straight away so the chat goes idle and queued prompts flush - the same
+                    // feel as the CLI, where you keep talking while background work continues. This used to be held back
+                    // until every child reached a terminal event, which pinned the pane to "running" for the whole swarm:
+                    // Stop stayed armed and send-now went through Interrupt(), killing the children the user was waiting on.
+                    var rootResult = type == "result" && node["parent_tool_use_id"] is null && node["subagent_thread_id"] is null;
+                    TaskCompletionSource? recoveryResult = null;
+                    if (rootResult)
+                    {
+                        _rootTurnActive = false;
+                        recoveryResult = MarkOpusRecoveryResult(node);
+                    }
+
+                    ObserveClaudeSubagents(node, type);
+                    MessageReceived?.Invoke(node);
+                    if (rootResult)
+                    {
+                        EmitTurnActivity();
+                        recoveryResult?.TrySetResult();
+                    }
+                    break;
+                }
         }
     }
 
@@ -935,7 +954,8 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
         catch (OperationCanceledException) { }
     }
 
-    private Task<JsonNode?> RequestAsync(JsonObject request)
+    private async Task<JsonNode?> RequestAsync(JsonObject request, TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
     {
         var id = $"vcr_{Interlocked.Increment(ref _reqSeq)}";
         var tcs = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -946,7 +966,13 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
             ["request_id"] = id,
             ["request"] = request,
         });
-        return tcs.Task;
+        try
+        {
+            return timeout is { } limit
+                ? await tcs.Task.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
+                : await tcs.Task.ConfigureAwait(false);
+        }
+        finally { _pending.TryRemove(id, out _); }
     }
 
     private void WriteJson(JsonNode node)
@@ -1033,14 +1059,27 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
         });
     }
 
-    public Task InterruptAsync() => SafeRequest(new JsonObject { ["subtype"] = "interrupt" });
+    public Task InterruptAsync()
+    {
+        CancelOpusRecovery();
+        return SafeRequest(new JsonObject { ["subtype"] = "interrupt" });
+    }
     public Task SetPermissionModeAsync(string mode) => SafeRequest(new JsonObject { ["subtype"] = "set_permission_mode", ["mode"] = mode });
     public Task SetModelAsync(string? model, string? effort = null)
     {
-        var req = new JsonObject { ["subtype"] = "set_model" };
-        if (model is not null) req["model"] = model;
-        req["effort"] = effort;   // always sent; explicit null reverts effort to the CLI default (runtime effort rides on set_model)
-        return SafeRequest(req);
+        lock (_modelRecoveryGate)
+        {
+            _selectedModel = model;
+            _selectedEffort = effort;
+            _modelSelectionVersion++;
+            _pendingOpusRestore = false;
+            _opusRecoveryCancellation?.Cancel();
+            _opusRestartTimes.Clear(); // an explicit model selection starts a fresh retry budget
+            var req = new JsonObject { ["subtype"] = "set_model" };
+            if (model is not null) req["model"] = model;
+            req["effort"] = effort;   // explicit null reverts effort to the CLI default
+            return SafeRequest(req);
+        }
     }
 
     /// <summary>The CLI exposes "ultracode" as an effort level, but its real value is xhigh plus a separate
@@ -1053,12 +1092,15 @@ public sealed class ClaudeSession : ICodingSession, ISteerableSession, ICompacta
     /// effect on this chat instead of only its next start - <c>set_model</c> carries an effort but has no field
     /// for the ultracode flag. Verified against claude 2.1.215, which answers with <c>{"subtype":"success"}</c>.
     /// </summary>
-    public Task SetFlagSettingsAsync(string? effortLevel, bool ultracode) =>
-        SafeRequest(new JsonObject
+    public Task SetFlagSettingsAsync(string? effortLevel, bool ultracode)
+    {
+        lock (_modelRecoveryGate) _selectedEffort = effortLevel;
+        return SafeRequest(new JsonObject
         {
             ["subtype"] = "apply_flag_settings",
             ["settings"] = new JsonObject { ["effortLevel"] = effortLevel, ["ultracode"] = ultracode },
         });
+    }
 
     /// <summary>
     /// Turn fast mode on or off on a RUNNING CLI, so the toggle belongs to this chat rather than only to its next

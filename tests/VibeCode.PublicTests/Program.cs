@@ -19,9 +19,7 @@ internal static class Program
         }
         var testDirectory = Path.Combine(Path.GetTempPath(), "vibecode-public-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDirectory);
-        foreach (var variable in new[] { "VIBECODE_DATA_DIR", "VIBECODE_CODEX_ACCOUNT_STORE", "VIBECODE_CODEX_LEGACY_HOME",
-            "VIBECODE_CLAUDE_ACCOUNT_STORE", "CLAUDE_CONFIG_DIR", "VIBECODE_GROK_ACCOUNT_STORE", "VIBECODE_GROK_LEGACY_AUTH_PATH",
-            "KIMI_CODE_HOME", "GROK_HOME" })
+        foreach (var variable in new[] { "VIBECODE_DATA_DIR", "VIBECODE_CODEX_ACCOUNT_STORE", "VIBECODE_CODEX_LEGACY_HOME", "VIBECODE_CLAUDE_ACCOUNT_STORE", "CLAUDE_CONFIG_DIR", "KIMI_CODE_HOME" })
         {
             var path = Path.Combine(testDirectory, variable.ToLowerInvariant());
             Directory.CreateDirectory(path);
@@ -33,7 +31,6 @@ internal static class Program
         Environment.SetEnvironmentVariable("VIBECODE_DISABLE_BROWSER_BRIDGE", "1");
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
         // These tests translate recorded protocol shapes; they never start a provider process.
-        Environment.SetEnvironmentVariable("VIBECODE_GROK_PATH", Environment.ProcessPath);
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_PATH", Environment.ProcessPath);
         Environment.CurrentDirectory = testDirectory;
         _ = new Application();
@@ -56,15 +53,6 @@ internal static class Program
 
     private static void CatalogsFollowRuntime()
     {
-        var state = JsonNode.Parse("""
-            {"currentModelId":"grok-4.6","availableModels":[
-              {"modelId":"grok-4.6","name":"Grok 4.6","_meta":{"reasoningEfforts":["low","high","xhigh"]}},
-              {"modelId":"grok-4.5","name":"Grok 4.5"}]}
-            """)!.AsObject();
-        var grok = (JsonArray)typeof(KimiSession).GetMethod("GrokModelsFromState", Hidden)!.Invoke(null, new object?[] { state, "grok-4.6" })!;
-        Require(grok.Count == 2, "Grok catalog keeps exactly the two provider rows");
-        Require(grok[0]!["supportedEffortLevels"]!.AsArray().Count == 3, "Grok preserves runtime reasoning levels");
-        Require(grok[0]!["isDefault"]!.GetValue<bool>(), "Grok keeps its current model selected");
         using var codex = new CodexSession(new CodexSessionOptions { Cwd = Environment.CurrentDirectory });
         var rows = JsonNode.Parse("""
             [{"id":"gpt-5.6-sol","model":"gpt-5.6-sol","displayName":"GPT Sol","isDefault":true,
@@ -73,7 +61,7 @@ internal static class Program
             """)!.AsArray();
         typeof(CodexSession).GetMethod("BuildModels", Hidden)!.Invoke(codex, new object[] { rows });
         var sol = codex.Models.OfType<JsonObject>().Single(row => row["value"]!.GetValue<string>() == "gpt-5.6-sol");
-        Require(codex.Models.Count == 8 && codex.Models.Any(row => row!["value"]!.GetValue<string>() == "gpt-6.1-sol"),
+        Require(codex.Models.Count == CodexModelCatalog.Current.Length && codex.Models.Any(row => row!["value"]!.GetValue<string>() == "gpt-6.1-sol"),
             "Codex keeps known normal models when the runtime returns a partial catalog");
         Require(sol["supportsFastMode"]!.GetValue<bool>(), "Codex keeps runtime speed-tier support");
         Require(sol["displayName"]!.GetValue<string>() == "GPT Sol 5.6", "Codex keeps the Sol product label");
@@ -88,13 +76,12 @@ internal static class Program
         var astra = codex.Models.OfType<JsonObject>().Single(row => row["value"]!.GetValue<string>() == "gpt-6-astra");
         Require(astra["supportedEffortLevels"]!.AsArray().Count == 2, "Known hidden normal models keep the runtime's options");
         Require(!astra["supportsFastMode"]!.GetValue<bool>(), "An explicit empty speed tier list stays disabled");
-        Require(codex.Models.Count == 8, "Retired and internal models do not add menu entries");
+        Require(codex.Models.Count == CodexModelCatalog.Current.Length, "Retired and internal models do not add menu entries");
         typeof(CodexSession).GetMethod("BuildModels", Hidden)!.Invoke(codex, new object?[] { null });
         Require(codex.Models.Any(row => row!["value"]!.GetValue<string>() == "default"), "Empty catalogs retain the provider default");
         var luna = codex.Models.OfType<JsonObject>().Single(row => row["value"]!.GetValue<string>() == "gpt-5.6-luna");
         Require(!luna["supportedEffortLevels"]!.AsArray().Any(level => level!.GetValue<string>() == "ultra"), "Fallback reasoning remains model-specific");
-        var spark = codex.Models.OfType<JsonObject>().Single(row => row["value"]!.GetValue<string>() == "gpt-5.3-codex-spark");
-        Require(!spark["supportsFastMode"]!.GetValue<bool>(), "Spark fallback does not advertise a separate priority tier");
+        Require(codex.Models.All(row => row!["value"]!.GetValue<string>() != "gpt-5.3-codex-spark"), "Retired models stay out of the fallback catalog");
         Console.WriteLine("PASS: live and fallback provider catalogs, reasoning levels and speed tiers");
     }
 

@@ -33,12 +33,17 @@ public sealed class OpenInEditorDialog : Window
         var header = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
         header.Children.Add(new TextBlock
         {
-            Text = "Open in editor", FontSize = 16, FontWeight = FontWeights.SemiBold, Foreground = Fg,
+            Text = "Open in editor",
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Fg,
         });
         header.Children.Add(new TextBlock
         {
             Text = Path.GetFileName(file) + (line is > 0 ? $"  ·  line {line}" : ""),
-            FontSize = 11.5, Foreground = Faint, Margin = new Thickness(0, 3, 0, 0),
+            FontSize = 11.5,
+            Foreground = Faint,
+            Margin = new Thickness(0, 3, 0, 0),
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
         DockPanel.SetDock(header, Dock.Top);
@@ -72,7 +77,9 @@ public sealed class OpenInEditorDialog : Window
             {
                 panel.Children.Add(new TextBlock
                 {
-                    Text = ed.Executable, FontSize = 10, Foreground = Faint,
+                    Text = ed.Executable,
+                    FontSize = 10,
+                    Foreground = Faint,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 });
             }

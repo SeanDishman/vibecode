@@ -10,6 +10,8 @@ namespace VibeCode.Protocol;
 
 public sealed class CodexSessionOptions
 {
+    /// <summary>Captured account identity; null uses the provider default, empty uses the shared subscription login.</summary>
+    public string? AccountId { get; init; }
     /// <summary>Isolated conversational planning: remove shell, patch, web and code tools for this process only.</summary>
     public bool DialogueOnly { get; init; }
     public JsonObject? DialogueOutputSchema { get; init; }
@@ -19,9 +21,12 @@ public sealed class CodexSessionOptions
     public string? HomeDirectory { get; init; }
     public string? Resume { get; init; }
     public bool ForkSession { get; init; }
+    /// <summary>A tool-configuration reconnect keeps the transcript already rendered by the host.</summary>
+    public bool SkipHistoryReplay { get; init; }
     public string? Model { get; init; }
     public string? Effort { get; init; }
     public bool FastMode { get; init; }
+    public bool UltrafastMode { get; init; }
     public string? Title { get; init; }
     public string PermissionMode { get; init; } = "default";
     public string? AppendSystemPrompt { get; init; }
@@ -66,6 +71,31 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     public bool HasExited => _disposed || (!_launchPending && (_proc is null || _proc.HasExited));
 
     private readonly CodexSessionOptions _options;
+    private readonly SemaphoreSlim _reportingReloadGate = new(1, 1);
+    private int _reportingVersion, _loadedReportingVersion;
+
+    private void OnReportingChanged()
+    {
+        Interlocked.Increment(ref _reportingVersion);
+        if (SessionId is not null && !_disposed) _ = RefreshReportingAsync();
+    }
+
+    private async Task RefreshReportingAsync()
+    {
+        await _reportingReloadGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var version = Volatile.Read(ref _reportingVersion);
+            if (_disposed || SessionId is null || version == _loadedReportingVersion) return;
+            AgentStatusReporting.RegisterHome(_options.HomeDirectory ?? CodexEnvironment.HomeDirectory);
+            // Codex queues this until its next turn; never restart a running conversation to change reporting.
+            await RequestAsync("config/mcpServer/reload", new JsonObject()).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            _loadedReportingVersion = version;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or OperationCanceledException)
+        { CrashLog.Note("AgentStatusReportingReload", ex.GetType().Name); }
+        finally { _reportingReloadGate.Release(); }
+    }
     private Process? _proc;
     private StreamWriter? _stdin;
     // Stdin writes go through a single-consumer queue drained by a background task. Writing the pipe directly on
@@ -104,6 +134,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private string? _model;
     private string? _effort;
     private bool _fastMode;
+    private bool _ultrafastMode;
     private string _permissionMode;
     private string? _lastError;
     private JsonObject? _lastUsage;
@@ -138,6 +169,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         public string Task { get; set; } = "";
         public string Activity { get; set; } = "Starting";
         public string Status { get; set; } = "pendingInit";
+        public string? Report { get; set; }
         public bool SawTurn { get; set; }
         public bool IsActive => Status is "pendingInit" or "running";
     }
@@ -175,6 +207,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         _model = NormalizeModelSelection(options.Model);
         _effort = options.Effort;
         _fastMode = options.FastMode;
+        _ultrafastMode = options.UltrafastMode;
         _permissionMode = options.PermissionMode;
         _effectiveAppendPrompt = string.IsNullOrWhiteSpace(options.AppendSystemPrompt)
             ? null
@@ -182,13 +215,15 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         _appendPromptPending = _effectiveAppendPrompt is not null;
     }
 
-    private string? ApiModel(string? model) => CodexModelCatalog.WireModel(model);
+    private string? ApiModel(string? model) =>
+    CodexModelCatalog.WireModel(model);
 
     public static string ResolveCliPath()
     {
         var candidates = new List<string>();
         if (Environment.GetEnvironmentVariable("VIBECODE_CODEX_PATH") is { Length: > 0 } configured)
             candidates.Add(configured);
+        if (CliInstallationService.ManagedPath("codex") is { } managed) candidates.Add(managed);
 
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         candidates.Add(Path.Combine(AppContext.BaseDirectory, "codex.exe"));
@@ -220,9 +255,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             }
             catch { /* malformed/inaccessible PATH entry */ }
         }
-        throw new FileNotFoundException(
-            "Could not find the OpenAI Codex runtime (codex.exe). Install it with `npm install -g @openai/codex`, " +
-            "then sign in from VibeCode's account menu. You can also point VibeCode at an existing binary with VIBECODE_CODEX_PATH.");
+        throw new FileNotFoundException("Codex CLI is missing. Open the account menu, select Codex, and click Install Codex CLI.");
     }
 
     /// <summary>
@@ -236,14 +269,19 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("features.fast_mode=true");
         if (dialogueOnly) return;
+        // Interactive research must have fresh web retrieval regardless of the model selected. Keep the override
+        // local to this process; do not rewrite the user's native config or the organization's requirements.
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("web_search=\"live\"");
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("features.default_mode_request_user_input=true");
     }
 
     public void Start()
     {
+        AgentStatusReporting.Changed += OnReportingChanged;
         var psi = CodexEnvironment.CreateAppServerStartInfo(_options.Cwd, _options.HomeDirectory,
-            _options.SwarmsEnabled, _options.SwarmMaxWorkers, _options.McpServers);
+            _options.SwarmsEnabled, _options.SwarmMaxWorkers, _options.McpServers, _options.AccountId);
         AddSessionFeatureFlags(psi, _options.DialogueOnly);
         ConfigureDialogueOnlyProcess(psi);
         StartArtifactWatcher();
@@ -304,6 +342,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                     ["title"] = "VibeCode",
                     ["version"] = "1.0.0",
                 },
+
                 // client opts into experimental fields. Older servers ignore the capability.
                 ["capabilities"] = new JsonObject { ["experimentalApi"] = true },
             });
@@ -321,6 +360,8 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             // Hidden models are requested and then filtered in BuildModels rather than dropped here. OpenAI
             // ships a new flagship as hidden:true for its first days - GPT-6 Astra was still hidden the day
             // after launch - so asking for the visible set alone would hide the best model VibeCode can offer
+
+
             var modelResponse = await RequestAsync("model/list", new JsonObject
             {
                 ["limit"] = 100,
@@ -338,6 +379,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             var startModel = ApiModel(_model);
             if (!string.IsNullOrWhiteSpace(startModel) && startModel != "default") p["model"] = startModel;
             ApplyServiceTier(p, startModel);
+            if (!_options.DialogueOnly) p["config"] = new JsonObject { ["web_search"] = "live" };
             ApplySecurity(p, legacyThreadShape: true);
             ConfigureDialogueOnlyThread(p);
             var threadResponse = await RequestAsync(method, p);
@@ -345,6 +387,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             SessionId = threadResponse?["result"]?["thread"]?["id"]?.GetValue<string>()
                         ?? threadResponse?["result"]?["thread"]?["sessionId"]?.GetValue<string>();
             if (SessionId is null) throw new InvalidOperationException("Codex app-server did not return a thread id.");
+            await RefreshReportingAsync();
 
             // Naming a fresh thread creates durable user-facing metadata without spending a model turn. It also
             // keeps an empty host chat resumable if the user activates a Bridge before sending its first message.
@@ -392,7 +435,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                     const string label = "Codex Bridge";
                     Emit(new JsonObject
                     {
-                        ["type"] = "system", ["subtype"] = "permission_denied", ["tool_name"] = label,
+                        ["type"] = "system",
+                        ["subtype"] = "permission_denied",
+                        ["tool_name"] = label,
                         ["message"] = "Session instructions will be applied on the first message; early thread persistence was unavailable: " + ex.Message,
                     });
                 }
@@ -406,7 +451,8 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                 ["model"] = _model ?? DefaultModelId(),
                 ["permissionMode"] = _permissionMode,
             });
-            if (_options.Resume is not null)
+            ObserveMonitorAccess(threadResponse?["result"]);
+            if (_options.Resume is not null && !_options.SkipHistoryReplay)
             {
                 _hydratingHistory = true;
                 try { await HydrateHistoryAsync(); }
@@ -469,7 +515,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             // model context; show a warning and let the user continue in the live thread.
             Emit(new JsonObject
             {
-                ["type"] = "system", ["subtype"] = "permission_denied", ["tool_name"] = "Codex history",
+                ["type"] = "system",
+                ["subtype"] = "permission_denied",
+                ["tool_name"] = "Codex history",
                 ["message"] = "The thread resumed, but its previous messages could not be displayed: " + ex.Message,
             });
         }
@@ -506,12 +554,11 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             foreach (var entry in data.OfType<JsonObject>())
             {
                 var id = entry["id"]?.GetValue<string>() ?? entry["model"]?.GetValue<string>() ?? "";
-                if (id.Length == 0 || IsRetiredModel(id)) continue;
+                if (id.Length == 0 || IsRetiredModel(id) || CodexModelCatalog.IsLegacyAlias(id)) continue;
                 // Hidden entries are retired, internal, or a flagship OpenAI has not unhidden yet.
-                // Keep the current lineup and Spark, plus the model this chat is already running.
+                // Keep the current lineup, plus the model this chat is already running.
                 if (entry["hidden"]?.GetValue<bool>() == true
                     && !CodexModelCatalog.IsCurrentModel(id)
-                    && !string.Equals(id, SparkModelId, StringComparison.OrdinalIgnoreCase)
                     && !string.Equals(ApiModel(_model), id, StringComparison.OrdinalIgnoreCase))
                     continue;
                 live.Add(CatalogRow(entry, id));
@@ -524,9 +571,12 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         {
             Models.Add(new JsonObject
             {
-                ["value"] = "default", ["displayName"] = "Codex default", ["resolvedModel"] = "default",
+                ["value"] = "default",
+                ["displayName"] = "Codex default",
+                ["resolvedModel"] = "default",
                 ["supportedEffortLevels"] = new JsonArray("low", "medium", "high", "xhigh"),
-                ["supportsEffort"] = true, ["supportsAutoMode"] = true,
+                ["supportsEffort"] = true,
+                ["supportsAutoMode"] = true,
             });
         }
         else if (defaultRow is not null)
@@ -542,18 +592,11 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         foreach (var row in live)
         {
             var id = row["value"]?.GetValue<string>();
-            if (id is null || id == "default" || CodexModelCatalog.IsCurrentModel(id)
-                || string.Equals(id, SparkModelId, StringComparison.OrdinalIgnoreCase))
+            if (id is null || id == "default" || CodexModelCatalog.IsCurrentModel(id))
                 continue;
             if (!CodexModelCatalog.ShouldList(id)) continue;
             Models.Add(row);
         }
-
-        var spark = live.FirstOrDefault(row =>
-                        string.Equals(row["value"]?.GetValue<string>(), SparkModelId, StringComparison.OrdinalIgnoreCase))
-                    ?? SyntheticRow(SparkModelId, "GPT-5.3 Codex Spark", SparkDescription,
-                        ["low", "medium", "high", "xhigh"], knownFast: false);
-        Models.Add(spark);
 
         if (string.IsNullOrWhiteSpace(_model) || IsRetiredModel(_model))
             _model = DefaultModelId();
@@ -567,12 +610,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                 if (effort["reasoningEffort"]?.GetValue<string>() is { } level) levels.Add(level);
         var displayName = entry["displayName"]?.GetValue<string>() ?? id;
         var description = entry["description"]?.GetValue<string>();
-        if (string.Equals(id, SparkModelId, StringComparison.OrdinalIgnoreCase))
-        {
-            displayName = "GPT-5.3 Codex Spark";
-            description = SparkDescription;
-        }
-        else if (CodexModelCatalog.Find(id) is { } known)
+        if (CodexModelCatalog.Find(id) is { } known)
         {
             if (string.IsNullOrWhiteSpace(displayName)
                 || displayName.Equals(id, StringComparison.OrdinalIgnoreCase))
@@ -594,6 +632,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             ["supportsEffort"] = levels.Count > 0,
             ["supportsAutoMode"] = true,
             ["supportsFastMode"] = SupportsFastTier(entry),
+            ["supportsUltrafastMode"] = SupportsUltrafastTier(entry),
             ["isDefault"] = (entry["isDefault"]?.GetValue<bool>() ?? false),
         };
     }
@@ -609,11 +648,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             ["supportsEffort"] = true,
             ["supportsAutoMode"] = true,
             ["supportsFastMode"] = knownFast && KnownFastModel(id),
+            ["supportsUltrafastMode"] = false,
             ["isDefault"] = false,
         };
-
-    internal const string SparkModelId = "gpt-5.3-codex-spark";
-    internal const string SparkDescription = "Near-instant coding iteration. Text-only research preview for ChatGPT Pro.";
 
     /// <summary>Models VibeCode must never offer or send for a new/resumed Codex turn.</summary>
     internal static bool IsRetiredModel(string? id) => CodexModelCatalog.IsRetiredModel(id);
@@ -627,6 +664,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             or "gpt-5.6-sol" or "gpt-5.6-terra" or "gpt-5.6-luna" or "gpt-5.4";
     }
 
+    internal static bool KnownUltrafastModel(string? id) =>
+        CodexModelCatalog.WireModel(id) is "gpt-6-astra" or "gpt-6.1-sol";
+
     internal static bool SupportsFastTier(JsonObject entry)
     {
         // An explicitly empty live tier list means unsupported; fall back only for older catalogs.
@@ -637,14 +677,29 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         return KnownFastModel(SafeString(entry["model"] ?? entry["id"]));
     }
 
-    private void ApplyServiceTier(JsonObject request, string? model)
+    internal static bool SupportsUltrafastTier(JsonObject entry)
+    {
+        // Only explicit live availability proves eligibility (Pro $500 or an enabled workspace).
+        if ((entry["serviceTiers"] ?? entry["service_tiers"]) is JsonArray tiers)
+            return tiers.Any(tier => SafeString(tier is JsonObject ? tier["id"] : tier) == "ultrafast");
+        if ((entry["additionalSpeedTiers"] ?? entry["additional_speed_tiers"]) is JsonArray speeds)
+            return speeds.Any(tier => SafeString(tier) == "ultrafast");
+        return false;
+    }
+
+    private string ServiceTierFor(string? model)
     {
         var row = Models.OfType<JsonObject>().FirstOrDefault(entry =>
-            string.Equals(SafeString(entry["value"]), model, StringComparison.OrdinalIgnoreCase));
+            string.Equals(SafeString(entry["value"]), model, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(SafeString(entry["resolvedModel"]), model, StringComparison.OrdinalIgnoreCase));
+        if (_ultrafastMode)
+            return row?["supportsUltrafastMode"]?.GetValue<bool>() == true ? "ultrafast" : "default";
         var supported = row?["supportsFastMode"]?.GetValue<bool>() ?? KnownFastModel(model);
-        // Explicit standard clears the previous turn's priority tier, including on resume or a model switch.
-        request["serviceTier"] = _fastMode && supported ? "priority" : "default";
+        return _fastMode && supported ? "priority" : "default";
     }
+
+    // Explicit standard clears a previous faster tier on resume, model changes, and subsequent turns.
+    private void ApplyServiceTier(JsonObject request, string? model) => request["serviceTier"] = ServiceTierFor(model);
 
     /// <summary>The reasoning ladder for a fallback row. Per model rather than one shared list: the CLI gives
     /// Astra/Sol/Terra an "ultra" level that Luna does not have, and a level the CLI offers has to stay a level
@@ -709,6 +764,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         JsonObject? p = null;
         try
         {
+            await RefreshReportingAsync();
             var input = BuildInput(content);
             p = new JsonObject
             {
@@ -725,6 +781,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             RememberTurnPricing(p);
             var response = await RequestAsync("turn/start", p);
             TrackAcceptedTurn(response);
+            ObserveMonitorAccess(p, "accepted-turn");
         }
         catch (Exception ex)
         {
@@ -750,27 +807,27 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             {
                 case "text": AddText(block["text"]?.GetValue<string>() ?? ""); break;
                 case "image":
-                {
-                    var source = block["source"] as JsonObject;
-                    if (source?["data"]?.GetValue<string>() is { Length: > 0 } b64)
                     {
-                        var media = source["media_type"]?.GetValue<string>() ?? "image/png";
-                        var path = SaveAttachment(Convert.FromBase64String(b64), ExtensionFor(media));
-                        input.Add(new JsonObject { ["type"] = "localImage", ["path"] = path });
+                        var source = block["source"] as JsonObject;
+                        if (source?["data"]?.GetValue<string>() is { Length: > 0 } b64)
+                        {
+                            var media = source["media_type"]?.GetValue<string>() ?? "image/png";
+                            var path = SaveAttachment(Convert.FromBase64String(b64), ExtensionFor(media));
+                            input.Add(new JsonObject { ["type"] = "localImage", ["path"] = path });
+                        }
+                        break;
                     }
-                    break;
-                }
                 case "document":
-                {
-                    var source = block["source"] as JsonObject;
-                    if (source?["data"]?.GetValue<string>() is { Length: > 0 } b64)
                     {
-                        var media = source["media_type"]?.GetValue<string>() ?? "application/pdf";
-                        var path = SaveAttachment(Convert.FromBase64String(b64), ExtensionFor(media));
-                        AddText($"A document is attached at `{path}`. Read it as part of this request.");
+                        var source = block["source"] as JsonObject;
+                        if (source?["data"]?.GetValue<string>() is { Length: > 0 } b64)
+                        {
+                            var media = source["media_type"]?.GetValue<string>() ?? "application/pdf";
+                            var path = SaveAttachment(Convert.FromBase64String(b64), ExtensionFor(media));
+                            AddText($"A document is attached at `{path}`. Read it as part of this request.");
+                        }
+                        break;
                     }
-                    break;
-                }
             }
         }
         return input;
@@ -798,8 +855,11 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
 
     private static string ExtensionFor(string media) => media.ToLowerInvariant() switch
     {
-        "image/jpeg" => ".jpg", "image/gif" => ".gif", "image/webp" => ".webp",
-        "application/pdf" => ".pdf", _ => ".png",
+        "image/jpeg" => ".jpg",
+        "image/gif" => ".gif",
+        "image/webp" => ".webp",
+        "application/pdf" => ".pdf",
+        _ => ".png",
     };
 
     private void ApplySecurity(JsonObject p, bool legacyThreadShape)
@@ -880,6 +940,14 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private void HandleNotification(string method, JsonObject? p)
     {
         NotificationReceived?.Invoke(method, p?.DeepClone().AsObject());
+        var monitorParams = p;
+        if (method == "serverRequest/resolved" && p?["threadId"] is null && p?["requestId"] is { } requestId
+            && _approvalParams.TryGetValue("codex:" + RpcKey(requestId), out var originalApproval)
+            && originalApproval["threadId"] is { } approvalThread)
+        {
+            monitorParams = p.DeepClone().AsObject();
+            monitorParams["threadId"] = approvalThread.DeepClone();
+        }
         var threadId = NotificationThreadId(p);
         var isRootThread = IsRootThread(threadId);
         switch (method)
@@ -959,6 +1027,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     // HandleLine; this avoids launching a model turn just to verify parent/child event scoping.
     internal void PrimeNotificationFixture(string sessionId) => SessionId = sessionId;
     internal void HandleNotificationFixture(string method, JsonObject? p) => HandleNotification(method, p);
+    internal void ObserveMonitorAccess(JsonNode? settings, string source = "server")
+    {
+    }
 
     private static string? NotificationThreadId(JsonObject? p)
     {
@@ -1113,7 +1184,8 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             _streamIndexByItem[itemId] = index;
             EmitStreamEvent(new JsonObject
             {
-                ["type"] = "content_block_start", ["index"] = index,
+                ["type"] = "content_block_start",
+                ["index"] = index,
                 ["content_block"] = new JsonObject { ["type"] = blockType, [blockType] = "" },
             }, subagentThreadId);
         }
@@ -1121,7 +1193,8 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         if (delta.Length == 0) return;
         EmitStreamEvent(new JsonObject
         {
-            ["type"] = "content_block_delta", ["index"] = index,
+            ["type"] = "content_block_delta",
+            ["index"] = index,
             ["delta"] = new JsonObject { ["type"] = deltaType, [deltaField] = delta },
         }, subagentThreadId);
     }
@@ -1241,30 +1314,31 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         switch (item["type"]?.GetValue<string>())
         {
             case "commandExecution":
-            {
-                var command = SafeString(item["command"]) ?? "";
-                var patchChanges = ShellPatchChanges(command);
-                if (patchChanges.Count > 0)
                 {
-                    AnnounceShellPatchTools(id, patchChanges, subagentThreadId);
-                }
-                else
-                {
-                    BeginCommandCapture(id);
-                    AnnounceTool(id, "Bash", new JsonObject
+                    var command = SafeString(item["command"]) ?? "";
+                    var patchChanges = ShellPatchChanges(command);
+                    if (patchChanges.Count > 0)
                     {
-                        ["command"] = command,
-                        ["cwd"] = SafeString(item["cwd"]),
-                    }, subagentThreadId: subagentThreadId);
+                        AnnounceShellPatchTools(id, patchChanges, subagentThreadId);
+                    }
+                    else
+                    {
+                        BeginCommandCapture(id);
+                        AnnounceTool(id, "Bash", new JsonObject
+                        {
+                            ["command"] = command,
+                            ["cwd"] = SafeString(item["cwd"]),
+                        }, subagentThreadId: subagentThreadId);
+                    }
+                    break;
                 }
-                break;
-            }
             case "mcpToolCall":
                 AnnounceTool(id, McpName(item), item["arguments"]?.DeepClone(), subagentThreadId: subagentThreadId);
                 break;
             case "webSearch":
                 AnnounceTool(id, "WebSearch", WebSearchInput(item), subagentThreadId: subagentThreadId);
                 break;
+            case "collabToolCall":
             case "collabAgentToolCall": ObserveCollabAgentTool(item); break;
             case "subAgentActivity": ObserveSubagentActivity(item); break;
         }
@@ -1279,41 +1353,41 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             case "agentMessage": EmitAssistantText(item["text"]?.GetValue<string>() ?? "", subagentThreadId); break;
             case "plan": EmitAssistantText(item["text"]?.GetValue<string>() ?? "", subagentThreadId); break;
             case "reasoning":
-            {
-                var text = JoinText(item["summary"] ?? item["content"]);
-                if (!string.IsNullOrWhiteSpace(text))
-                    EmitAssistantBlock(new JsonObject { ["type"] = "thinking", ["thinking"] = text }, subagentThreadId);
-                break;
-            }
+                {
+                    var text = JoinText(item["summary"] ?? item["content"]);
+                    if (!string.IsNullOrWhiteSpace(text))
+                        EmitAssistantBlock(new JsonObject { ["type"] = "thinking", ["thinking"] = text }, subagentThreadId);
+                    break;
+                }
             case "commandExecution":
-            {
-                _startedItems.TryGetValue(id, out var startedCommand);
-                var command = SafeString(item["command"]) ?? SafeString(startedCommand?["command"]) ?? "";
-                var patchChanges = ShellPatchChanges(command);
-                var failed = Failed(item);
-                var output = SafeString(item["aggregatedOutput"]) ?? "";
-                if (patchChanges.Count > 0)
                 {
-                    AnnounceShellPatchTools(id, patchChanges, subagentThreadId);
-                    for (var i = 0; i < patchChanges.Count; i++)
+                    _startedItems.TryGetValue(id, out var startedCommand);
+                    var command = SafeString(item["command"]) ?? SafeString(startedCommand?["command"]) ?? "";
+                    var patchChanges = ShellPatchChanges(command);
+                    var failed = Failed(item);
+                    var output = SafeString(item["aggregatedOutput"]) ?? "";
+                    if (patchChanges.Count > 0)
                     {
-                        var change = patchChanges[i];
-                        if (!failed) _turnFileChangePaths.Add(AbsoluteArtifactPath(change.Path));
-                        SettleTool(ShellPatchToolId(id, i),
-                            output.Length > 0 ? output : failed ? "Patch failed" : "File updated",
-                            failed, subagentThreadId);
+                        AnnounceShellPatchTools(id, patchChanges, subagentThreadId);
+                        for (var i = 0; i < patchChanges.Count; i++)
+                        {
+                            var change = patchChanges[i];
+                            if (!failed) _turnFileChangePaths.Add(AbsoluteArtifactPath(change.Path));
+                            SettleTool(ShellPatchToolId(id, i),
+                                output.Length > 0 ? output : failed ? "Patch failed" : "File updated",
+                                failed, subagentThreadId);
+                        }
                     }
+                    else
+                    {
+                        AnnounceTool(id, "Bash",
+                            new JsonObject { ["command"] = command, ["cwd"] = SafeString(item["cwd"] ?? startedCommand?["cwd"]) },
+                            subagentThreadId: subagentThreadId);
+                        SettleTool(id, output, failed, subagentThreadId);
+                    }
+                    EndCommandCapture(id);
+                    break;
                 }
-                else
-                {
-                    AnnounceTool(id, "Bash",
-                        new JsonObject { ["command"] = command, ["cwd"] = SafeString(item["cwd"] ?? startedCommand?["cwd"]) },
-                        subagentThreadId: subagentThreadId);
-                    SettleTool(id, output, failed, subagentThreadId);
-                }
-                EndCommandCapture(id);
-                break;
-            }
             case "fileChange": TranslateFileChanges(id, item, subagentThreadId); break;
             case "mcpToolCall":
                 AnnounceTool(id, McpName(item), item["arguments"]?.DeepClone(), subagentThreadId: subagentThreadId);
@@ -1330,6 +1404,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                 var searchError = JoinText(item["error"]);
                 SettleTool(id, searchError, Failed(item) || !string.IsNullOrWhiteSpace(searchError), subagentThreadId);
                 break;
+            case "collabToolCall":
             case "collabAgentToolCall": ObserveCollabAgentTool(item); break;
             case "subAgentActivity": ObserveSubagentActivity(item); break;
             case "exitedReviewMode": EmitAssistantText(item["review"]?.GetValue<string>() ?? "", subagentThreadId); break;
@@ -1369,30 +1444,40 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             foreach (var id in receivers.Select(SafeString).Where(x => !string.IsNullOrWhiteSpace(x))) ids.Add(id!);
         if (states is not null)
             foreach (var entry in states) ids.Add(entry.Key);
+        // The published app-server contract also uses the singular collabToolCall shape. Accept both it and
+        // the multi-receiver collabAgentToolCall schema generated by the installed CLI.
+        foreach (var key in new[] { "newThreadId", "receiverThreadId" })
+            if (SafeString(item[key]) is { Length: > 0 } singularId) ids.Add(singularId);
 
         foreach (var id in ids)
         {
             var agent = EnsureSubagent(id, tool == "spawnAgent" ? prompt : null);
-            var reported = states?[id] as JsonObject;
-            var reportedStatus = SafeString(reported?["status"]);
+            var reported = (states?[id] ?? item["agentStatus"]) as JsonObject;
+            var reportedStatus = SafeString(reported?["status"]) ?? SafeString(item["agentStatus"]);
             var reportedMessage = SafeString(reported?["message"]);
             var status = !string.IsNullOrWhiteSpace(reportedStatus) ? reportedStatus! : tool switch
             {
                 "spawnAgent" when callStatus == "failed" => "errored",
-                "spawnAgent" => agent.Status is "completed" or "interrupted" or "errored" ? agent.Status : "pendingInit",
-                "sendInput" or "resumeAgent" when callStatus != "failed" => "running",
+                "spawnAgent" when callStatus == "interrupted" => "interrupted",
+                "spawnAgent" => agent.Status,
+                "sendInput" or "resumeAgent" or "followupTask" when callStatus != "failed" => "running",
+                "interruptAgent" when callStatus == "completed" => "interrupted",
                 "closeAgent" when callStatus == "completed" => "shutdown",
                 _ => agent.Status,
             };
             var activity = !string.IsNullOrWhiteSpace(reportedMessage) ? reportedMessage! : tool switch
             {
-                "spawnAgent" => callStatus == "failed" ? "Could not start" : "Starting",
-                "sendInput" => callStatus == "failed" ? "Follow-up failed" : "Receiving follow-up",
+                "spawnAgent" => callStatus == "failed" ? "Could not start"
+                    : status == "pendingInit" ? "Starting" : agent.Activity,
+                "sendInput" or "followupTask" => callStatus == "failed" ? "Follow-up failed" : "Receiving follow-up",
+                "interruptAgent" => callStatus == "completed" ? "Interrupted" : "Stopping",
                 "resumeAgent" => callStatus == "failed" ? "Resume failed" : "Resuming",
                 "wait" => status is "completed" or "interrupted" or "errored" ? "Finished" : "Working",
                 "closeAgent" => callStatus == "completed" ? "Closed" : "Closing",
                 _ => agent.Activity,
             };
+            if (status is "completed" or "errored" && !string.IsNullOrWhiteSpace(reportedMessage))
+                agent.Report = reportedMessage;
             ApplySubagentState(agent, status, activity, notify: false);
         }
 
@@ -1407,11 +1492,18 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         var label = string.IsNullOrWhiteSpace(path) ? null : path!.TrimEnd('/', '\\').Split('/', '\\').LastOrDefault();
         var kind = SafeString(item["kind"]);
         var agent = EnsureSubagent(threadId!, label: label);
-        ApplySubagentState(agent, kind == "interrupted" ? "interrupted" : "running", kind switch
+        ApplySubagentState(agent, kind switch
+        {
+            "interrupted" => "interrupted",
+            "completed" => "completed",
+            "started" => "running",
+            _ => agent.Status,
+        }, kind switch
         {
             "started" => "Starting",
             "interacted" => "Working",
             "interrupted" => "Interrupted",
+            "completed" => "Finished",
             _ => agent.Activity,
         }, notify: false);
         NotifySubagentStateChanged();
@@ -1420,8 +1512,8 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private void ObserveSubagentItem(string threadId, JsonObject item, bool completed)
     {
         var agent = EnsureSubagent(threadId);
-        if (!completed || agent.IsActive) agent.Status = "running";
-        agent.Activity = TruncateDisplay(SubagentItemActivity(item, completed), 180);
+        ApplySubagentState(agent, !completed || agent.IsActive ? "running" : agent.Status,
+            SubagentItemActivity(item, completed), notify: false);
         NotifySubagentStateChanged();
     }
 
@@ -1439,7 +1531,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             "reasoning" => "Reasoning",
             "plan" => "Planning",
             "agentMessage" => "Writing its report",
-            "collabAgentToolCall" => "Coordinating subagents",
+            "collabAgentToolCall" or "collabToolCall" => "Coordinating subagents",
             "dynamicToolCall" => "Using · " + (SafeString(item["tool"]) ?? "tool"),
             "contextCompaction" => "Compacting context",
             _ => type,
@@ -1515,6 +1607,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             _subagentsCancelledBeforeStart.TryRemove(agent.ThreadId, out _);
         }
         if (!string.IsNullOrWhiteSpace(status)) agent.Status = status;
+        // A parent activity/wait result can be the only terminal notification for a child. Retire its active
+        // turn too, or a finished worker keeps the root completion waiting forever.
+        if (!agent.IsActive) _activeSubagentTurns.TryRemove(agent.ThreadId, out _);
         if (!string.IsNullOrWhiteSpace(activity)) agent.Activity = TruncateDisplay(activity!, 180);
         if (notify) NotifySubagentStateChanged();
     }
@@ -1537,6 +1632,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                 ["task"] = agent.Task,
                 ["activity"] = agent.Activity,
                 ["status"] = agent.Status,
+                ["report"] = agent.Report,
             });
         Emit(new JsonObject { ["type"] = "system", ["subtype"] = "subagent_update", ["agents"] = agents });
     }
@@ -2018,8 +2114,10 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                 ["role"] = "user",
                 ["content"] = new JsonArray(new JsonObject
                 {
-                    ["type"] = "tool_result", ["tool_use_id"] = id,
-                    ["content"] = result, ["is_error"] = failed,
+                    ["type"] = "tool_result",
+                    ["tool_use_id"] = id,
+                    ["content"] = result,
+                    ["is_error"] = failed,
                 }),
             },
         }, subagentThreadId);
@@ -2183,8 +2281,11 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     {
         Emit(new JsonObject
         {
-            ["type"] = "result", ["subtype"] = "error", ["is_error"] = true,
-            ["result"] = $"{title}: {detail}", ["usage"] = new JsonObject(),
+            ["type"] = "result",
+            ["subtype"] = "error",
+            ["is_error"] = true,
+            ["result"] = $"{title}: {detail}",
+            ["usage"] = new JsonObject(),
         });
     }
 
@@ -2291,7 +2392,13 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
 
     public Task SetFastModeAsync(bool enabled)
     {
-        _fastMode = enabled;
+        return SetSpeedAsync(enabled, false);
+    }
+
+    public Task SetSpeedAsync(bool fastMode, bool ultrafastMode)
+    {
+        _fastMode = fastMode && !ultrafastMode;
+        _ultrafastMode = ultrafastMode;
         return Task.CompletedTask;
     }
 
@@ -2501,6 +2608,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
 
     public void Dispose()
     {
+        AgentStatusReporting.Changed -= OnReportingChanged;
         _disposed = true;
         _launchPending = false;
         CancelReserveRecovery();

@@ -10,7 +10,7 @@ using VibeCode.Protocol;
 using VibeCode.Services;
 using VibeCode.UI;
 
-internal static class Program
+internal static partial class Program
 {
     private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
     private static readonly List<ChatViewModel> Chats = [];
@@ -34,9 +34,8 @@ internal static class Program
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         app.Resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(
             new Uri("/VibeCode;component/Themes/Dark.xaml", UriKind.Relative)));
-        AppSettings.Current.AgentMemoryEnabled = AppSettings.Current.AgentSwarmsEnabled = false;
+        AppSettings.Current.AgentMemoryEnabled = false;
         AppSettings.Current.NotifyOnTurnEnd = AppSettings.Current.NotifyOnAwaitingInput = false;
-
         AppSettings.Current.TelemetryLiveAnimation = false;
         try
         {
@@ -44,8 +43,10 @@ internal static class Program
             VerifyActualModelAndUnfinishedUsage();
             VerifyHudLifecycle();
             VerifyKimiInterruptedBaseline();
-            PumpUntil(() => File.Exists(UsageLog.FilePath)
-                && File.ReadLines(UsageLog.FilePath).Count() == UsageLog.Instance.Count);
+            VerifySingleTerminalTeamUsage();
+            VerifyPlanningUsage();
+            VerifyUltrafastUsage();
+            WaitForUsageHistory();
             Check("every completed or interrupted usage row reaches durable history", File.ReadLines(UsageLog.FilePath).Count() == UsageLog.Instance.Count);
             Console.WriteLine($"PASS: {Checks} Bridge usage checks. No provider sessions or model generations. Evidence: {Root}");
             return 0;
@@ -62,7 +63,10 @@ internal static class Program
     {
         var chat = new ChatViewModel(Root, resume: Guid.NewGuid().ToString(), accountId: "test-claude", provider: "claude")
         {
-            Model = selectedModel, ExcludeFromMemory = true, BridgeLabel = name, Status = "running",
+            Model = selectedModel,
+            ExcludeFromMemory = true,
+            BridgeLabel = name,
+            Status = "running",
         };
         chat.IsBridgeManager = role == "orchestrator";
         Chats.Add(chat);
@@ -70,10 +74,20 @@ internal static class Program
         return chat;
     }
 
+    private static void WaitForUsageHistory()
+    {
+        var gate = typeof(UsageLog).GetField("_gate", Hidden)!.GetValue(UsageLog.Instance)!;
+        var flushing = typeof(UsageLog).GetField("_flushing", Hidden)!;
+        // Wait for the asynchronous writer to close the file before testing a fresh application load.
+        PumpUntil(() => { lock (gate) return !(bool)flushing.GetValue(UsageLog.Instance)!; });
+    }
+
     private static JsonObject Usage(int multiplier = 1) => new()
     {
-        ["input_tokens"] = 200 * multiplier, ["cache_creation_input_tokens"] = 30 * multiplier,
-        ["cache_read_input_tokens"] = 20 * multiplier, ["output_tokens"] = 10 * multiplier,
+        ["input_tokens"] = 200 * multiplier,
+        ["cache_creation_input_tokens"] = 30 * multiplier,
+        ["cache_read_input_tokens"] = 20 * multiplier,
+        ["output_tokens"] = 10 * multiplier,
     };
 
     private static void Feed(ChatViewModel chat, string id = "msg-1") => Call(chat, "CaptureClaudeAssistantUsage",
@@ -146,11 +160,18 @@ internal static class Program
         Check("failed Bridge usage is counted once", LiveTurnTelemetry.Instance.StreamingCount == 0);
         Call(failing, "ApplyResult", new JsonObject { ["usage"] = Usage() });
         Check("a late final report cannot duplicate preserved error usage", UsageLog.Instance.Count == before + 1);
-        Call(failing, "IngestSdk", new JsonObject { ["type"] = "assistant", ["message"] = new JsonObject
+        Call(failing, "IngestSdk", new JsonObject
         {
-            ["id"] = "late-message", ["role"] = "assistant", ["model"] = "claude-fable-5-1",
-            ["usage"] = Usage(), ["content"] = new JsonArray(),
-        } });
+            ["type"] = "assistant",
+            ["message"] = new JsonObject
+            {
+                ["id"] = "late-message",
+                ["role"] = "assistant",
+                ["model"] = "claude-fable-5-1",
+                ["usage"] = Usage(),
+                ["content"] = new JsonArray(),
+            }
+        });
         Check("queued SDK messages cannot resurrect already-preserved live usage", LiveTurnTelemetry.Instance.StreamingCount == 0);
         Call(failing, "BeginTurnPricing"); failing.Status = "running"; Feed(failing, "msg-retry");
         Call(failing, "ApplyResult", new JsonObject { ["usage"] = Usage() });
@@ -196,7 +217,10 @@ internal static class Program
     {
         var chat = new ChatViewModel(Root, resume: Guid.NewGuid().ToString(), provider: "kimi")
         {
-            Model = "kimi-k2.7-code", Status = "running", BridgeLabel = "Kimi worker", ExcludeFromMemory = true,
+            Model = "kimi-k2.7-code",
+            Status = "running",
+            BridgeLabel = "Kimi worker",
+            ExcludeFromMemory = true,
         };
         Chats.Add(chat); Call(chat, "BeginTurnPricing");
         var before = UsageLog.Instance.Entries().Sum(e => e.Total);

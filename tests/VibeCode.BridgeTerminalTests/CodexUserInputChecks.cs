@@ -34,7 +34,7 @@ internal static partial class Program
         var (_, codexTeam) = Team("codex-question", 1);
         var codex = codexTeam[0];
         Call(codex, "OnPermissionRequested", new PermissionRequest
-            { RequestId = "codex:7", ToolName = "AskUserQuestion", ToolUseId = "call_1", Input = CodexColorQuestion() });
+        { RequestId = "codex:7", ToolName = "AskUserQuestion", ToolUseId = "call_1", Input = CodexColorQuestion() });
         var card = codex.Items.OfType<PermItem>().Last();
         Check("a Codex question card keeps the question id and options", card.Kind == "question"
             && card.Questions.Single().Id == "preferred_color"
@@ -54,7 +54,9 @@ internal static partial class Program
         var claude = claudeTeam[0];
         Call(claude, "OnPermissionRequested", new PermissionRequest
         {
-            RequestId = "claude:1", ToolName = "AskUserQuestion", ToolUseId = "toolu_1",
+            RequestId = "claude:1",
+            ToolName = "AskUserQuestion",
+            ToolUseId = "toolu_1",
             Input = JsonNode.Parse("""{"questions":[{"question":"Which color do you prefer?","header":"Color","multiSelect":false,"options":[{"label":"Red","description":"r"},{"label":"Blue","description":"b"}]}]}"""),
         });
         var claudeCard = claude.Items.OfType<PermItem>().Last();
@@ -74,7 +76,7 @@ internal static partial class Program
         handle.Invoke(session, ["item/tool/requestUserInput", CodexColorQuestion(), JsonValue.Create(8)]);
         Check("an interactive Codex session raises the question card and waits", raised?.ToolName == "AskUserQuestion" && !wire.Reader.TryRead(out _));
         session.RespondPermission(raised!.RequestId, new JsonObject
-            { ["behavior"] = "allow", ["updatedInput"] = new JsonObject { ["answers"] = cardAnswers.DeepClone() } }, raised.ToolUseId);
+        { ["behavior"] = "allow", ["updatedInput"] = new JsonObject { ["answers"] = cardAnswers.DeepClone() } }, raised.ToolUseId);
         Check("the reply on the wire is exactly what live Codex accepted",
             wire.Reader.TryRead(out var reply) && reply == """{"id":8,"result":{"answers":{"preferred_color":{"answers":["Blue"]}}}}""");
     }

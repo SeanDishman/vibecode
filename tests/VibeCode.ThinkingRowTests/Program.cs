@@ -216,7 +216,8 @@ internal static class Program
         Ingest(chat, BlockStart(index, Text("")));
         Ingest(chat, Stream(new JsonObject
         {
-            ["type"] = "content_block_delta", ["index"] = index,
+            ["type"] = "content_block_delta",
+            ["index"] = index,
             ["delta"] = new JsonObject { ["type"] = "text_delta", ["text"] = text },
         }));
         Ingest(chat, BlockStop(index));
@@ -242,7 +243,8 @@ internal static class Program
         Stream(new JsonObject { ["type"] = "content_block_start", ["index"] = index, ["content_block"] = block });
     private static JsonObject ThinkingDelta(int index, string text) => Stream(new JsonObject
     {
-        ["type"] = "content_block_delta", ["index"] = index,
+        ["type"] = "content_block_delta",
+        ["index"] = index,
         ["delta"] = new JsonObject { ["type"] = "thinking_delta", ["thinking"] = text },
     });
     private static JsonObject BlockStop(int index) => Stream(new JsonObject { ["type"] = "content_block_stop", ["index"] = index });

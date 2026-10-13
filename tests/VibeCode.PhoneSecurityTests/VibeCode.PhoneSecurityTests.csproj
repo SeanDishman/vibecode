@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="../../VibeCode.Desktop/VibeCode.Desktop.csproj" />
     <Compile Include="../../VibeCode.Desktop/Services/PhoneRequestProof.cs" Link="PhoneRequestProof.cs" />
+    <Compile Include="../../VibeCode.Desktop/Services/PhoneAesChannel.cs" Link="PhoneAesChannel.cs" />
     <None Update="InteropProof.java" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

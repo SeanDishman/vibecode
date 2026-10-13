@@ -12,6 +12,8 @@ namespace VibeCode.Protocol;
 
 public sealed class KimiSessionOptions
 {
+    /// <summary>Captured account identity; null uses the provider default, empty uses the shared subscription login.</summary>
+    public string? AccountId { get; init; }
     public required string Cwd { get; init; }
     public string? Resume { get; init; }
     public bool ForkSession { get; init; }
@@ -25,9 +27,7 @@ public sealed class KimiSessionOptions
     public string? AppendSystemPrompt { get; init; }
     /// <summary>Immutable VibeCode MCP snapshot forwarded through ACP for this session.</summary>
     public IReadOnlyList<McpServerDefinition>? McpServers { get; init; }
-    /// <summary>Internal ACP flavor switch used by the first-class <see cref="GrokSession"/> facade.</summary>
-    internal bool UseGrokProtocol { get; init; }
-    internal string? GrokAuthFilePath { get; init; }
+    internal bool UseGeminiProtocol { get; init; }
 }
 
 /// <summary>
@@ -35,7 +35,7 @@ public sealed class KimiSessionOptions
 /// JSON-RPC 2.0 over newline-delimited stdio. This class translates ACP's session updates and
 /// reverse permission requests to the Claude-shaped stream consumed by <see cref="UI.ChatViewModel"/>.
 /// </summary>
-public sealed class KimiSession : ICodingSession, ISteerableSession
+public sealed partial class KimiSession : ICodingSession, ISteerableSession
 {
     private const string SystemContextOpen = "<vibecode-system-context>";
     private const string SystemContextClose = "</vibecode-system-context>";
@@ -77,7 +77,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     private sealed record TurnFailure(string Title, string Detail, string Subtype);
 
     private readonly KimiSessionOptions _options;
-    private readonly bool _isGrok;
+    private readonly bool _isGemini;
     private readonly object _writeLock = new();
     private readonly StringBuilder _stderr = new();
     private readonly Queue<(long Sequence, string Text)> _stderrLines = new();
@@ -89,16 +89,10 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     private readonly Queue<JsonNode> _earlyMessages = new();
     private readonly List<string> _tempAttachments = new();
     private readonly SemaphoreSlim _turnGate = new(1, 1);
-    // Grok steering (see SteerAsync). Guarded by _steerGate so a steer either joins the running turn or is refused.
+
     private readonly object _steerGate = new();
     private readonly Queue<Task<JsonNode?>> _steerHandoffs = new();
-    private readonly HashSet<string> _grokQueueIds = new(StringComparer.Ordinal);
-    private string? _grokRunningPromptId;
-    private TaskCompletionSource<(string Id, bool Queued)>? _steerEntry;
-    private HashSet<string>? _steerKnownIds;
-    private bool _promptRunning;
     private readonly object _usageProbeLock = new();
-    private readonly object _grokUsageLock = new();
     private Process? _proc;
     private StreamWriter? _stdin;
     private int _requestSeq;
@@ -119,28 +113,23 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     private long _stderrSequence;
     private int _turnActivity;
     private StringBuilder? _usageProbeText;
-    private JsonObject? _grokTurnUsage;
-    private bool _grokTurnInFlight;
-    private string ProviderName => _isGrok ? "Grok" : "Kimi";
-    private string ProviderSlug => _isGrok ? "grok" : "kimi";
+    private string ProviderName => _isGemini ? "Gemini" : "Kimi";
+    private string ProviderSlug => _isGemini ? "gemini" : "kimi";
 
     public KimiSession(KimiSessionOptions options)
     {
-        _ = options.UseGrokProtocol ? GrokSession.ResolveCliPathForModel(options.Model) : ResolveCliPath();
+        _ = options.UseGeminiProtocol ? GeminiRuntime.ResolveCliPath() : ResolveCliPath();
         _options = options;
-        _isGrok = options.UseGrokProtocol;
+        _isGemini = options.UseGeminiProtocol;
         _requestedModel = string.IsNullOrWhiteSpace(options.Model)
                           || string.Equals(options.Model, "default", StringComparison.OrdinalIgnoreCase)
             ? null
             : options.Model;
-        if (_isGrok) _requestedModel = Grok45Preset.NormalizeModel(_requestedModel);
-        _model = _isGrok
-            ? Grok45Preset.BackendModel(_requestedModel ?? Grok45Preset.NormalModelId)
-            : _requestedModel;
+        _model = _requestedModel;
         _effort = _requestedEffort = options.Effort;
         _permissionMode = _requestedPermissionMode = options.PermissionMode;
-        _basePromptPending = !_isGrok && !string.IsNullOrWhiteSpace(options.AppendSystemPrompt);
-        if (_isGrok) Commands = GrokBuiltInCommands();
+        _basePromptPending = !string.IsNullOrWhiteSpace(options.AppendSystemPrompt);
+        if (_isGemini) Commands = new JsonArray();
     }
 
     /// <summary>Find either Kimi's recommended native executable or the npm shim.</summary>
@@ -152,10 +141,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             catch { /* inaccessible or malformed PATH entry */ }
         }
 
-        throw new FileNotFoundException(
-            "Could not find Kimi Code CLI. Install the official Windows build with " +
-            "`irm https://code.kimi.com/kimi-code/install.ps1 | iex`, then reopen the account menu. " +
-            "Kimi also requires Git for Windows. You can point VibeCode at an existing runtime with VIBECODE_KIMI_PATH.");
+        throw new FileNotFoundException("Kimi Code CLI is missing. Open the account menu, select Kimi Code, and click Install Kimi Code CLI.");
     }
 
     /// <summary>Ordered CLI search paths, exposed internally for a no-process regression test.</summary>
@@ -164,6 +150,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         var candidates = new List<string>();
         if (Environment.GetEnvironmentVariable("VIBECODE_KIMI_PATH") is { Length: > 0 } configured)
             candidates.Add(configured.Trim('"'));
+        if (CliInstallationService.ManagedPath("kimi") is { } managed) candidates.Add(managed);
 
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -193,15 +180,18 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         };
         var extensions = new[] { ".exe", ".cmd", ".bat", ".ps1", "" };
         foreach (var value in pathValues)
-        foreach (var dir in (value ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        foreach (var ext in extensions)
-            candidates.Add(Path.Combine(dir.Trim('"'), "kimi" + ext));
+            foreach (var dir in (value ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                foreach (var ext in extensions)
+                    candidates.Add(Path.Combine(dir.Trim('"'), "kimi" + ext));
 
         return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     /// <summary>Create a redirected process for native, npm, PowerShell, or direct JS Kimi installs.</summary>
     public static ProcessStartInfo CreateCliStartInfo(string? workingDirectory, params string[] args)
+        => CreateCliStartInfoForAccount(workingDirectory, null, args);
+
+    internal static ProcessStartInfo CreateCliStartInfoForAccount(string? workingDirectory, string? accountId, params string[] args)
     {
         var cli = ResolveCliPath();
         var extension = Path.GetExtension(cli).ToLowerInvariant();
@@ -219,7 +209,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         if (!string.IsNullOrWhiteSpace(workingDirectory)) psi.WorkingDirectory = workingDirectory;
         // A Moonshot key also repoints the Anthropic-compatible base URL, since that is how Kimi
         // authenticates an Anthropic-shaped client.
-        VibeCode.Services.ApiKeyAccountService.Instance.ApplyTo(psi, "kimi");
+        VibeCode.Services.ApiKeyAccountService.Instance.ApplyTo(psi, "kimi", accountId);
 
         if (extension == ".cmd" || extension == ".bat")
         {
@@ -273,12 +263,10 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
 
     public void Start()
     {
-        var provider = _isGrok ? "grok" : "kimi";
+        var provider = ProviderSlug;
+        if (_isGemini && !GeminiRuntime.HasLogin) throw new InvalidOperationException("Sign in with Google in AI accounts → Gemini to use your subscription.");
         McpCatalog.EnsureLaunchReady(_options.McpServers, provider, _options.Cwd);
-        var psi = _isGrok
-            ? GrokSession.CreateCliStartInfoForModel(_options.Cwd, _options.GrokAuthFilePath,
-                _requestedModel, "agent", "--no-leader", "stdio")
-            : CreateCliStartInfo(_options.Cwd, "acp");
+        var psi = _isGemini ? GeminiRuntime.CreateStartInfo(_options.Cwd, "--acp") : CreateCliStartInfoForAccount(_options.Cwd, _options.AccountId, "acp");
         _proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         _proc.Exited += (_, _) =>
         {
@@ -310,16 +298,10 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                     ["version"] = "1.0.0",
                 },
             });
-            if (_isGrok)
-            {
-                ApplyGrokModelState(initializeResult?["_meta"]?["modelState"] as JsonObject, notify: false);
-                ApplyCommands(initializeResult?["_meta"]?["availableCommands"] as JsonArray);
-            }
 
+            if (_isGemini) await RequestAsync("authenticate", new JsonObject { ["methodId"] = "oauth-personal" });
             JsonNode? sessionResult;
-            var mcpServers = _isGrok
-                ? McpCatalog.BuildGrokAcpServers(_options.McpServers, _options.Cwd)
-                : McpCatalog.BuildKimiAcpServers(_options.McpServers, _options.Cwd);
+            var mcpServers = _isGemini ? McpCatalog.BuildGeminiAcpServers(_options.McpServers, _options.Cwd) : McpCatalog.BuildKimiAcpServers(_options.McpServers, _options.Cwd);
             if (_options.Resume is not null && !_options.ForkSession)
             {
                 SessionId = _options.Resume;
@@ -329,7 +311,6 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                     ["cwd"] = _options.Cwd,
                     ["mcpServers"] = mcpServers.DeepClone(),
                 };
-                if (_isGrok) loadParams["_meta"] = BuildGrokSessionMeta();
                 sessionResult = await RequestAsync("session/load", loadParams);
                 EndStream();
             }
@@ -340,7 +321,6 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                     ["cwd"] = _options.Cwd,
                     ["mcpServers"] = mcpServers.DeepClone(),
                 };
-                if (_isGrok) newParams["_meta"] = BuildGrokSessionMeta();
                 sessionResult = await RequestAsync("session/new", newParams);
                 SessionId = sessionResult?["sessionId"]?.GetValue<string>();
             }
@@ -349,10 +329,9 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             // Keep the user's requested values separate from the CLI's freshly reported defaults. Applying the
             // config first used to overwrite these fields, so a saved model (including a newly advertised K3
             // model), thinking choice, and permission mode were silently ignored on every new session.
-            if (_isGrok)
-                ApplyGrokModelState(sessionResult?["models"] as JsonObject, notify: false);
-            else
-                ApplyConfigOptions(sessionResult?["configOptions"] as JsonArray, notify: false);
+            if (_isGemini)
+                ApplyGeminiModelState(sessionResult?["models"] as JsonObject);
+            else ApplyConfigOptions(sessionResult?["configOptions"] as JsonArray, notify: false);
             await ApplyInitialSelectionsAsync();
             EmitInit();
             if (_options.Resume is not null && !_options.ForkSession)
@@ -360,7 +339,9 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             if (_options.ForkSession && _options.Resume is not null)
                 Emit(new JsonObject
                 {
-                    ["type"] = "system", ["subtype"] = "permission_denied", ["tool_name"] = $"{ProviderName} fork",
+                    ["type"] = "system",
+                    ["subtype"] = "permission_denied",
+                    ["tool_name"] = $"{ProviderName} fork",
                     ["message"] = $"{ProviderName} ACP did not fork this transcript; this is a new {ProviderName} session.",
                 });
 
@@ -388,9 +369,9 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     private async Task ApplyInitialSelectionsAsync()
     {
         if (SessionId is null) return;
-        if (_isGrok)
+        if (_isGemini)
         {
-            await ApplyInitialGrokSelectionsAsync();
+            await ApplyGeminiSelectionsAsync();
             return;
         }
         var requestedModel = ResolveBackendModel(_requestedModel);
@@ -428,33 +409,6 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             _permissionMode = requestedMode;
     }
 
-    private JsonObject BuildGrokSessionMeta()
-    {
-        var prompt = Grok45Preset.SessionPrompt(_requestedModel, _options.AppendSystemPrompt);
-        var meta = new JsonObject
-        {
-            ["clientIdentifier"] = "vibecode",
-            ["modelId"] = Grok45Preset.BackendModel(_requestedModel ?? Grok45Preset.NormalModelId),
-            ["yoloMode"] = _requestedPermissionMode == "bypassPermissions",
-            ["autoMode"] = _requestedPermissionMode == "dontAsk",
-        };
-        if (!string.IsNullOrWhiteSpace(prompt.SystemPromptOverride))
-            meta["systemPromptOverride"] = prompt.SystemPromptOverride;
-        if (!string.IsNullOrWhiteSpace(prompt.Rules)) meta["rules"] = prompt.Rules;
-        return meta;
-    }
-
-    private async Task ApplyInitialGrokSelectionsAsync()
-    {
-        if (SessionId is null) return;
-        var backend = Grok45Preset.BackendModel(_requestedModel ?? Grok45Preset.NormalModelId);
-        if (!string.IsNullOrWhiteSpace(backend))
-            await SafeSetGrokModelAsync(backend, _requestedEffort);
-        if (ToAcpMode(_requestedPermissionMode) == "plan")
-            await SafeSetGrokModeAsync("plan");
-        _permissionMode = _requestedPermissionMode;
-    }
-
     private async Task<bool> TrySetInitialConfigOptionAsync(string id, string value)
     {
         try
@@ -474,8 +428,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     private void EmitInit()
     {
         var selectedModel = CurrentModelId() ?? _model ?? "default";
-        var publicModel = _isGrok && !string.IsNullOrWhiteSpace(_requestedModel)
-            ? _requestedModel! : selectedModel;
+        var publicModel = selectedModel;
         Emit(new JsonObject
         {
             ["type"] = "system",
@@ -497,78 +450,14 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         _ = PromptAsync(content.DeepClone());
     }
 
-    /// <summary>Only Grok can take a message mid-turn. Kimi Code 0.27's ACP adapter rejects any session/prompt while a
-    /// turn is active ("prompt rejected because another turn is active"), so a Kimi chat only queues.</summary>
     public bool CanSteer
     {
         get { lock (_steerGate) return SteerableNow; }
     }
 
-    private bool SteerableNow => _isGrok && _promptRunning && _steerEntry is null && !_disposed && _initialized
-                                 && SessionId is not null;
+    private bool SteerableNow => false;
 
-    /// <summary>
-    /// Grok's own "steer" follow-up mode, over ACP. A session/prompt sent while a turn runs is queued by Grok and
-    /// announced in <c>_x.ai/queue/changed</c>; <c>_x.ai/queue/interject</c> with that entry's id then hands the turn to
-    /// it at the next tool or model gap. Grok answers the original request "cancelled" and keeps going with the work,
-    /// its context and any command still running (verified against grok 1.0.46). The steer's request is chained onto
-    /// the running prompt BEFORE anything is awaited, so the turn ends with its answer even if the original prompt
-    /// finished first and Grok simply runs the queued steer next.
-    /// </summary>
-    public async Task SteerAsync(JsonNode content)
-    {
-        TaskCompletionSource<(string Id, bool Queued)> entry;
-        // The turn's claim on this steer is taken under the gate; the request itself is written outside it, because
-        // stdin writes block and the stdout reader needs the gate to report Grok's queue.
-        var handoff = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_steerGate)
-        {
-            if (!SteerableNow) throw new InvalidOperationException($"{ProviderName} has no active turn to steer.");
-            entry = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            _steerEntry = entry;
-            _steerKnownIds = new HashSet<string>(_grokQueueIds, StringComparer.Ordinal);
-            if (_grokRunningPromptId is not null) _steerKnownIds.Add(_grokRunningPromptId);
-            _steerHandoffs.Enqueue(handoff.Task);
-        }
-        var request = RequestAsync("session/prompt", new JsonObject
-        {
-            ["sessionId"] = SessionId,
-            ["prompt"] = BuildPrompt(content.DeepClone()),
-        });
-        _ = request.ContinueWith(t =>
-        {
-            if (t.IsCanceled) handoff.TrySetCanceled();
-            else if (t.Exception is { } error) handoff.TrySetException(error.InnerExceptions);
-            else handoff.TrySetResult(t.Result);
-        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        // A turn that ended early clears its handoffs without awaiting them; keep a refusal from going unobserved.
-        _ = handoff.Task.ContinueWith(t => _ = t.Exception, CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
-        try
-        {
-            var settled = await Task.WhenAny(entry.Task, request, Task.Delay(TimeSpan.FromSeconds(10))).ConfigureAwait(false);
-            if (settled == request)
-            {
-                await request.ConfigureAwait(false);   // a refusal surfaces here with Grok's own message
-                return;                                // already answered, as this turn's continuation
-            }
-            // Never announced: it is still queued behind the running prompt, which the turn waits for.
-            if (settled != entry.Task) return;
-            var (id, queued) = await entry.Task.ConfigureAwait(false);
-            if (queued) Notify("_x.ai/queue/interject", new JsonObject { ["sessionId"] = SessionId, ["id"] = id });
-        }
-        finally
-        {
-            lock (_steerGate)
-            {
-                if (ReferenceEquals(_steerEntry, entry))
-                {
-                    _steerEntry = null;
-                    _steerKnownIds = null;
-                }
-            }
-        }
-    }
+    public Task SteerAsync(JsonNode content) => Task.FromException(new InvalidOperationException($"{ProviderName} queues messages until the current turn finishes."));
 
     /// <summary>The next steer that took this turn over, or null - which also closes the turn to new steers, so none
     /// can be chained after the turn has decided it is finished.</summary>
@@ -577,26 +466,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         lock (_steerGate)
         {
             if (_steerHandoffs.TryDequeue(out var next)) return next;
-            _promptRunning = false;
             return null;
-        }
-    }
-
-    /// <summary>Track Grok's prompt queue so <see cref="SteerAsync"/> can name the entry its prompt became.</summary>
-    private void ObserveGrokQueue(JsonObject? p)
-    {
-        if (p is null) return;
-        static string? Id(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
-        var ids = (p["entries"] as JsonArray)?.OfType<JsonObject>().Select(e => Id(e["id"])).OfType<string>().ToList() ?? [];
-        var running = Id(p["runningPromptId"]);
-        lock (_steerGate)
-        {
-            _grokQueueIds.Clear();
-            _grokQueueIds.UnionWith(ids);
-            _grokRunningPromptId = running;
-            if (_steerEntry is not { } entry || _steerKnownIds is not { } known) return;
-            if (ids.FirstOrDefault(id => !known.Contains(id)) is { } queued) entry.TrySetResult((queued, true));
-            else if (running is not null && !known.Contains(running)) entry.TrySetResult((running, false));
         }
     }
 
@@ -604,24 +474,22 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     {
         await _turnGate.WaitAsync();
         var started = Stopwatch.StartNew();
+        JsonNode? geminiResponse = null;
         try
         {
             if (SessionId is null || _disposed) return;
-            if (_isGrok) BeginGrokUsageCapture();
+            if (_isGemini) BeginGeminiUsage();
             var stderrMarker = StderrMarker;
             Interlocked.Exchange(ref _turnActivity, 0);
             BeginStream();
-            lock (_steerGate) _promptRunning = true;
-            // The liveness signal Claude and Codex send, so the chat re-reads CanSteer once a steer can be taken.
-            if (_isGrok) Emit(new JsonObject { ["type"] = "system", ["subtype"] = "turn_activity", ["active"] = true });
             var response = await RequestAsync("session/prompt", new JsonObject
             {
                 ["sessionId"] = SessionId,
                 ["prompt"] = BuildPrompt(content),
             });
-            // A steer interjected into this turn takes it over: Grok answers the original request "cancelled" and runs
+
             // the steer as the live prompt (or runs it next when the turn ended first). Either way the turn ends with
-            // the last steer's answer. One Grok refused leaves the answer already in hand; SteerAsync reported it.
+
             while (TakeSteerHandoff() is { } handoff)
             {
                 try { response = await handoff; }
@@ -632,8 +500,8 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             // resolves the ACP request as a clean, empty end_turn. Give the stderr reader a brief chance to consume
             // that terminal log line before deciding this was a successful turn. Without this bridge, exhausted
             // accounts look exactly like the agent ignored the user's message.
-            if (!_isGrok) await Task.Delay(75);
-            var hiddenFailure = _isGrok ? null : FailureFromDiagnostics(StderrSince(stderrMarker));
+            if (!_isGemini) await Task.Delay(75);
+            var hiddenFailure = _isGemini ? null : FailureFromDiagnostics(StderrSince(stderrMarker));
             EndStream();
             if (hiddenFailure is not null)
             {
@@ -642,28 +510,28 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                 return;
             }
 
+            if (_isGemini) geminiResponse = response;
             var stopReason = response?["stopReason"]?.GetValue<string>() ?? "end_turn";
             if (stopReason is not ("end_turn" or "cancelled"))
             {
                 EmitFailure($"{ProviderName} stopped without an answer",
                     $"{ProviderName} ended the turn with `{stopReason}` before returning a response.",
-                    started.Elapsed.TotalMilliseconds, stopReason == "refusal" ? "refusal" : "error");
+                    started.Elapsed.TotalMilliseconds, stopReason == "refusal" ? "refusal" : "error", geminiResponse);
                 return;
             }
             if (stopReason == "end_turn" && Volatile.Read(ref _turnActivity) == 0)
             {
                 EmitFailure($"{ProviderName} returned no response",
-                    _isGrok
-                        ? "Grok completed the turn without assistant output. Check the Grok account and model, then retry."
-                        : "Kimi Code completed the turn without any assistant output. Its ACP mode can hide provider and " +
+                    _isGemini ? "Gemini completed the turn without assistant output. Check the Google account and selected model, then retry."
+                    : "Kimi Code completed the turn without any assistant output. Its ACP mode can hide provider and " +
                           "quota failures this way. Run `/usage` in this chat or check the Kimi Code Console, then retry.",
-                    started.Elapsed.TotalMilliseconds, "empty_response");
+                    started.Elapsed.TotalMilliseconds, "empty_response", geminiResponse);
                 return;
             }
 
             JsonObject? usageReport = null;
-            if (_isGrok)
-                usageReport = MergeGrokUsageReports(UsageFromGrokResponse(response), EndGrokUsageCapture());
+            if (_isGemini)
+                usageReport = EndGeminiUsage(response);
             else if (stopReason == "end_turn")
                 usageReport = await QueryUsageAsync();
             var result = new JsonObject
@@ -698,10 +566,9 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         {
             lock (_steerGate)
             {
-                _promptRunning = false;
                 _steerHandoffs.Clear();
             }
-            if (_isGrok) EndGrokUsageCapture();
+            lock (_geminiUsageGate) _geminiUsageActive = false;
             _turnGate.Release();
         }
     }
@@ -723,38 +590,43 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                 {
                     case "text": AddText(block["text"]?.GetValue<string>() ?? ""); break;
                     case "image":
-                    {
-                        var source = block["source"] as JsonObject;
-                        if (source?["data"]?.GetValue<string>() is { Length: > 0 } data)
-                            prompt.Add(new JsonObject
-                            {
-                                ["type"] = "image",
-                                ["mimeType"] = source["media_type"]?.GetValue<string>() ?? "image/png",
-                                ["data"] = data,
-                            });
-                        break;
-                    }
-                    case "document":
-                    {
-                        var source = block["source"] as JsonObject;
-                        if (source?["data"]?.GetValue<string>() is { Length: > 0 } data)
                         {
-                            var media = source["media_type"]?.GetValue<string>() ?? "application/pdf";
-                            var path = SaveAttachment(Convert.FromBase64String(data), ExtensionFor(media));
-                            AddText($"A document is attached at `{path}`. Read it as part of this request.");
+                            var source = block["source"] as JsonObject;
+                            if (source?["data"]?.GetValue<string>() is { Length: > 0 } data)
+                                prompt.Add(new JsonObject
+                                {
+                                    ["type"] = "image",
+                                    ["mimeType"] = source["media_type"]?.GetValue<string>() ?? "image/png",
+                                    ["data"] = data,
+                                });
+                            break;
                         }
-                        break;
-                    }
+                    case "document":
+                        {
+                            var source = block["source"] as JsonObject;
+                            if (source?["data"]?.GetValue<string>() is { Length: > 0 } data)
+                            {
+                                var media = source["media_type"]?.GetValue<string>() ?? "application/pdf";
+                                var path = SaveAttachment(Convert.FromBase64String(data), ExtensionFor(media));
+                                AddText($"A document is attached at `{path}`. Read it as part of this request.");
+                            }
+                            break;
+                        }
                 }
             }
         }
 
-        if (_basePromptPending)
+        if ((_basePromptPending) && !(_isGemini && prompt.Count > 0))
             AddText("");
         return prompt;
 
         void AddText(string text)
         {
+            if (_isGemini && text.TrimStart().StartsWith('/'))
+            {
+                prompt.Add(new JsonObject { ["type"] = "text", ["text"] = text });
+                return; // Native slash commands must stay first; context is retained for the next real prompt.
+            }
             if (_basePromptPending)
             {
                 var contexts = new List<string>(2);
@@ -961,122 +833,11 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         ["cache_creation_input_tokens"] = cacheWrite,
     };
 
-    /// <summary>Map Grok's documented prompt metadata or rich turn-completed update to the shared usage envelope.</summary>
-    internal static JsonObject? UsageFromGrokResponse(JsonNode? response)
-    {
-        if (response is not JsonObject payload) return null;
-
-        // The standard ACP response uses `_meta.usage`; the bundled runtime's authoritative persisted/live event
-        // uses `_x.ai/session/update -> turn_completed -> usage`. Accept both plus the early flat fixture shape.
-        // ACP inputTokens is the FULL prompt count (cache included); the shared UI expects disjoint buckets.
-        var meta = payload["_meta"] as JsonObject ?? payload;
-        var raw = meta["usage"] as JsonObject ?? meta["promptUsage"] as JsonObject ?? meta;
-        var fullInput = FirstJsonLong(raw, "inputTokens", "input_tokens");
-        var output = FirstJsonLong(raw, "outputTokens", "output_tokens");
-        var cacheRead = FirstJsonLong(raw, "cachedReadTokens", "cacheReadInputTokens",
-            "cache_read_input_tokens");
-        var cacheWrite = FirstJsonLong(raw, "cachedWriteTokens", "cacheWriteInputTokens",
-            "cache_creation_input_tokens");
-        var total = FirstJsonLong(raw, "totalTokens", "total_tokens");
-        var usesCamelPromptShape = raw["inputTokens"] is not null;
-        var input = usesCamelPromptShape
-            ? Math.Max(0, fullInput - cacheRead - cacheWrite)
-            : fullInput;
-        if (input + cacheRead + cacheWrite + output == 0 && total > 0) input = total;
-        if (input + cacheRead + cacheWrite + output == 0) return null;
-
-        var usage = UsageBucket(input, output, cacheRead, cacheWrite);
-        if (total > 0) usage["total_tokens"] = total;
-        if (FirstJsonLong(raw, "thoughtTokens", "reasoningTokens", "reasoning_tokens") is var reasoning
-            && reasoning > 0)
-            usage["reasoning_tokens"] = reasoning;
-
-        // PromptUsage is an aggregate across the model rounds in this prompt, not the latest context snapshot.
-        // The separate ACP usage_update above owns context occupancy; mark this so ChatViewModel never mistakes
-        // the aggregate prompt sum for the amount currently in the model's context window.
-        usage["_vibecode_aggregate_prompt"] = true;
-
-        var report = new JsonObject { ["usage"] = usage };
-        if ((meta["modelUsage"] ?? raw["modelUsage"]) is { } modelUsage)
-            report["modelUsage"] = modelUsage.DeepClone();
-        if ((meta["numTurns"] ?? raw["numTurns"]) is { } turns)
-            report["num_turns"] = turns.DeepClone();
-        if ((meta["usageIsIncomplete"] ?? raw["usageIsIncomplete"]) is { } incomplete)
-            report["usage_is_incomplete"] = incomplete.DeepClone();
-        if (GrokCostUsd(meta, raw) is { } cost) report["total_cost_usd"] = cost;
-        return report;
-    }
-
-    private void BeginGrokUsageCapture()
-    {
-        lock (_grokUsageLock)
-        {
-            _grokTurnUsage = null;
-            _grokTurnInFlight = true;
-        }
-    }
-
-    private void CaptureGrokTurnUsage(JsonObject update)
-    {
-        var report = UsageFromGrokResponse(update);
-        if (report is null) return;
-        lock (_grokUsageLock)
-        {
-            if (_grokTurnInFlight) _grokTurnUsage = MergeGrokUsageReports(report, _grokTurnUsage);
-        }
-    }
-
-    private JsonObject? EndGrokUsageCapture()
-    {
-        lock (_grokUsageLock)
-        {
-            _grokTurnInFlight = false;
-            var report = _grokTurnUsage;
-            _grokTurnUsage = null;
-            return report;
-        }
-    }
-
-    private static JsonObject? MergeGrokUsageReports(JsonObject? primary, JsonObject? fallback)
-    {
-        if (primary is null) return fallback?.DeepClone().AsObject();
-        if (fallback is null) return primary.DeepClone().AsObject();
-        var merged = fallback.DeepClone().AsObject();
-        foreach (var (key, value) in primary) merged[key] = value?.DeepClone();
-        return merged;
-    }
-
     private static long FirstJsonLong(JsonObject source, params string[] keys)
     {
         foreach (var key in keys)
             if (source[key] is { } node && JsonLong(node) is var value && value != 0) return value;
         return 0;
-    }
-
-    private static double? GrokCostUsd(JsonObject meta, JsonObject usage)
-    {
-        if (JsonTrue(meta["costIsPartial"] ?? usage["costIsPartial"])
-            || JsonTrue(meta["usageIsIncomplete"] ?? usage["usageIsIncomplete"])) return null;
-
-        foreach (var node in new[] { meta["totalCostUsd"], meta["total_cost_usd"], usage["totalCostUsd"] })
-            if (JsonDouble(node) is { } direct && direct > 0) return direct;
-        foreach (var node in new[] { meta["totalCostUsdTicks"], meta["total_cost_usd_ticks"], usage["costUsdTicks"] })
-            if (JsonLong(node) is var ticks && ticks > 0) return ticks / 10_000_000_000d;
-
-        if ((meta["modelUsage"] ?? usage["modelUsage"]) is not JsonObject byModel) return null;
-        long tickTotal = 0;
-        double usdTotal = 0;
-        var sawTicks = false;
-        var sawUsd = false;
-        foreach (var row in byModel.Select(x => x.Value).OfType<JsonObject>())
-        {
-            if (JsonTrue(row["costIsPartial"])) return null;
-            var ticks = FirstJsonLong(row, "costUsdTicks", "cost_usd_ticks");
-            if (ticks > 0) { tickTotal += ticks; sawTicks = true; }
-            if (JsonDouble(row["costUSD"] ?? row["costUsd"]) is { } usd && usd > 0)
-            { usdTotal += usd; sawUsd = true; }
-        }
-        return sawTicks ? tickTotal / 10_000_000_000d : sawUsd ? usdTotal : null;
     }
 
     private static bool JsonTrue(JsonNode? node)
@@ -1131,29 +892,6 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     private void HandleNotification(string method, JsonObject? p)
     {
         NotificationReceived?.Invoke(method, p?.DeepClone().AsObject());
-        if (_isGrok && method == "_x.ai/models/update")
-        {
-            ApplyGrokModelState(p, notify: _initialized);
-            return;
-        }
-        if (_isGrok && method == "_x.ai/queue/changed")
-        {
-            ObserveGrokQueue(p);
-            return;
-        }
-        if (_isGrok && (method is "x.ai/session_notification" or "_x.ai/session/update")
-                    && p?["update"] is JsonObject grokUpdate)
-        {
-            switch (grokUpdate["sessionUpdate"]?.GetValue<string>())
-            {
-                case "model_changed":
-                    ApplyGrokModelChanged(grokUpdate);
-                    return;
-                case "turn_completed":
-                    CaptureGrokTurnUsage(grokUpdate);
-                    return;
-            }
-        }
         if (method == "session/update" && p?["update"] is JsonObject update)
             TranslateSessionUpdate(update);
     }
@@ -1179,24 +917,26 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                 StreamChunk("thinking", ContentText(update["content"]));
                 break;
             case "user_message_chunk":
-            {
-                EndStream();
-                var text = StripSystemContext(ContentText(update["content"]));
-                if (text.Length > 0) Emit(new JsonObject
                 {
-                    ["type"] = "user",
-                    ["message"] = new JsonObject
+                    EndStream();
+                    var text = StripSystemContext(ContentText(update["content"]));
+                    if (text.Length > 0) Emit(new JsonObject
                     {
-                        ["role"] = "user",
-                        ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
-                    },
-                });
-                break;
-            }
+                        ["type"] = "user",
+                        ["message"] = new JsonObject
+                        {
+                            ["role"] = "user",
+                            ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
+                        },
+                    });
+                    break;
+                }
             case "tool_call":
+                if (_isGemini) EmitGeminiProgress();
                 CaptureTool(update, isUpdate: false);
                 break;
             case "tool_call_update":
+                if (_isGemini) EmitGeminiProgress();
                 CaptureTool(update, isUpdate: true);
                 break;
             case "plan":
@@ -1207,33 +947,33 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                 if (_initialized) Initialized?.Invoke();
                 break;
             case "config_option_update":
-                if (!_isGrok) ApplyConfigOptions(update["configOptions"] as JsonArray, notify: _initialized);
+                if (!_isGemini) ApplyConfigOptions(update["configOptions"] as JsonArray, notify: _initialized);
                 break;
-            case "usage_update" when _isGrok:
-            {
-                // Grok publishes context occupancy as ACP's UsageUpdate { used, size }. This is a context
-                // snapshot, not an OpenAI/Claude account quota and not a turn-token delta. Project only those
-                // two values so the active Grok chat gets an accurate context bar without touching any other
-                // provider's account service or token counters.
-                var hasUsed = update["used"] is not null || update["usedTokens"] is not null;
-                var hasSize = update["size"] is not null || update["contextWindow"] is not null;
-                var used = FirstJsonLong(update, "used", "usedTokens");
-                var size = FirstJsonLong(update, "size", "contextWindow");
-                if (hasUsed || hasSize)
+            case "usage_update" when _isGemini:
                 {
-                    var context = new JsonObject();
-                    // Preserve an explicit zero: ACP uses it to clear the previous context snapshot.
-                    if (hasUsed) context["context_input_tokens"] = Math.Max(0, used);
-                    if (size > 0) context["context_window"] = size;
-                    Emit(new JsonObject
+
+                    // snapshot, not an OpenAI/Claude account quota and not a turn-token delta. Project only those
+
+                    // provider's account service or token counters.
+                    var hasUsed = update["used"] is not null || update["usedTokens"] is not null;
+                    var hasSize = update["size"] is not null || update["contextWindow"] is not null;
+                    var used = FirstJsonLong(update, "used", "usedTokens");
+                    var size = FirstJsonLong(update, "size", "contextWindow");
+                    if (hasUsed || hasSize)
                     {
-                        ["type"] = "system",
-                        ["subtype"] = "usage_update",
-                        ["usage"] = context,
-                    });
+                        var context = new JsonObject();
+                        // Preserve an explicit zero: ACP uses it to clear the previous context snapshot.
+                        if (hasUsed) context["context_input_tokens"] = Math.Max(0, used);
+                        if (size > 0) context["context_window"] = size;
+                        Emit(new JsonObject
+                        {
+                            ["type"] = "system",
+                            ["subtype"] = "usage_update",
+                            ["usage"] = context,
+                        });
+                    }
+                    break;
                 }
-                break;
-            }
         }
     }
 
@@ -1309,7 +1049,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         ["type"] = "stream_event",
         // session/load emits transcript chunks before initialization finishes. Capture their origin here:
         // the UI can already say running when the user queues Send now during a slow resume.
-        ["is_replay"] = _isGrok && !_initialized,
+        ["is_replay"] = (_isGemini) && !_initialized,
         ["event"] = ev,
     });
 
@@ -1361,7 +1101,10 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                     ["role"] = "assistant",
                     ["content"] = new JsonArray(new JsonObject
                     {
-                        ["type"] = "tool_use", ["id"] = id, ["name"] = name, ["input"] = input.DeepClone(),
+                        ["type"] = "tool_use",
+                        ["id"] = id,
+                        ["name"] = name,
+                        ["input"] = input.DeepClone(),
                     }),
                 },
             });
@@ -1387,7 +1130,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         _toolNames.Remove(id);
     }
 
-    private static JsonObject BuildToolInput(JsonObject update, JsonObject? previous)
+    private JsonObject BuildToolInput(JsonObject update, JsonObject? previous)
     {
         JsonObject input;
         if (update["rawInput"] is JsonObject rawObject) input = rawObject.DeepClone().AsObject();
@@ -1395,13 +1138,25 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         else input = previous?.DeepClone().AsObject() ?? TryParseObject(ToolContentText(update["content"] as JsonArray)) ?? new JsonObject();
 
         if (update["content"] is JsonArray content)
-        foreach (var item in content.OfType<JsonObject>())
+            foreach (var item in content.OfType<JsonObject>())
+            {
+                if (item["type"]?.GetValue<string>() != "diff") continue;
+                input["file_path"] = item["path"]?.GetValue<string>();
+                input["old_string"] = item["oldText"]?.GetValue<string>() ?? "";
+                input["new_string"] = item["newText"]?.GetValue<string>() ?? "";
+                break;
+            }
+        if (_isGemini && update["rawInput"] is null)
         {
-            if (item["type"]?.GetValue<string>() != "diff") continue;
-            input["file_path"] = item["path"]?.GetValue<string>();
-            input["old_string"] = item["oldText"]?.GetValue<string>() ?? "";
-            input["new_string"] = item["newText"]?.GetValue<string>() ?? "";
-            break;
+            // Gemini ACP supplies human display titles, locations and diffs, not raw arguments.
+            // Preserve that evidence for approval without treating a display title as a trusted MCP identity.
+            if (update["title"]?.ToString() is { Length: > 0 } title)
+            {
+                input["description"] ??= title;
+                if (update["kind"]?.ToString() == "execute") input["command"] ??= title;
+            }
+            if ((update["locations"] as JsonArray)?.FirstOrDefault()?["path"]?.ToString() is { Length: > 0 } path)
+                input["file_path"] ??= path;
         }
         return input;
     }
@@ -1417,11 +1172,10 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         // An ACP kind is broad presentation metadata. Keep the exact built-in MCP identity so a runtime
         // labelling it as "edit" or "execute" cannot turn the naming permission into Write or Bash.
         if (title is not null && BridgeMcpConnection.IsChatTitleMcpName(title)) return title;
-        if (title == "use_tool" && BridgeMcpConnection.IsChatTitlePermission("grok", title, input)) return title;
         if (string.Equals(title, "AskUserQuestion", StringComparison.OrdinalIgnoreCase)) return "AskUserQuestion";
         if (string.Equals(title, "ExitPlanMode", StringComparison.OrdinalIgnoreCase)) return "ExitPlanMode";
 
-        // ACP only standardizes broad tool kinds. Grok's native runtime currently reports several file tools as
+
         // kind="other" and puts their stable identifiers in title (read_file, grep, search_replace, ...). Translate
         // those identifiers into the same names Claude/Codex use so summaries, icons, edit diffs, and compact
         // stacking all travel through one presentation path instead of producing a wall of generic gear rows.
@@ -1442,7 +1196,7 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             "web_search" or "search_web" => "WebSearch",
             "web_fetch" or "fetch_url" => "WebFetch",
             "todo_write" or "todowrite" => "TodoWrite",
-            // Grok Build task tool — keep stable name so ChatViewModel Subagents roster can attach
+
             "spawn_subagent" or "spawn_agent" or "spawnsubagent" => "spawn_subagent",
             "get_command_or_subagent_output" or "get_subagent_output" or "get_command_output" => "get_command_or_subagent_output",
             "skill" => "Skill",
@@ -1520,162 +1274,39 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
                 if (option["value"]?.GetValue<string>() is { } value) effortLevels.Add(value);
 
         if (modelOption?["options"] is JsonArray modelOptions)
-        foreach (var option in modelOptions.OfType<JsonObject>())
-        {
-            var value = option["value"]?.GetValue<string>() ?? "";
-            var row = new JsonObject
+            foreach (var option in modelOptions.OfType<JsonObject>())
             {
-                ["value"] = value,
-                ["displayName"] = option["name"]?.GetValue<string>() ?? value,
-                ["description"] = option["description"]?.GetValue<string>(),
-                ["resolvedModel"] = value,
-                ["supportedEffortLevels"] = value == current ? effortLevels.DeepClone() : new JsonArray(),
-                ["supportsEffort"] = value == current && effortLevels.Count > 0,
-                ["supportsAutoMode"] = true,
-                ["supportsFastMode"] = false,
-                ["isDefault"] = value == current,
-            };
-            result.Add(row);
-        }
-        if (result.Count == 0)
-            result.Add(new JsonObject
-            {
-                ["value"] = "default", ["displayName"] = "Kimi Code default", ["resolvedModel"] = "default",
-                ["supportedEffortLevels"] = new JsonArray(), ["supportsEffort"] = false,
-                ["supportsAutoMode"] = true, ["supportsFastMode"] = false, ["isDefault"] = true,
-            });
-        return result;
-    }
-
-    /// <summary>
-    /// Take a fresh catalog from a Grok model-state payload. <c>_x.ai/models/update</c> is an ACCOUNT-level push —
-    /// the runtime logs it with no session id, unlike the per-session <c>model_changed</c> — so its currentModelId
-    /// is the CLI's own current model, not this chat's. Letting it redefine the selection is what walked a Grok 4.6
-    /// chat back to 4.5: the picker re-rendered as 4.5, the view model copied that into its model field, and the
-    /// set_model that rides along with the next prompt's effort handed "grok-4.5" back to the runtime — so the
-    /// mislabel became real one message later. The list and its effort tiers are worth taking from this payload;
-    /// the selection is adopted only when this session does not already have one.
-    /// </summary>
-    private void ApplyGrokModelState(JsonObject? state, bool notify)
-    {
-        if (state is null) return;
-        var current = state["currentModelId"]?.GetValue<string>();
-        Models = GrokModelsFromState(state, _requestedModel);
-        SelectRequestedGrokRow();
-        // A selection outlives a catalog that momentarily lacks it: Grok publishes a one-entry "grok-build"
-        // placeholder before its real catalog resolves, and taking that as the session's model would hand the
-        // placeholder straight back to the runtime on the next prompt.
-        var selected = string.IsNullOrWhiteSpace(_requestedModel)
-            ? current
-            : Grok45Preset.BackendModel(_requestedModel);
-        _model = selected ?? _model;
-        var currentInfo = (state["availableModels"] as JsonArray)?.OfType<JsonObject>()
-            .FirstOrDefault(row => string.Equals(row["modelId"]?.GetValue<string>(), _model,
-                StringComparison.OrdinalIgnoreCase));
-        if (currentInfo?["_meta"]?["reasoningEffort"]?.GetValue<string>() is { } effort)
-            _effort = effort;
-        if (_initialized && string.IsNullOrWhiteSpace(_requestedModel) && current is not null)
-            _requestedModel = current;
-        if (!notify) return;
-        EmitInit();
-        Initialized?.Invoke();
-    }
-
-    private void ApplyGrokModelChanged(JsonObject update)
-        {
-            var current = update["model_id"]?.GetValue<string>() ?? update["modelId"]?.GetValue<string>();
-            if (string.IsNullOrWhiteSpace(current)) return;
-            _model = _requestedModel = current;
-            SelectRequestedGrokRow();
-            if (update["reasoning_effort"]?.GetValue<string>() is { } effort) _effort = effort;
-            EmitInit();
-            Initialized?.Invoke();
-        }
-
-    private bool SelectRequestedGrokRow()
-        {
-            var requested = _requestedModel?.Trim();
-            if (string.IsNullOrEmpty(requested)) return false;
-            var match = Models.OfType<JsonObject>().FirstOrDefault(row =>
-                string.Equals(row["value"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase))
-                ?? Models.OfType<JsonObject>().FirstOrDefault(row =>
-                    string.Equals(row["resolvedModel"]?.GetValue<string>(), requested, StringComparison.OrdinalIgnoreCase)
-                    || Grok45Preset.IsGrok45(row["resolvedModel"]?.GetValue<string>()) && Grok45Preset.IsGrok45(requested));
-            if (match is null) return false;
-            foreach (var row in Models.OfType<JsonObject>()) row["isDefault"] = ReferenceEquals(row, match);
-            if (match["value"]?.GetValue<string>() is { Length: > 0 } value) _requestedModel = value;
-            return true;
-        }
-
-    internal static JsonArray GrokModelsFromState(JsonObject? state, string? requestedModel = null)
-    {
-        requestedModel = Grok45Preset.NormalizeModel(requestedModel);
-        var result = new JsonArray();
-        var current = state?["currentModelId"]?.GetValue<string>();
-        if (state?["availableModels"] is JsonArray available)
-        foreach (var info in available.OfType<JsonObject>())
-        {
-            var value = info["modelId"]?.GetValue<string>()
-                        ?? info["id"]?.GetValue<string>()
-                        ?? "";
-            if (value.Length == 0) continue;
-            var display = info["name"]?.GetValue<string>() ?? value;
-            var meta = info["_meta"] as JsonObject ?? info["meta"] as JsonObject;
-            var efforts = new JsonArray();
-            if (meta?["reasoningEfforts"] is JsonArray effortRows)
-            foreach (var effort in effortRows)
-            {
-                var token = effort is JsonObject effortObject
-                    ? effortObject["value"]?.GetValue<string>()
-                    : effort is JsonValue effortValue ? SafeString(effortValue) : null;
-                if (!string.IsNullOrWhiteSpace(token)) efforts.Add(token);
+                var value = option["value"]?.GetValue<string>() ?? "";
+                var row = new JsonObject
+                {
+                    ["value"] = value,
+                    ["displayName"] = option["name"]?.GetValue<string>() ?? value,
+                    ["description"] = option["description"]?.GetValue<string>(),
+                    ["resolvedModel"] = value,
+                    ["supportedEffortLevels"] = value == current ? effortLevels.DeepClone() : new JsonArray(),
+                    ["supportsEffort"] = value == current && effortLevels.Count > 0,
+                    ["supportsAutoMode"] = true,
+                    ["supportsFastMode"] = false,
+                    ["isDefault"] = value == current,
+                };
+                result.Add(row);
             }
-            var isGrok45 = Grok45Preset.IsGrok45(value, display);
-            var publicValue = isGrok45 ? Grok45Preset.NormalModelId : value;
-            var publicDisplay = isGrok45 ? Grok45Preset.NormalDisplayName : display;
+        if (result.Count == 0)
             result.Add(new JsonObject
             {
-                ["value"] = publicValue,
-                ["displayName"] = publicDisplay,
-                ["description"] = isGrok45 ? Grok45Preset.NormalDescription : info["description"]?.GetValue<string>(),
-                ["resolvedModel"] = value,
-                ["supportedEffortLevels"] = efforts,
-                ["supportsEffort"] = meta?["supportsReasoningEffort"]?.GetValue<bool>() == true || efforts.Count > 0,
-                ["supportsAutoMode"] = true,
-                ["supportsFastMode"] = false,
-                ["isDefault"] = string.Equals(value, current, StringComparison.OrdinalIgnoreCase),
-            });
-        }
-
-        // A last-resort row for a runtime that advertised NOTHING - only then. The test used to be "no Grok 4.5 in
-        // the list", which fabricated a 4.5 row whenever the runtime named its models something else, and marked
-        // that invented row isDefault. Grok comes up with a one-entry placeholder catalog ("grok-build") before its
-        // real catalog resolves, and every consequence followed from that single fabricated row: CurrentModelId
-        // returned "grok-4.5", EmitInit reported it as the session's model, the pill snapped from Grok 4.6 back to
-        // Grok 4.5, and RebuildEffortOptions then offered only the hardcoded low/medium/high below - so xhigh, which
-        // 4.6 has and 4.5 does not, was dropped and the reasoning level went blank. The runtime's own list is
-        // authoritative; when it names a model we have never heard of, show THAT, not an invented 4.5.
-        if (result.Count == 0)
-        {
-            var efforts = new JsonArray("low", "medium", "high");
-            result.Insert(0, new JsonObject
-            {
-                ["value"] = Grok45Preset.NormalModelId,
-                ["displayName"] = Grok45Preset.NormalDisplayName,
-                ["description"] = Grok45Preset.NormalDescription,
-                ["resolvedModel"] = Grok45Preset.NormalModelId,
-                ["supportedEffortLevels"] = efforts.DeepClone(),
-                ["supportsEffort"] = true,
+                ["value"] = "default",
+                ["displayName"] = "Kimi Code default",
+                ["resolvedModel"] = "default",
+                ["supportedEffortLevels"] = new JsonArray(),
+                ["supportsEffort"] = false,
                 ["supportsAutoMode"] = true,
                 ["supportsFastMode"] = false,
                 ["isDefault"] = true,
             });
-        }
         return result;
     }
 
-    private string? ResolveBackendModel(string? requestedModel) =>
-            _isGrok ? Grok45Preset.BackendModel(requestedModel ?? Grok45Preset.NormalModelId) : requestedModel;
+    private string? ResolveBackendModel(string? requestedModel) => requestedModel;
 
     private string? CurrentModelId() => Models.OfType<JsonObject>()
         .FirstOrDefault(x => x["isDefault"]?.GetValue<bool>() == true)?["value"]?.GetValue<string>()
@@ -1833,29 +1464,18 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
     {
         _permissionMode = _requestedPermissionMode = mode;
         if (!_initialized || SessionId is null) return Task.CompletedTask;
-        return _isGrok
-            // Grok ACP session modes are prompt modes (default/plan), not permission modes. Yolo/auto are
-            // creation-time metadata; VibeCode still applies later permission changes when answering requests.
-            ? SafeSetGrokModeAsync(mode == "plan" ? "plan" : "default")
-            : SafeSetConfigOptionAsync("mode", ToAcpMode(mode));
+        if (_isGemini) return SetGeminiModeAsync(mode);
+        return SafeSetConfigOptionAsync("mode", ToAcpMode(mode));
     }
 
     public async Task SetModelAsync(string? model, string? effort = null)
     {
-        if (_isGrok)
-        {
-            _requestedModel = string.IsNullOrWhiteSpace(model)
-                              || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)
-                ? _requestedModel ?? Grok45Preset.NormalModelId : model;
-            _effort = _requestedEffort = effort;
-            SelectRequestedGrokRow();
-            _model = ResolveBackendModel(_requestedModel);
-            if (_initialized && SessionId is not null && _model is not null)
-                await SafeSetGrokModelAsync(_model, effort);
-            return;
-        }
+        if (_isGemini) { await SetGeminiModelAsync(model); return; }
+
         _requestedModel = string.IsNullOrWhiteSpace(model)
-                          || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase) ? null : model;
+                          || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : model;
         _model = ResolveBackendModel(_requestedModel);
         _effort = _requestedEffort = effort;
         if (!_initialized || SessionId is null) return;
@@ -1876,38 +1496,6 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             ["configId"] = id,
             ["value"] = value,
         });
-
-    private async Task SafeSetGrokModelAsync(string model, string? effort)
-    {
-        try
-        {
-            var parameters = new JsonObject { ["sessionId"] = SessionId, ["modelId"] = model };
-            if (!string.IsNullOrWhiteSpace(effort))
-                parameters["_meta"] = new JsonObject { ["reasoningEffort"] = effort };
-            await RequestAsync("session/set_model", parameters);
-            _model = model;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"vibecode: Grok set model failed: {ex.Message}");
-        }
-    }
-
-    private async Task SafeSetGrokModeAsync(string mode)
-    {
-        try
-        {
-            await RequestAsync("session/set_mode", new JsonObject
-            {
-                ["sessionId"] = SessionId,
-                ["modeId"] = mode,
-            });
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"vibecode: Grok set mode failed: {ex.Message}");
-        }
-    }
 
     private static string ThinkingValue(string? effort)
     {
@@ -1973,9 +1561,9 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         }
     }
 
-    private void EmitFailure(string title, string detail, double durationMs = 0, string subtype = "error")
+    private void EmitFailure(string title, string detail, double durationMs = 0, string subtype = "error", JsonNode? geminiResponse = null)
     {
-        Emit(new JsonObject
+        var failure = new JsonObject
         {
             ["type"] = "result",
             ["subtype"] = subtype,
@@ -1983,21 +1571,19 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
             ["result"] = $"{title}: {detail}",
             ["duration_ms"] = durationMs,
             ["usage"] = new JsonObject(),
-        });
+        };
+        if (_isGemini && _geminiUsageActive)
+            foreach (var (key, value) in EndGeminiUsage(geminiResponse)) failure[key] = value?.DeepClone();
+        Emit(failure);
     }
 
     private string FriendlyError(Exception ex)
     {
-        if (_isGrok && ex is KimiRpcException grokError)
-            return GrokRpcError.Describe(grokError.Message, grokError.RpcData, grokError.Code);
-        if (_isGrok && ex is not TaskCanceledException)
-            return GrokRpcError.Describe(ex.Message);
+        if (_isGemini) return ex is KimiRpcException { Code: -32000 } ? "Sign in with Google in AI accounts → Gemini, then retry. " + ex.Message : ex.Message;
         if (ex is KimiRpcException { Code: -32000 }
             || ex.Message.Contains("not authenticated", StringComparison.OrdinalIgnoreCase)
             || ex.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase))
-            return _isGrok
-                ? "Grok is not signed in. Open VibeCode's account menu and choose Grok, or run `grok login`."
-                : "Kimi Code is not signed in. Open VibeCode's account menu and choose Kimi Code, or run `kimi login`.";
+            return "Kimi Code is not signed in. Open VibeCode's account menu and choose Kimi Code, or run `kimi login`.";
         return ex is TaskCanceledException
             ? $"{ProviderName} closed before the request completed."
             : ex.Message;
@@ -2056,14 +1642,6 @@ public sealed class KimiSession : ICodingSession, ISteerableSession
         Command("mcp", "Show configured MCP servers"),
         Command("tasks", "Show background tasks"),
         Command("help", "Show available Kimi commands"));
-
-    private static JsonArray GrokBuiltInCommands() => new(
-        Command("compact", "Compact Grok conversation context"),
-        Command("status", "Show Grok session status"),
-        Command("usage", "Show Grok session token usage"),
-        Command("mcp", "Show configured MCP servers"),
-        Command("tasks", "Show Grok background tasks"),
-        Command("help", "Show available Grok commands"));
 
     private static JsonObject Command(string name, string description) =>
         new() { ["name"] = name, ["description"] = description };

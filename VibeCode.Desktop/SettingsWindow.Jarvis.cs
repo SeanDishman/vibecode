@@ -22,26 +22,14 @@ public partial class SettingsWindow
     /// rest of the app and people use, so each one lands on the section that replaced it rather than nowhere.</summary>
     public void SelectCategory(string category)
     {
-        var name = category.Trim();
-        (string Rail, FrameworkElement? Section) destination = name.ToLowerInvariant() switch
-        {
-            "notifications" => ("General", SectionNotifications),
-            "privacy" => ("General", SectionPrivacy),
-            "projects" => ("General", SectionProjects),
-            "hidden projects" => ("General", HiddenProjectsCard),   // the sidebar's "N hidden" link
-            "about" => ("General", SectionAbout),
-            "mcp servers" or "mcp" => ("MCP and extensions", McpServersCard),
-            "extensions" => ("MCP and extensions", SectionExtensions),
-            "mcp & extensions" => ("MCP and extensions", null),
-            "bridge" or "bridge & agents" => ("Bridge and agents", null),
-            _ => (name, null),
-        };
+        if (SettingsNavigation.Resolve(category) is not { } destination) return;
         for (var index = 0; index < Rail.Items.Count; index++)
         {
             if (Rail.Items[index] is not ListBoxItem item
-                || !AutomationProperties.GetName(item).Equals(destination.Rail, StringComparison.OrdinalIgnoreCase)) continue;
+                || !AutomationProperties.GetName(item).Equals(destination.RailName, StringComparison.OrdinalIgnoreCase)) continue;
             Rail.SelectedIndex = index;
-            if (destination.Section is { } section) Reveal(section, focus: false);
+            if (destination.SectionName is { } sectionName && FindName(sectionName) is FrameworkElement section)
+                Reveal(section, focus: false);
             return;
         }
     }

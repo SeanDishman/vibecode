@@ -101,32 +101,32 @@ public static class SpcOutlookParser
         DateTimeOffset? issued = null, validFrom = null, validTo = null;
         var forecaster = "";
         if (root["features"] is JsonArray features)
-        foreach (var feature in features.OfType<JsonObject>())
-        {
-            var props = feature["properties"] as JsonObject ?? new JsonObject();
-            var geometry = feature["geometry"] as JsonObject;
-            var polygons = ParseGeometry(geometry);
-            if (polygons.Count == 0) continue;
-
-            var code = Text(props["LABEL"]).Trim().ToUpperInvariant();
-            if (code.Length == 0) code = "OUTLOOK";
-            var dn = Number(props["DN"]);
-            var colors = DefaultColors(code);
-            areas.Add(new SpcRiskArea
+            foreach (var feature in features.OfType<JsonObject>())
             {
-                Code = code,
-                Label = Text(props["LABEL2"]) is { Length: > 0 } label ? label : FriendlyLabel(code),
-                Rank = RiskRank(code, dn),
-                Fill = Color(Text(props["fill"]), colors.fill),
-                Stroke = Color(Text(props["stroke"]), colors.stroke),
-                Polygons = polygons,
-            });
+                var props = feature["properties"] as JsonObject ?? new JsonObject();
+                var geometry = feature["geometry"] as JsonObject;
+                var polygons = ParseGeometry(geometry);
+                if (polygons.Count == 0) continue;
 
-            issued ??= Timestamp(props["ISSUE_ISO"] ?? props["ISSUE"]);
-            validFrom ??= Timestamp(props["VALID_ISO"] ?? props["VALID"]);
-            validTo ??= Timestamp(props["EXPIRE_ISO"] ?? props["EXPIRE"]);
-            if (forecaster.Length == 0) forecaster = Text(props["FORECASTER"]);
-        }
+                var code = Text(props["LABEL"]).Trim().ToUpperInvariant();
+                if (code.Length == 0) code = "OUTLOOK";
+                var dn = Number(props["DN"]);
+                var colors = DefaultColors(code);
+                areas.Add(new SpcRiskArea
+                {
+                    Code = code,
+                    Label = Text(props["LABEL2"]) is { Length: > 0 } label ? label : FriendlyLabel(code),
+                    Rank = RiskRank(code, dn),
+                    Fill = Color(Text(props["fill"]), colors.fill),
+                    Stroke = Color(Text(props["stroke"]), colors.stroke),
+                    Polygons = polygons,
+                });
+
+                issued ??= Timestamp(props["ISSUE_ISO"] ?? props["ISSUE"]);
+                validFrom ??= Timestamp(props["VALID_ISO"] ?? props["VALID"]);
+                validTo ??= Timestamp(props["EXPIRE_ISO"] ?? props["EXPIRE"]);
+                if (forecaster.Length == 0) forecaster = Text(props["FORECASTER"]);
+            }
 
         return new SpcOutlook
         {
@@ -195,21 +195,34 @@ public static class SpcOutlookParser
 
     private static int RiskRank(string code, int fallback) => code switch
     {
-        "TSTM" => 2, "MRGL" => 3, "SLGT" => 4, "ENH" => 5, "MDT" => 6, "HIGH" => 8,
+        "TSTM" => 2,
+        "MRGL" => 3,
+        "SLGT" => 4,
+        "ENH" => 5,
+        "MDT" => 6,
+        "HIGH" => 8,
         _ => fallback,
     };
 
     private static string FriendlyLabel(string code) => code switch
     {
-        "TSTM" => "General Thunderstorms Risk", "MRGL" => "Marginal Risk", "SLGT" => "Slight Risk",
-        "ENH" => "Enhanced Risk", "MDT" => "Moderate Risk", "HIGH" => "High Risk", _ => "SPC Outlook",
+        "TSTM" => "General Thunderstorms Risk",
+        "MRGL" => "Marginal Risk",
+        "SLGT" => "Slight Risk",
+        "ENH" => "Enhanced Risk",
+        "MDT" => "Moderate Risk",
+        "HIGH" => "High Risk",
+        _ => "SPC Outlook",
     };
 
     private static (string fill, string stroke) DefaultColors(string code) => code switch
     {
-        "TSTM" => ("#C1E9C1", "#55BB55"), "MRGL" => ("#66A366", "#005500"),
-        "SLGT" => ("#FFE066", "#DDAA00"), "ENH" => ("#FFA366", "#FF6600"),
-        "MDT" => ("#FF6666", "#FF0000"), "HIGH" => ("#FF66FF", "#FF00FF"),
+        "TSTM" => ("#C1E9C1", "#55BB55"),
+        "MRGL" => ("#66A366", "#005500"),
+        "SLGT" => ("#FFE066", "#DDAA00"),
+        "ENH" => ("#FFA366", "#FF6600"),
+        "MDT" => ("#FF6666", "#FF0000"),
+        "HIGH" => ("#FF66FF", "#FF00FF"),
         _ => ("#808080", "#FFFFFF"),
     };
 

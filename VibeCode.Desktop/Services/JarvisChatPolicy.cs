@@ -2,7 +2,12 @@ using System.IO;
 
 namespace VibeCode.Services;
 
-public sealed record JarvisChatSummary(string Id, string Title, string Path, string Status, bool IsLocked);
+public sealed record JarvisChatSummary(string Id, string Title, string Path, string Status, bool IsLocked)
+{
+    public string? Provider { get; init; }
+    public string? Model { get; init; }
+    public string? Effort { get; init; }
+}
 
 public sealed record JarvisChatFilter(string? ChatId = null, string? Directory = null,
     IReadOnlyList<string>? Terms = null, string Match = "all", string SearchIn = "all",

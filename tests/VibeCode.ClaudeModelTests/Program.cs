@@ -8,7 +8,7 @@ using VibeCode.Protocol;
 using VibeCode.Services;
 using VibeCode.UI;
 
-internal static class Program
+internal static partial class Program
 {
     private const BindingFlags Flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
     private static readonly Assembly Desktop = typeof(ChatViewModel).Assembly;
@@ -41,14 +41,14 @@ internal static class Program
         Directory.CreateDirectory(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")!);
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
-        AppSettings.Current.AgentMemoryEnabled = AppSettings.Current.AgentSwarmsEnabled = false;
+        AppSettings.Current.AgentMemoryEnabled = false;
         AppSettings.Current.NotifyOnTurnEnd = AppSettings.Current.NotifyOnAwaitingInput = false;
-
         AppSettings.Current.McpServers.Clear();
         try
         {
             CatalogChecks();
             PickerAndTransportChecks();
+            ModelRecoveryChecks();
             if (args.Contains("--local-catalog"))
                 foreach (var id in Current.Take(3)) InstalledCatalogCheck(actualCli, id);
             Console.WriteLine($"PASS: {Checks} Claude catalog checks. No model generations. Evidence: {Root}");
@@ -256,14 +256,28 @@ internal static class Program
 
     private static JsonObject Row(string value, string display, string resolved) => new()
     {
-        ["value"] = value, ["displayName"] = display, ["resolvedModel"] = resolved,
+        ["value"] = value,
+        ["displayName"] = display,
+        ["resolvedModel"] = resolved,
         ["supportedEffortLevels"] = new JsonArray(value == "haiku" ? Array.Empty<JsonNode?>() : Efforts.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()),
-        ["supportsEffort"] = value != "haiku", ["supportsAutoMode"] = value != "haiku",
-        ["supportsFastMode"] = value is "opus" or "default", ["isDefault"] = value == "default",
+        ["supportsEffort"] = value != "haiku",
+        ["supportsAutoMode"] = value != "haiku",
+        ["supportsFastMode"] = value is "opus" or "default",
+        ["isDefault"] = value == "default",
     };
 
-    private static List<JsonObject> Wire() => File.Exists(Environment.GetEnvironmentVariable("CLAUDE_MODEL_FIXTURE"))
-        ? File.ReadAllLines(Environment.GetEnvironmentVariable("CLAUDE_MODEL_FIXTURE")!).Select(line => JsonNode.Parse(line)!.AsObject()).ToList() : [];
+    private static List<JsonObject> Wire()
+    {
+        var path = Environment.GetEnvironmentVariable("CLAUDE_MODEL_FIXTURE");
+        if (!File.Exists(path)) return [];
+        // The fixture appends while the parent polls. File.ReadAllLines prevents the next append on Windows.
+        using var stream = new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        var text = reader.ReadToEnd();
+        var complete = text.LastIndexOf('\n'); // leave an in-flight final line for the next poll
+        return complete < 0 ? [] : text[..complete].Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonNode.Parse(line)!.AsObject()).ToList();
+    }
 
     private static void PumpUntil(Func<bool> condition)
     {
@@ -280,6 +294,8 @@ internal static class Program
 
     private static int Fixture()
     {
+        if (Environment.GetEnvironmentVariable("CLAUDE_MODEL_RECOVERY_FIXTURE") is not null)
+            return ModelRecoveryFixture();
         void Log(JsonObject row) => File.AppendAllText(Environment.GetEnvironmentVariable("CLAUDE_MODEL_FIXTURE")!, row.ToJsonString() + "\n");
         Log(new JsonObject { ["launch"] = new JsonArray(Environment.GetCommandLineArgs().Skip(1).Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()) });
         while (Console.ReadLine() is { } line)

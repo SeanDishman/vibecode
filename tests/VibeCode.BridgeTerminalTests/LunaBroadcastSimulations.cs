@@ -17,8 +17,6 @@ internal static partial class Program
         AppSettings.Current.DefaultCodexEffort = "low";
         AppSettings.Current.SecondBrainEnabled = false;
         AppSettings.Current.AgentMemoryEnabled = false;
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.McpServers.Clear();
         AppSettings.Current.BridgeAgentLimit = 17;
         var results = new List<object>();
@@ -47,9 +45,11 @@ internal static partial class Program
 
         void Save() => File.WriteAllText(reportPath, JsonSerializer.Serialize(new
         {
-            model = "gpt-6-luna", effort = "low",
+            model = "gpt-6-luna",
+            effort = "low",
             method = "Real authenticated Luna turns using the production MCP endpoint and bridge routing. Decision cases use passive recipient sessions; exchange cases use two live Luna sessions across three turns.",
-            results, failures,
+            results,
+            failures,
         }, new JsonSerializerOptions { WriteIndented = true }));
 
         void Run(bool advanced, bool orchestrator, string scenario)
@@ -130,8 +130,11 @@ internal static partial class Program
                 Check(name + ": real Luna session starts", actor.Status == "idle" && actor.Model == "gpt-6-luna");
                 if (scenario is "incoming-question" or "incoming-fyi")
                 {
-                    var receipt = Tool(peers[1], "bridge_send_message", new() { ["recipient"] = actor.BridgeAgentId,
-                        ["message"] = scenario == "incoming-question" ? "Only I need this: what is the validated retry budget for our client?" : "The shared integration check passed; no action or reply is needed. This is retained context only." });
+                    var receipt = Tool(peers[1], "bridge_send_message", new()
+                    {
+                        ["recipient"] = actor.BridgeAgentId,
+                        ["message"] = scenario == "incoming-question" ? "Only I need this: what is the validated retry budget for our client?" : "The shared integration check passed; no action or reply is needed. This is retained context only."
+                    });
                     incomingId = receipt["delivered"]![0]!["message_id"]!.ToString();
                 }
                 var details = scenario switch
@@ -223,9 +226,17 @@ internal static partial class Program
             {
                 results.Add(new
                 {
-                    name, passed = failure is null, failure, request, model = actor.Model, effort = actor.Effort,
-                    elapsed_seconds = watch.Elapsed.TotalSeconds, input_tokens = actor.TotalIn, output_tokens = actor.TotalOut,
-                    bridge_calls = calls.Count, calls,
+                    name,
+                    passed = failure is null,
+                    failure,
+                    request,
+                    model = actor.Model,
+                    effort = actor.Effort,
+                    elapsed_seconds = watch.Elapsed.TotalSeconds,
+                    input_tokens = actor.TotalIn,
+                    output_tokens = actor.TotalOut,
+                    bridge_calls = calls.Count,
+                    calls,
                     messages = actor.Items.OfType<TextItem>().Select(t => t.Text).ToArray(),
                     peer_model_turns = peers.Sum(p => Session(p).Sent.Count),
                 });

@@ -9,7 +9,7 @@ using VibeCode.Services;
 using VibeCode.UI;
 using System.Windows.Threading;
 
-internal static class Program
+internal static partial class Program
 {
     private static int _checks;
     private static readonly string Scratch = Path.Combine(Path.GetTempPath(), "vibecode-phone-security-" + Guid.NewGuid().ToString("n"));
@@ -26,6 +26,7 @@ internal static class Program
         try
         {
             ProofTests();
+            await EncryptionTests();
             await ServiceTests();
             await HttpTests();
             Console.WriteLine($"PASS: {_checks} phone security checks. Isolated fixtures only; no listener, real phone or model prompt.");
@@ -54,7 +55,9 @@ internal static class Program
         return new(StringComparer.OrdinalIgnoreCase)
         {
             ["Authorization"] = "Bearer " + token,
-            ["X-VibeCode-Epoch"] = proof.Epoch, ["X-VibeCode-Time"] = time, ["X-VibeCode-Nonce"] = nonce,
+            ["X-VibeCode-Epoch"] = proof.Epoch,
+            ["X-VibeCode-Time"] = time,
+            ["X-VibeCode-Nonce"] = nonce,
             ["X-VibeCode-Signature"] = Convert.ToBase64String(key.SignData(Encoding.UTF8.GetBytes(canonical),
                 HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence)),
         };
@@ -108,8 +111,10 @@ internal static class Program
         if (process.ExitCode != 0) throw new InvalidOperationException("Java interop fixture failed: " + error);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["X-VibeCode-Epoch"] = proof.Epoch, ["X-VibeCode-Time"] = time,
-            ["X-VibeCode-Nonce"] = "0123456789abcdef0123456789abcdef", ["X-VibeCode-Signature"] = output[1],
+            ["X-VibeCode-Epoch"] = proof.Epoch,
+            ["X-VibeCode-Time"] = time,
+            ["X-VibeCode-Nonce"] = "0123456789abcdef0123456789abcdef",
+            ["X-VibeCode-Signature"] = output[1],
         };
         Check("Java JCA signature accepted by .NET verifier", proof.Verify(output[0], "isolated-interop-token", "POST",
             "/api/chats/abc/send?v=1&wait=25", Encoding.UTF8.GetString(Convert.FromBase64String(output[2])), headers, DateTimeOffset.UtcNow));
@@ -204,12 +209,21 @@ internal static class Program
 
         service = NewService("enrollment");
         const string secret = "isolated-enrollment-secret";
-        var enrollment = new PhoneEnrolment { Id = "fixture", SecretHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret))),
-            IssuedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddHours(24) };
+        var enrollment = new PhoneEnrolment
+        {
+            Id = "fixture",
+            SecretHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret))),
+            IssuedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(24)
+        };
         Enrolments(service).Add(enrollment);
         PhoneBridgeStore.SaveEnrolments(new[] { enrollment });
-        object Enroll(string supplied = secret) => Request("/api/enroll", "POST", new JsonObject {
-            ["secret"] = supplied, ["devicePublicKey"] = publicKey, ["name"] = "Fixture" }.ToJsonString());
+        object Enroll(string supplied = secret) => Request("/api/enroll", "POST", new JsonObject
+        {
+            ["secret"] = supplied,
+            ["devicePublicKey"] = publicKey,
+            ["name"] = "Fixture"
+        }.ToJsonString());
         Check("wrong enrollment secret rejected", (await Route(service, Enroll("wrong"))).Status == 403);
         enrollment.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1);
         Check("expired enrollment rejected", (await Route(service, Enroll())).Status == 403);
@@ -281,14 +295,18 @@ internal static class Program
         service = NewService("multiple-apps");
         static PhoneEnrolment Ticket(string id, string secret) => new()
         {
-            Id = id, SecretHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret))),
-            IssuedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddHours(24),
+            Id = id,
+            SecretHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(secret))),
+            IssuedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(24),
         };
         Enrolments(service).AddRange(new[] { Ticket("app-a", "secret-for-phone-a"), Ticket("app-b", "secret-for-phone-b") });
         PhoneBridgeStore.SaveEnrolments(Enrolments(service));
         static object Enroll(string secret, string key) => Request("/api/enroll", "POST", new JsonObject
         {
-            ["secret"] = secret, ["devicePublicKey"] = key, ["name"] = "Fixture",
+            ["secret"] = secret,
+            ["devicePublicKey"] = key,
+            ["name"] = "Fixture",
         }.ToJsonString());
         Check("two generated apps are outstanding at once", service.PendingEnrolmentCount == 2);
         Check("the second app enrolls its phone first", (await Route(service, Enroll("secret-for-phone-b", secondPublicKey))).Status == 200);

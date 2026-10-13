@@ -13,6 +13,7 @@ internal sealed class BridgeChatMirror : IDisposable
     private readonly Func<int> _number;
     private readonly DispatcherTimer _timer;
     private readonly HashSet<ItemVm> _observed = new();
+    private readonly HashSet<CompactToolGroupItem> _groups = new();
     private bool _disposed;
     private bool _warned;
     private int _lastNumber;
@@ -38,20 +39,47 @@ internal sealed class BridgeChatMirror : IDisposable
             Schedule();
             return;
         }
+        // Replaying a long chat must not rescan every previous row on each insertion.
         var changed = false;
         if (e.OldItems is not null)
-            foreach (ItemVm item in e.OldItems)
-                if (_observed.Remove(item)) { item.PropertyChanged -= OnItemChanged; changed = true; }
+            foreach (ItemVm item in e.OldItems) changed |= SetObserved(item, false);
         if (e.NewItems is not null)
-            foreach (ItemVm item in e.NewItems)
-                if (item is UserItem or TextItem or ToolItem && _observed.Add(item))
-                { item.PropertyChanged += OnItemChanged; changed = true; }
+            foreach (ItemVm item in e.NewItems) changed |= SetObserved(item, true);
         if (changed) Schedule();
+    }
+
+    private bool SetObserved(ItemVm item, bool observe)
+    {
+        if (item is CompactToolGroupItem group)
+        {
+            if (observe && _groups.Add(group)) group.Tools.CollectionChanged += OnItemsChanged;
+            else if (!observe && _groups.Remove(group)) group.Tools.CollectionChanged -= OnItemsChanged;
+            foreach (var tool in group.Tools) SetObserved(tool, observe);
+            return true;
+        }
+        if (item is UserItem or TextItem or ToolItem or SubagentItem)
+        {
+            if (observe && _observed.Add(item)) item.PropertyChanged += OnItemChanged;
+            else if (!observe && _observed.Remove(item)) item.PropertyChanged -= OnItemChanged;
+            return true;
+        }
+        return item is BannerItem or DividerItem;
     }
 
     private void ObserveItems()
     {
-        var current = _pane.Items.Where(item => item is UserItem or TextItem or ToolItem).ToHashSet();
+        var groups = _pane.Items.OfType<CompactToolGroupItem>().ToHashSet();
+        foreach (var removed in _groups.Except(groups).ToArray())
+        {
+            removed.Tools.CollectionChanged -= OnItemsChanged;
+            _groups.Remove(removed);
+        }
+        foreach (var added in groups.Except(_groups))
+        {
+            added.Tools.CollectionChanged += OnItemsChanged;
+            _groups.Add(added);
+        }
+        var current = RootItems(_pane).Where(item => item is UserItem or TextItem or ToolItem or SubagentItem).ToHashSet();
         foreach (var removed in _observed.Except(current).ToArray())
         {
             removed.PropertyChanged -= OnItemChanged;
@@ -67,7 +95,8 @@ internal sealed class BridgeChatMirror : IDisposable
     private void OnItemChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is null or "" or nameof(TextItem.Text) or nameof(TextItem.Streaming)
-            or nameof(ToolItem.Input) or nameof(ToolItem.Result) or nameof(ToolItem.Status) or nameof(UserItem.AgentBody))
+            or nameof(ToolItem.Input) or nameof(ToolItem.Result) or nameof(ToolItem.Status) or nameof(UserItem.AgentBody)
+            or nameof(SubagentItem.Label) or nameof(SubagentItem.Task) or nameof(SubagentItem.Activity))
             Schedule();
     }
 
@@ -89,8 +118,17 @@ internal sealed class BridgeChatMirror : IDisposable
 
     private BridgeChatSnapshot Snapshot(bool active)
     {
+        if (_number() is var number and > 0) _lastNumber = number;
+        return Capture(_pane, _lastNumber, active);
+    }
+
+    private static IEnumerable<ItemVm> RootItems(ChatViewModel pane) => pane.Items.SelectMany(item =>
+        item is CompactToolGroupItem group ? group.Tools.Cast<ItemVm>() : new[] { item });
+
+    internal static BridgeChatSnapshot Capture(ChatViewModel pane, int number, bool active)
+    {
         var messages = new List<BridgeChatMessage>();
-        foreach (var item in _pane.Items)
+        foreach (var item in RootItems(pane))
         {
             switch (item)
             {
@@ -108,11 +146,21 @@ internal sealed class BridgeChatMirror : IDisposable
                         "Input:\n" + (tool.Input?.ToJsonString() ?? "") + "\nOutput:\n" + (tool.Result ?? ""),
                         tool.Name, tool.Status == "running"));
                     break;
+                case SubagentItem agent:
+                    messages.Add(new(messages.Count, "tool",
+                        $"{agent.Label}: {agent.StatusText}\nTask: {agent.Task}\n{agent.Activity}",
+                        "spawn_agent", agent.IsActive));
+                    break;
+                case BannerItem banner:
+                    messages.Add(new(messages.Count, "system", banner.Text));
+                    break;
+                case DividerItem divider:
+                    messages.Add(new(messages.Count, "system", divider.Label));
+                    break;
             }
         }
-        if (_number() is var number and > 0) _lastNumber = number;
-        return new(_pane.BridgeId, _lastNumber, _pane.Provider, _pane.Title, _pane.SessionId,
-            _pane.Status, active, DateTimeOffset.UtcNow, messages);
+        return new(pane.BridgeId, number, pane.Provider, pane.Title, pane.SessionId,
+            pane.Status, active, DateTimeOffset.UtcNow, messages.ToArray());
     }
 
     private void OnWriteFailed(string error)
@@ -137,5 +185,7 @@ internal sealed class BridgeChatMirror : IDisposable
         Store.WriteFailed -= OnWriteFailed;
         foreach (var item in _observed) item.PropertyChanged -= OnItemChanged;
         _observed.Clear();
+        foreach (var group in _groups) group.Tools.CollectionChanged -= OnItemsChanged;
+        _groups.Clear();
     }
 }

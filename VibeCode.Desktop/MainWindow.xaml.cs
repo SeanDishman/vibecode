@@ -93,7 +93,6 @@ public partial class MainWindow : Window
     private ListCollectionView? _allAccountManagerView;
     private ListCollectionView? _claudeAccountManagerView;
     private ListCollectionView? _codexAccountManagerView;
-    private ListCollectionView? _grokAccountManagerView;
     private bool _accountManagerRefreshQueued;
     private MainWindow? _bridgeMonitorWindow;
 
@@ -162,7 +161,6 @@ public partial class MainWindow : Window
         _vm.AllAccounts.CollectionChanged += OnAccountManagerCollectionChanged;
         _vm.Accounts.CollectionChanged += OnAccountManagerCollectionChanged;
         _vm.CodexAccounts.CollectionChanged += OnAccountManagerCollectionChanged;
-        _vm.GrokAccounts.CollectionChanged += OnAccountManagerCollectionChanged;
         RestoreWindowPlacement();
         if (_isAppearanceReload)
         {
@@ -331,7 +329,6 @@ public partial class MainWindow : Window
         _vm.AllAccounts.CollectionChanged -= OnAccountManagerCollectionChanged;
         _vm.Accounts.CollectionChanged -= OnAccountManagerCollectionChanged;
         _vm.CodexAccounts.CollectionChanged -= OnAccountManagerCollectionChanged;
-        _vm.GrokAccounts.CollectionChanged -= OnAccountManagerCollectionChanged;
         foreach (var c in _vm.Chats.ToList()) UnhookChat(c);
         // Every window-owned timer, not just the three the shutdown path used to stop: on a reload this window
         // stays alive as a detached object until the GC gets to it, and a running DispatcherTimer would keep it
@@ -339,7 +336,6 @@ public partial class MainWindow : Window
         _tokenRefreshTimer?.Stop();
         _codexRefreshTimer?.Stop();
         _kimiRefreshTimer?.Stop();
-        _grokRefreshTimer?.Stop();
         _accountUsageTimer?.Stop();
         _spotifyTimer?.Stop();
         _weatherTimer?.Stop();
@@ -625,7 +621,6 @@ public partial class MainWindow : Window
         StartTokenRefresh(immediate: false);
         StartCodexAccountRefresh(immediate: false);
         StartKimiAccountRefresh(immediate: false);
-        StartGrokAccountRefresh(immediate: false);
         StartAccountUsagePolling(immediate: false);
         StartSpotifyPolling(immediate: false);
         StartWeatherPolling(immediate: false);
@@ -646,7 +641,6 @@ public partial class MainWindow : Window
         // App-wide identity, settings, and extension controls stay in the primary titlebar in both companion modes.
         TitleBarBrand.Visibility = Visibility.Collapsed;
         WeatherChip.Visibility = Visibility.Collapsed;
-        SettingsButton.Visibility = Visibility.Collapsed;
         BridgeMonitorTitle.Visibility = Visibility.Visible;
         BridgeMonitorTitle.Text = IsDoubleSessionCompanion ? "VibeCode - Session 2" : "Bridge - second display";
         if (IsDoubleSessionCompanion)
@@ -701,10 +695,7 @@ public partial class MainWindow : Window
         ExtendedQueuePopup.DataContext = active;
         ModelPopup.DataContext = active;
         UsagePopup.DataContext = active;
-        GrokUsagePopup.DataContext = active;
         if (showBridge || active?.IsClaude != true) UsagePopup.IsOpen = false;
-        if (showBridge || active?.IsGrok != true) GrokUsagePopup.IsOpen = false;
-        if (!showBridge) BridgeGrokUsagePopup.IsOpen = false;
         if (!showBridge) BridgeKimiUsagePopup.IsOpen = false;
         SyncComposerToSurface();   // the surface decides which of a chat's two composers is the live one
     }
@@ -757,15 +748,15 @@ public partial class MainWindow : Window
         return chat;
     }
 
-    private void ActivateBridgeForWindow(string? peerProvider = null)
+    private void ActivateBridgeForWindow(string? peerProvider = null, string? peerAccountId = null)
     {
         if (IsDoubleSessionCompanion)
         {
-            if (ActiveChatForWindow is { } chat) _vm.ActivateBridgeOnSecondary(chat, peerProvider);
+            if (ActiveChatForWindow is { } chat) _vm.ActivateBridgeOnSecondary(chat, peerProvider, peerAccountId);
         }
         else
         {
-            _vm.ActivateBridge(peerProvider);
+            _vm.ActivateBridge(peerProvider, peerAccountId);
         }
         RefreshSurfaceState();
         RefreshBridgePartitions();
@@ -1186,7 +1177,6 @@ public partial class MainWindow : Window
             // the shell running with an empty chat list that the next autosave then wrote to disk.
             RunStartupStep("RefreshAccounts", () => _vm.RefreshAccounts());  // account chip + live login FIRST, so restored chats resolve their per-account token
             RunStartupStep("ApplyCodexAccounts", () => _vm.ApplyCodexAccounts(CodexAccountService.Instance.List())); // local metadata first; network refresh happens after restore
-            RunStartupStep("ApplyGrokAccounts", () => _vm.ApplyGrokAccounts(GrokAccountService.Instance.List())); // adopt the legacy login and bind restored Grok chats to it
             RunStartupStep("ImportOwnedCodexSessions", () =>
             {
                 var savedCodexBridges = AppSettings.Current.SavedBridges
@@ -1199,13 +1189,14 @@ public partial class MainWindow : Window
                     .Concat(savedCodexBridges.SelectMany(x => x.Peers.Select(p => p.SessionId)));
                 Protocol.CodexEnvironment.ImportOwnedSessions(ownedCodexSessions);
             });
+            await _vm.InitializeChatHistoryAsync();
             _vm.RestoreSession();   // reopen last session's chats (restored chats get hooked via CollectionChanged)
 
             await ShowStartupStepAsync("Starting background services…", 88, 4);
             StartTokenRefresh();    // keep every account's OAuth token fresh so per-account chats don't hit the ~8h expiry
             StartCodexAccountRefresh(); // VibeCode owns this OpenAI session and refreshes it even when no Codex chat is open
+            GeminiUsageService.Instance.Refresh();
             StartKimiAccountRefresh();  // authenticate is a token-free status check and does not create a Kimi session
-            StartGrokAccountRefresh();  // authenticate every isolated Grok profile and refresh its real xAI billing
             StartAccountUsagePolling(); // pre-warm + periodically refresh each account's session/week usage so changes surface
             StartSpotifyPolling();  // keep the Spotify mini-menu's now-playing fresh (no-op while the extension is off)
             StartWeatherPolling();  // keep the titlebar weather chip current (no-op while the extension is off)
@@ -1373,7 +1364,6 @@ public partial class MainWindow : Window
             foreach (var chat in _vm.Chats.Concat(_vm.LiveBridgePeers).Distinct())
                 chat.RefreshSwarmSettings();
             _vm.RefreshBridgeLimit();
-            _vm.RefreshBridgeRealtimeSharing();
             // Only the two dual-monitor toggles change what a reconcile would do, but EVERY settings write raises
             // AppSettings.Changed (autosave, window-placement saves on each move/resize, account refreshes…). Running
             // ReconcileDualMonitorBridge on all of them rebuilt both bridge partitions each time — tearing down and
@@ -2098,6 +2088,7 @@ public partial class MainWindow : Window
         TextItem t => t.Text,
         ThinkingItem th => th.Text,
         ToolItem tool => ToolText(tool),
+        SubagentItem agent => SubagentText(agent),
         CompactToolGroupItem group => GroupText(group),
         DividerItem d => d.Label,
         BannerItem b => b.Text,
@@ -2110,6 +2101,7 @@ public partial class MainWindow : Window
         UserItem u when !string.IsNullOrWhiteSpace(u.Text) => "You:\n" + u.Text.Trim(),
         TextItem t when !string.IsNullOrWhiteSpace(t.Text) => agentDisplay + ":\n" + t.Text.Trim(),
         ToolItem tool => ToolText(tool),
+        SubagentItem agent => SubagentText(agent),
         CompactToolGroupItem group => GroupText(group),
         _ => "",
     };
@@ -2128,6 +2120,10 @@ public partial class MainWindow : Window
 
     private static string GroupText(CompactToolGroupItem group) =>
         string.Join("\n\n", group.Tools.Select(ToolText));
+
+    private static string SubagentText(SubagentItem agent) =>
+        $"[{agent.Label}: {agent.StatusText}]\n{agent.Task}\n{agent.Activity}\n" +
+        string.Join("\n\n", agent.Transcript.Select(item => TranscriptLine(item, agent.Label)).Where(text => text.Length > 0));
 
     private static string ToolText(ToolItem t)
     {
@@ -2152,6 +2148,12 @@ public partial class MainWindow : Window
     private void OnExpandSidebar(object sender, RoutedEventArgs e) => _vm.SidebarCollapsed = false;
 
     private void OnCollapseSidebar(object sender, RoutedEventArgs e) => _vm.SidebarCollapsed = true;
+
+    private void OnCloseChatGroup(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (Ctx<CollectionViewGroup>(sender) is { } group) _vm.CloseChatGroup(group);
+    }
 
     // ---------- sidebar chat right-click menu (pin / fork / rename / copy / delete) ----------
 
@@ -2201,14 +2203,10 @@ public partial class MainWindow : Window
     private void OnDeleteChatMenu(object sender, RoutedEventArgs e)
     {
         if (Ctx<ChatViewModel>(sender) is not { } chat) return;
-        if (chat.IsLocked) return;
+        if (!chat.CanDeleteChat) return;
         // Ask, because unlike the old behaviour this one sticks. "Delete" used to be a close in a red icon: the row
         // went away and the chat was back under Projects on the next home-screen refresh.
-        var name = string.IsNullOrWhiteSpace(chat.Title) ? "this chat" : $"\"{chat.Title}\"";
-        if (MessageBox.Show(this,
-                $"Delete {name}?\n\nIt will be removed from VibeCode and won't come back in the sidebar, Projects or " +
-                "Recent. The provider's own transcript file is left on disk, so this doesn't erase anything outside VibeCode.",
-                "Delete chat", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        if (CreateChatConfirmation(chat, deleting: true).ShowDialog() != true) return;
         _vm.DeleteChat(chat);
     }
 
@@ -2233,6 +2231,7 @@ public partial class MainWindow : Window
 
         var close = new Button
         {
+            Name = "DialogClose",
             Content = "\uE711",
             Width = 42,
             Height = 38,
@@ -2240,6 +2239,7 @@ public partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
         };
         close.SetResourceReference(StyleProperty, "TitlebarClose");
+        System.Windows.Automation.AutomationProperties.SetName(close, "Close dialog");
         close.Click += (_, _) => win.Close();
 
         var titleRow = new DockPanel { LastChildFill = true };
@@ -2274,7 +2274,8 @@ public partial class MainWindow : Window
             Background = (Brush)FindResource("Bg1"),
             BorderBrush = (Brush)FindResource("BorderSoft"),
             BorderThickness = new Thickness(0, 0, 0, 1),
-            CornerRadius = new CornerRadius(12, 12, 0, 0),
+            CornerRadius = TryFindResource("Rad12") is CornerRadius radius
+                ? new CornerRadius(radius.TopLeft, radius.TopRight, 0, 0) : new CornerRadius(12, 12, 0, 0),
             Child = titleRow,
         };
         header.MouseLeftButtonDown += (_, e) =>
@@ -2384,14 +2385,18 @@ public partial class MainWindow : Window
     {
         provider = provider?.Trim().ToLowerInvariant() switch
         {
-            "codex" => "codex", "kimi" => "kimi", "grok" => "grok",
+            "codex" => "codex",
+            "kimi" => "kimi",
+            "gemini" => "gemini",
             _ => "claude",
         };
         if (ActiveChatForWindow is not { } chat
             || string.Equals(chat.Provider, provider, StringComparison.OrdinalIgnoreCase)) return;
         var name = provider switch
         {
-            "codex" => "Codex", "kimi" => "Kimi", "grok" => "Grok",
+            "codex" => "Codex",
+            "kimi" => "Kimi",
+            "gemini" => "Gemini",
             _ => "Claude",
         };
         if (MessageBox.Show(this,
@@ -2449,20 +2454,22 @@ public partial class MainWindow : Window
     {
         provider = provider?.Trim().ToLowerInvariant() switch
         {
-            "codex" => "codex", "kimi" => "kimi", "grok" => "grok",
+            "codex" => "codex",
+            "kimi" => "kimi",
+            "gemini" => "gemini",
             Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
             _ => "claude",
         };
         ClaudeProviderToggle.IsChecked = provider == "claude";
         CodexProviderToggle.IsChecked = provider == "codex";
         KimiProviderToggle.IsChecked = provider == "kimi";
-        GrokProviderToggle.IsChecked = provider == "grok";
+        GeminiProviderToggle.IsChecked = provider == "gemini";
         GlmProviderToggle.IsChecked = provider == Protocol.GlmPreset.ProviderId;
         CwdHint.Text = provider switch
         {
             "codex" => "AGENTS.md, skills, plugins and MCP servers load through VibeCode's managed Codex runtime.",
+            "gemini" => "GEMINI.md, skills, extensions and MCP tools load through the official Gemini CLI. Sign in with Google to use your AI Pro plan.",
             "kimi" => "AGENTS.md, skills, MCP servers and Kimi's project context load through the installed Kimi Code CLI.",
-            "grok" => "AGENTS.md, skills, MCP servers and Grok's project context load through the reviewed Grok ACP runtime.",
             Protocol.GlmPreset.ProviderId when !HasGlmKey =>
                 "No GLM account connected yet — open accounts and choose Add GLM account. "
                 + "Connect Z.ai Coding Plan, Z.ai API, or Baseten with its account key.",
@@ -2597,18 +2604,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Both X buttons - the sidebar row's and the chat header's - ask first, so a stray click can't close a
-    /// chat or stop a turn in flight. A locked chat skips the question: CloseChat refuses it and says why in the
-    /// transcript.</summary>
+    /// chat or stop a turn in flight. A protected ordinary chat skips the question: CloseChat refuses it and says why.
+    /// Bridge chats can close while locked because their history and lock are retained.</summary>
     private bool ConfirmCloseChat(ChatViewModel chat)
     {
-        if (chat.IsLocked) return true;
-        var name = string.IsNullOrWhiteSpace(chat.Title) ? "this chat" : $"\"{chat.Title}\"";
-        var question = $"Are you sure you want to close {name}?";
-        // Not IsWorking: that includes "starting", which every new chat reports while its CLI boots with nothing to stop.
-        if (chat.Status is "preparing" or "running")
-            question += $"\n\n{chat.AgentDisplay} is still working and will be stopped.";
-        return MessageBox.Show(this, question, "Close chat", MessageBoxButton.YesNo, MessageBoxImage.Question)
-               == MessageBoxResult.Yes;
+        if (!chat.CanCloseChat) return true;
+        return CreateChatConfirmation(chat, deleting: false).ShowDialog() == true;
     }
 
     private void OnResumeSession(object sender, RoutedEventArgs e)
@@ -2626,8 +2627,9 @@ public partial class MainWindow : Window
 
     private void OnNewChatInProject(object sender, RoutedEventArgs e)
     {
-        if (Ctx<ProjectVm>(sender) is not { } p || !NoDirectoryWorkspace.DirectoryExists(p.Cwd)) return;
-        NewChatForWindow(p.Cwd);
+        var cwd = Ctx<ProjectVm>(sender)?.Cwd ?? Ctx<SidebarDirectory>(sender)?.Cwd;
+        if (cwd is null || !NoDirectoryWorkspace.DirectoryExists(cwd)) return;
+        NewChatForWindow(cwd);
     }
 
     private void OnForkChat(object sender, RoutedEventArgs e)
@@ -2638,22 +2640,23 @@ public partial class MainWindow : Window
 
     private async void OnSignIn(object sender, RoutedEventArgs e)
     {
+        if (!await EnsureCliInstalledAsync(ActiveChatForWindow?.Provider ?? "claude")) return;
         if (ActiveChatForWindow is { IsCodex: true } codexChat)
         {
             await SignInToCodexAsync();
             if (_vm.IsCodexSignedIn) codexChat.RetryAfterSignIn();
             return;
         }
+        if (ActiveChatForWindow is { IsGemini: true } geminiChat)
+        {
+            await ManageGeminiAccountAsync(signIn: true);
+            if (_vm.IsGeminiSignedIn) geminiChat.RetryAfterSignIn();
+            return;
+        }
         if (ActiveChatForWindow is { IsKimi: true } kimiChat)
         {
             await ManageKimiAccountAsync(selectIfReady: true);
             if (_vm.IsKimiSignedIn) kimiChat.RetryAfterSignIn();
-            return;
-        }
-        if (ActiveChatForWindow is { IsGrok: true } grokChat)
-        {
-            await ManageGrokAccountAsync(selectIfReady: true);
-            if (_vm.IsGrokSignedIn) grokChat.RetryAfterSignIn();
             return;
         }
         try
@@ -2778,6 +2781,13 @@ public partial class MainWindow : Window
         // would be a worse bug than the one this fixes. Only the phases the user cannot influence are policed.
         if (svc.State == SpeechState.Recording) return;
 
+        if (svc.TranscriptionStartedAtUtc is { } started && started > _micBusySince)
+        {
+            _micBusySince = started;
+            if (svc.State == SpeechState.Transcribing)
+                ShowMicHint(SpeechService.UsesGroq ? "Transcribing with Groq…" : "Transcribing…");
+        }
+
         string message;
         if (svc.State == SpeechState.Downloading)
         {
@@ -2878,6 +2888,11 @@ public partial class MainWindow : Window
     private async void ToggleMic(Button? btn, ChatViewModel? owner, Action<string> insert, Action<string> hint)
     {
         if (btn is null) return;
+        // A mic click takes keyboard focus. Return it to this composer's editor before any
+        // asynchronous work, including empty/failed dictation, so Enter sends instead of recording again.
+        // Resolve bridge inputs from the clicked button's namescope, including on the companion monitor.
+        var input = owner is null ? InputBox : FindNamedInVisualTree<TextBox>(btn, "PaneInput");
+        input?.Focus();
         var svc = SpeechService.Instance;
         var key = (object?)owner ?? MainComposerOwner;   // never null: null is reserved for "unknown owner"
 
@@ -2950,7 +2965,7 @@ public partial class MainWindow : Window
                 var downloading = svc.State == SpeechState.Downloading;
                 var wedged = downloading
                     ? MicDownloadIsDead(svc)
-                    : DateTime.UtcNow - _micBusySince > MicWedgeTimeout;
+                    : DateTime.UtcNow - (svc.TranscriptionStartedAtUtc ?? _micBusySince) > MicWedgeTimeout;
                 if (wedged)
                 {
                     svc.ForceReset();   // never finished — the only escape from a dead mic
@@ -2958,7 +2973,8 @@ public partial class MainWindow : Window
                 else
                 {
                     // Busy and not wedged yet: never restart on top of it, just say so.
-                    hint(downloading ? MicDownloadHint(svc, still: true) : "Still transcribing…");
+                    hint(downloading ? MicDownloadHint(svc, still: true)
+                        : SpeechService.UsesGroq ? "Transcribing with Groq…" : "Still transcribing…");
                     return;
                 }
             }
@@ -3052,12 +3068,12 @@ public partial class MainWindow : Window
         EnsureAccountManagerViews();
         _vm.RefreshAccounts();
         _vm.ApplyCodexAccounts(CodexAccountService.Instance.List());
-        _vm.ApplyGrokAccounts(GrokAccountService.Instance.List());
         KickAccountUsage();
         KickCodexAccountRefresh(forceRefresh: false); // refresh the OpenAI row's plan + rolling usage on every open
+        _vm.RefreshGeminiAccount();
+        GeminiUsageService.Instance.Refresh();
         KickKimiAccountRefresh();                     // refresh installed/login state without creating a chat
         KimiUsageService.Instance.Refresh();          // and the live quota behind the account row (service throttles)
-        KickGrokAccountRefresh();                     // refresh bundled CLI and xAI login state
         SelectAccountManagerProvider(AppSettings.Current.DefaultProvider);
         RefreshAccountManagerViews();
         AccountManagerOverlay.Visibility = Visibility.Visible;
@@ -3133,26 +3149,17 @@ public partial class MainWindow : Window
 
     private void SelectAccountManagerProvider(string? provider)
     {
-        var index = provider?.ToLowerInvariant() switch
-        {
-            "claude" => 1,
-            "codex" => 2,
-            "kimi" => 3,
-            "grok" => 4,
-            Protocol.GlmPreset.ProviderId => 5,
-            _ => 0,
-        };
-        if (AccountProviderCombo.SelectedIndex != index)
-            AccountProviderCombo.SelectedIndex = index;
-        else
-            UpdateAccountManagerProvider();
+        var item = AccountProviderCombo.Items.OfType<ComboBoxItem>().FirstOrDefault(i =>
+            string.Equals(i.Tag as string, provider, StringComparison.OrdinalIgnoreCase))
+            ?? AccountProviderCombo.Items.OfType<ComboBoxItem>().First();
+        if (!ReferenceEquals(AccountProviderCombo.SelectedItem, item)) AccountProviderCombo.SelectedItem = item;
+        else UpdateAccountManagerProvider();
     }
 
     private void UpdateAccountManagerProvider()
     {
         // SelectionChanged can fire while InitializeComponent is still constructing the controls below the picker.
-        if (AllAccountsPanel is null || ClaudeAccountsPanel is null || CodexAccountsPanel is null || KimiAccountsPanel is null
-            || GrokAccountsPanel is null || GlmAccountsPanel is null
+        if (AllAccountsPanel is null || ClaudeAccountsPanel is null || CodexAccountsPanel is null || KimiAccountsPanel is null || GlmAccountsPanel is null || GeminiAccountsPanel is null
             || AccountManagerAddButton is null || AccountManagerAddLabel is null
             || AccountManagerFooterHint is null || AccountSortCombo is null)
             return;
@@ -3163,7 +3170,7 @@ public partial class MainWindow : Window
         ClaudeAccountsPanel.Visibility = provider == "claude" ? Visibility.Visible : Visibility.Collapsed;
         CodexAccountsPanel.Visibility = provider == "codex" ? Visibility.Visible : Visibility.Collapsed;
         KimiAccountsPanel.Visibility = provider == "kimi" ? Visibility.Visible : Visibility.Collapsed;
-        GrokAccountsPanel.Visibility = provider == "grok" ? Visibility.Visible : Visibility.Collapsed;
+        GeminiAccountsPanel.Visibility = provider == "gemini" ? Visibility.Visible : Visibility.Collapsed;
         GlmAccountsPanel.Visibility = glm ? Visibility.Visible : Visibility.Collapsed;
         if (glm) RefreshGlmUsage();
         // Sorting and status filtering are about saved LOGINS - usage, plan, sign-in state. A key has none of
@@ -3178,27 +3185,26 @@ public partial class MainWindow : Window
         {
             "all" => ("Choose a provider to add", "Showing every account. Select a provider above before adding another."),
             "codex" => ("Add Codex account", "Click to switch · right-click to test or remove · saved date appears at right."),
+            "gemini" => ("Sign in with Google", "Gemini uses the Google account connected through Gemini CLI. AI Pro and Ultra subscriptions are supported."),
             "kimi" => ("Manage Kimi account", "Kimi keeps one shared OAuth login in the Kimi Code CLI."),
-            "grok" => ("Add Grok account", "Click to switch · right-click to test, sign out, or remove · each login stays isolated."),
             _ when glm => ("Add GLM account", "Connect Z.ai Coding Plan, Z.ai API, or Baseten. Click an account to use it for new chats; key fallback stays within that service."),
             _ => ("Add Claude account", "Click to switch · right-click to test or remove · saved date appears at right."),
         };
+        UpdateCliInstallAction();
         RefreshAccountManagerViews();   // refreshes the GLM key list too
     }
 
     private void EnsureAccountManagerViews()
     {
         if (_allAccountManagerView is not null || AllAccountList is null || ClaudeAccountList is null
-            || CodexAccountList is null || GrokAccountList is null) return;
+            || CodexAccountList is null) return;
 
         _allAccountManagerView = new ListCollectionView((IList)_vm.AllAccounts);
         _claudeAccountManagerView = new ListCollectionView((IList)_vm.Accounts);
         _codexAccountManagerView = new ListCollectionView((IList)_vm.CodexAccounts);
-        _grokAccountManagerView = new ListCollectionView((IList)_vm.GrokAccounts);
         AllAccountList.ItemsSource = _allAccountManagerView;
         ClaudeAccountList.ItemsSource = _claudeAccountManagerView;
         CodexAccountList.ItemsSource = _codexAccountManagerView;
-        GrokAccountList.ItemsSource = _grokAccountManagerView;
     }
 
     private void OnAccountManagerCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
@@ -3229,22 +3235,11 @@ public partial class MainWindow : Window
         RefreshGlmKeys();
         EnsureAccountManagerViews();
         if (_allAccountManagerView is null || _claudeAccountManagerView is null
-            || _codexAccountManagerView is null || _grokAccountManagerView is null
+            || _codexAccountManagerView is null
             || AccountSearchBox is null || AccountStatusCombo is null || AccountSortCombo is null)
             return;
 
         var comparer = new AccountManagerComparer(SelectedAccountManagerSort);
-        foreach (var view in new[]
-                 {
-                     _allAccountManagerView, _claudeAccountManagerView, _codexAccountManagerView, _grokAccountManagerView,
-                 })
-        {
-            using (view.DeferRefresh())
-            {
-                view.Filter = AccountMatchesManagerFilters;
-                view.CustomSort = comparer;
-            }
-        }
 
         UpdateAccountManagerResultState();
     }
@@ -3288,28 +3283,11 @@ public partial class MainWindow : Window
             .All(term => haystack.Contains(term, StringComparison.OrdinalIgnoreCase));
     }
 
-    private bool GrokMatchesManagerFilters()
-    {
-        var account = new AccountManagerDescriptor(
-            "grok", _vm.GrokAccountLabel, _vm.GrokAccountSub, "Grok", _vm.GrokAccountUsage, "",
-            _vm.IsGrokInstalled && _vm.IsGrokSignedIn, false, _vm.IsGrokSelected, _vm.IsGrokSelected,
-            null, DateTime.MinValue);
-        if (!MatchesAccountStatus(account)) return false;
-
-        var query = AccountSearchBox?.Text?.Trim();
-        if (string.IsNullOrEmpty(query)) return true;
-        var haystack = string.Join('\n', account.Label, account.ProviderLine, account.Plan, account.UsageDisplay,
-            Grok45Preset.NormalDisplayName);
-        return query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .All(term => haystack.Contains(term, StringComparison.OrdinalIgnoreCase));
-    }
-
     private void UpdateAccountManagerResultState()
     {
         if (AccountManagerResultsText is null || AccountResetFiltersButton is null
             || AllAccountEmptyText is null || ClaudeAccountEmptyText is null || CodexAccountEmptyText is null
-            || KimiAccountRow is null || KimiAccountEmptyText is null
-            || GrokAccountEmptyText is null)
+            || KimiAccountRow is null || KimiAccountEmptyText is null)
             return;
 
         var provider = SelectedAccountManagerProvider;
@@ -3317,13 +3295,12 @@ public partial class MainWindow : Window
         var claudeVisible = _claudeAccountManagerView?.Cast<object>().Count() ?? 0;
         var codexVisible = _codexAccountManagerView?.Cast<object>().Count() ?? 0;
         var kimiVisible = KimiMatchesManagerFilters();
-        var grokVisible = _grokAccountManagerView?.Cast<object>().Count() ?? 0;
         var (visible, total) = provider switch
         {
             "all" => (allVisible, _vm.AllAccounts.Count),
             "codex" => (codexVisible, _vm.CodexAccounts.Count),
             "kimi" => (kimiVisible ? 1 : 0, 1),
-            "grok" => (grokVisible, _vm.GrokAccounts.Count),
+            "gemini" => (1, 1),
             // GLM's rows are keys, not accounts. Without this it fell through to Claude's branch and the header
             // read "3 accounts" over a panel listing one key.
             _ when Protocol.GlmPreset.Is(provider) => GlmKeyCounts(),
@@ -3351,10 +3328,6 @@ public partial class MainWindow : Window
         CodexAccountEmptyText.Visibility = codexVisible == 0 ? Visibility.Visible : Visibility.Collapsed;
         KimiAccountRow.Visibility = kimiVisible ? Visibility.Visible : Visibility.Collapsed;
         KimiAccountEmptyText.Visibility = kimiVisible ? Visibility.Collapsed : Visibility.Visible;
-        GrokAccountEmptyText.Text = _vm.GrokAccounts.Count == 0
-            ? "No Grok accounts are saved yet. Add one below to get started."
-            : "No Grok accounts match the current search or status filter.";
-        GrokAccountEmptyText.Visibility = grokVisible == 0 ? Visibility.Visible : Visibility.Collapsed;
         AccountResetFiltersButton.Visibility = hasSearchOrStatusFilter || SelectedAccountManagerSort != "active"
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -3376,11 +3349,9 @@ public partial class MainWindow : Window
                     codex.Email, codex.Usable, codex.AtLimit, codex.IsVibeCodeSelected, codex.IsCurrent,
                     AccountUsageScore(codex.SessionPercent, codex.WeekPercent, codex.AtLimit), codex.SavedAt);
                 return true;
-            case GrokAccountInfo grok:
-                account = new AccountManagerDescriptor(
-                    grok.Id, grok.Label, grok.ProviderLine, grok.PlanDisplay, grok.UsageDisplay,
-                    grok.Email, grok.Usable, grok.AtLimit, grok.IsVibeCodeSelected, grok.IsCurrent,
-                    grok.UsagePercent ?? (grok.AtLimit ? 100 : null), grok.SavedAt);
+            case GeminiAccountEntry gemini:
+                account = new AccountManagerDescriptor("gemini", gemini.Label, gemini.ProviderLine, "Gemini", gemini.UsageDisplay,
+                    "", gemini.Usable, false, gemini.IsVibeCodeSelected, gemini.IsVibeCodeSelected, null, DateTime.MinValue);
                 return true;
             case KimiAccountEntry kimi:
                 account = new AccountManagerDescriptor(
@@ -3459,7 +3430,7 @@ public partial class MainWindow : Window
             AccountInfo => 0,
             CodexAccountInfo => 1,
             KimiAccountEntry => 2,
-            GrokAccountInfo => 3,
+            GeminiAccountEntry => 5,
             _ => 4,
         };
 
@@ -3719,39 +3690,6 @@ public partial class MainWindow : Window
         finally { Interlocked.Exchange(ref _kimiRefreshRunning, 0); }
     }
 
-    // Grok accounts are independently authenticated and billed through ACP using their own GROK_AUTH_PATH.
-    private System.Windows.Threading.DispatcherTimer? _grokRefreshTimer;
-    private int _grokRefreshRunning;
-    private void StartGrokAccountRefresh(bool immediate = true)
-    {
-        if (immediate) KickGrokAccountRefresh();
-        _grokRefreshTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
-        _grokRefreshTimer.Tick -= OnGrokRefreshTick;
-        _grokRefreshTimer.Tick += OnGrokRefreshTick;
-        _grokRefreshTimer.Start();
-    }
-    private void OnGrokRefreshTick(object? sender, EventArgs e) => KickGrokAccountRefresh();
-    private void KickGrokAccountRefresh()
-    {
-        if (Interlocked.Exchange(ref _grokRefreshRunning, 1) != 0) return;
-        _ = RefreshGrokAccountAsync();
-    }
-    private async Task<GrokAccountState> RefreshGrokAccountAsync()
-    {
-        try
-        {
-            var accounts = await GrokAccountService.Instance.RefreshAllAsync();
-            _vm.ApplyGrokAccounts(accounts);
-            var state = await GrokAccountLoginService.ReadAsync(
-                GrokAccountService.Instance.AuthPathFor(GrokAccountService.Instance.ActiveId),
-                includeUsage: false);
-            _vm.ApplyGrokAccount(state);
-            ScheduleAccountManagerRefresh();
-            return state;
-        }
-        finally { Interlocked.Exchange(ref _grokRefreshRunning, 0); }
-    }
-
     // Per-account usage polling: probe every saved account's session/week /usage in the background and flag changes on
     // its row. Task.Run keeps the probe's file I/O off the UI thread (RefreshAccountUsageAsync marshals its UI updates).
     private System.Windows.Threading.DispatcherTimer? _accountUsageTimer;
@@ -3894,19 +3832,20 @@ public partial class MainWindow : Window
     {
         var provider = SelectedAccountManagerProvider;
         CloseAccountManager();
+        if (!await EnsureCliInstalledAsync(provider)) return;
         if (provider == "codex")
         {
             await SignInToCodexAsync();
             return;
         }
+        if (provider == "gemini")
+        {
+            await ManageGeminiAccountAsync(signIn: true);
+            return;
+        }
         if (provider == "kimi")
         {
             await ManageKimiAccountAsync(selectIfReady: true);
-            return;
-        }
-        if (provider == "grok")
-        {
-            await SignInToGrokAsync();
             return;
         }
         if (Protocol.GlmPreset.Is(provider))
@@ -3984,6 +3923,7 @@ public partial class MainWindow : Window
 
     private async Task ManageKimiAccountAsync(bool selectIfReady)
     {
+        if (!await EnsureCliInstalledAsync("kimi")) return;
         var state = await RefreshKimiAccountAsync();
         if (ShowKimiAccountProbeError(state)) return;
         if (state.IsSignedIn)
@@ -3991,58 +3931,6 @@ public partial class MainWindow : Window
             if (selectIfReady) SetNewChatProvider("kimi", persist: true);
             return;
         }
-
-        if (!state.IsInstalled)
-        {
-            // The official installer is a PowerShell script, and a Wine prefix has no PowerShell to run it in.
-            // The Linux package installs Kimi itself, so point at that instead of a button that cannot work.
-            if (ExternalBrowser.IsWine)
-            {
-                MessageBox.Show(this,
-                    "Kimi Code CLI is not installed in this Wine prefix.\n\n" +
-                    "Close VibeCode and run ./install-kali.sh again from the privatelinux folder. It downloads the " +
-                    "official checksum-verified Kimi build, and rerunning it is the supported repair path.",
-                    "Kimi Code CLI not installed", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            var install = MessageBox.Show(this,
-                "Kimi Code CLI is not installed. Install Kimi's official Windows build now?\n\n" +
-                "The official installer opens in PowerShell. Kimi also requires Git for Windows.",
-                "Install Kimi Code CLI", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (install != MessageBoxResult.Yes) return;
-            try
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "powershell.exe",
-                    Arguments = "-NoExit -NoProfile -ExecutionPolicy Bypass -Command \"irm 'https://code.kimi.com/kimi-code/install.ps1' | iex\"",
-                    UseShellExecute = true,
-                    WindowStyle = ProcessWindowStyle.Normal,
-                });
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this,
-                    "Run this in PowerShell:\n\nirm https://code.kimi.com/kimi-code/install.ps1 | iex\n\n" + ex.Message,
-                    "Install Kimi Code CLI", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            MessageBox.Show(this,
-                "Finish the official installer in the PowerShell window, then close it and click OK here. " +
-                "VibeCode will detect the new CLI without needing an app restart.",
-                "Installing Kimi Code CLI", MessageBoxButton.OK, MessageBoxImage.Information);
-            state = await RefreshKimiAccountAsync();
-            if (!state.IsInstalled)
-            {
-                MessageBox.Show(this,
-                    state.Error ?? "Kimi Code CLI still was not found. Finish the installer, then reopen the account menu and choose Kimi Code.",
-                    "Kimi CLI not detected", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            if (ShowKimiAccountProbeError(state)) return;
-        }
-
         await SignInToKimiAsync();
     }
 
@@ -4113,374 +4001,6 @@ public partial class MainWindow : Window
             "Kimi account ready", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private async void OnManageGrokAccount(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        await ManageGrokAccountAsync(selectIfReady: true);
-    }
-
-    private async Task ManageGrokAccountAsync(bool selectIfReady)
-    {
-        var state = await RefreshGrokAccountAsync();
-        if (ShowGrokAccountProbeError(state)) return;
-        if (state.IsSignedIn)
-        {
-            if (selectIfReady) SetNewChatProvider("grok", persist: true);
-            return;
-        }
-
-        if (!state.IsInstalled)
-        {
-            MessageBox.Show(this,
-                "The reviewed Grok runtime is not available. Reinstall VibeCode, place a reviewed " +
-                "grok.exe beside VibeCode, or set VIBECODE_GROK_PATH.",
-                "Grok runtime not found", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        await SignInToGrokAsync();
-    }
-
-    private bool ShowGrokAccountProbeError(GrokAccountState state)
-    {
-        if (string.IsNullOrWhiteSpace(state.Error)) return false;
-        MessageBox.Show(this,
-            "VibeCode found the Grok runtime but could not verify its xAI account.\n\n" + state.Error +
-            "\n\nYou can verify the runtime directly with `grok agent --no-leader stdio`.",
-            "Couldn't check Grok", MessageBoxButton.OK, MessageBoxImage.Warning);
-        return true;
-    }
-
-    private enum GrokSignInChoice
-    {
-        Browser,
-        DeviceCode,
-        Cookies,
-    }
-
-    private GrokSignInChoice? PromptForGrokSignInChoice()
-    {
-        GrokSignInChoice? choice = null;
-        var intro = new TextBlock
-        {
-            Text = "Choose how xAI should connect this Grok account.",
-            Foreground = (Brush)FindResource("Muted"),
-            FontSize = 13,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 12),
-        };
-
-        Button ChoiceButton(string title, string detail, bool primary = false)
-        {
-            var button = new Button
-            {
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(13, 10, 13, 10),
-                Margin = new Thickness(0, 0, 0, 8),
-                Content = new StackPanel
-                {
-                    Children =
-                    {
-                        new TextBlock { Text = title, FontWeight = FontWeights.SemiBold },
-                        new TextBlock
-                        {
-                            Text = detail, Foreground = (Brush)FindResource("Faint"),
-                            FontSize = 10.5, Margin = new Thickness(0, 3, 0, 0), TextWrapping = TextWrapping.Wrap,
-                        },
-                    },
-                },
-            };
-            button.SetResourceReference(StyleProperty, primary ? "PrimaryButton" : "GhostButton");
-            return button;
-        }
-
-        var device = ChoiceButton("Use device code (recommended)",
-            "Shows a short code you can approve from any browser or device.", primary: true);
-        var browser = ChoiceButton("Use existing browser session",
-            "xAI reuses the login already present in your default browser.");
-        var cookies = ChoiceButton("Paste Grok cookies",
-            ExternalBrowser.IsWine
-                ? "Uses your own Cookie-Editor JSON or Netscape export to complete xAI's sign-in directly."
-                : "Uses your own Cookie-Editor JSON or Netscape export in a temporary private sign-in window.");
-        var cancel = new Button
-        {
-            Content = "Cancel", IsCancel = true, HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(0, 4, 0, 0),
-        };
-        cancel.SetResourceReference(StyleProperty, "GhostButton");
-
-        var panel = new StackPanel { Margin = new Thickness(18) };
-        panel.Children.Add(intro);
-        panel.Children.Add(device);
-        panel.Children.Add(browser);
-        panel.Children.Add(cookies);
-        panel.Children.Add(cancel);
-        var dialog = CreateThemedDialog("Connect Grok account", panel, 470);
-        browser.Click += (_, _) => { choice = GrokSignInChoice.Browser; dialog.DialogResult = true; };
-        device.Click += (_, _) => { choice = GrokSignInChoice.DeviceCode; dialog.DialogResult = true; };
-        cookies.Click += (_, _) => { choice = GrokSignInChoice.Cookies; dialog.DialogResult = true; };
-        return dialog.ShowDialog() == true ? choice : null;
-    }
-
-    private string? PromptForGrokCookies()
-    {
-        string? secret = null;
-        var explanation = new TextBlock
-        {
-            Text = "Only paste cookies from your own Grok/xAI account. Cookie-Editor JSON, Netscape export, and a Cookie header are supported.",
-            Foreground = (Brush)FindResource("Muted"), FontSize = 12.5,
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
-        };
-        var warning = new TextBlock
-        {
-            Text = "Cookies are live credentials. VibeCode masks them, never logs them, and clears the temporary browser profile after sign-in.",
-            Foreground = (Brush)FindResource("Accent"), FontSize = 10.5,
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
-        };
-        var box = new PasswordBox
-        {
-            MaxLength = 256 * 1024, Padding = new Thickness(9, 8, 9, 8),
-            Background = (Brush)FindResource("Bg2"), Foreground = (Brush)FindResource("Text"),
-            BorderBrush = (Brush)FindResource("Border"),
-        };
-        var status = new TextBlock
-        {
-            Text = "Press Ctrl+V here, or use Paste from clipboard.",
-            Foreground = (Brush)FindResource("Faint"), FontSize = 10.5,
-            Margin = new Thickness(1, 6, 0, 12),
-        };
-        var paste = new Button { Content = "Paste from clipboard", Padding = new Thickness(12, 7, 12, 7) };
-        var import = new Button
-        {
-            Content = "Sign in", IsDefault = true, Padding = new Thickness(14, 7, 14, 7),
-            Margin = new Thickness(8, 0, 0, 0),
-        };
-        var cancel = new Button
-        {
-            Content = "Cancel", IsCancel = true, Padding = new Thickness(14, 7, 14, 7),
-            Margin = new Thickness(8, 0, 0, 0),
-        };
-        paste.SetResourceReference(StyleProperty, "GhostButton");
-        import.SetResourceReference(StyleProperty, "PrimaryButton");
-        cancel.SetResourceReference(StyleProperty, "GhostButton");
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        buttons.Children.Add(paste);
-        buttons.Children.Add(import);
-        buttons.Children.Add(cancel);
-        var panel = new StackPanel { Margin = new Thickness(18) };
-        panel.Children.Add(explanation);
-        panel.Children.Add(warning);
-        panel.Children.Add(box);
-        panel.Children.Add(status);
-        panel.Children.Add(buttons);
-        var dialog = CreateThemedDialog("Paste Grok cookies", panel, 510);
-
-        paste.Click += (_, _) =>
-        {
-            try
-            {
-                var clipboardText = Clipboard.ContainsText() ? Clipboard.GetText() : "";
-                box.Password = clipboardText;
-                clipboardText = string.Empty;
-                status.Text = box.Password.Length > 0
-                    ? "Cookie text loaded and hidden."
-                    : "The clipboard does not contain text.";
-            }
-            catch
-            {
-                status.Text = "VibeCode could not read text from the clipboard.";
-            }
-        };
-        import.Click += (_, _) =>
-        {
-            if (box.Password.Length == 0)
-            {
-                status.Text = "Paste a cookie export first.";
-                return;
-            }
-            secret = box.Password;
-            box.Clear();
-            dialog.DialogResult = true;
-        };
-        dialog.Loaded += (_, _) => box.Focus();
-        var accepted = dialog.ShowDialog() == true;
-        box.Clear();
-        return accepted ? secret : null;
-    }
-
-    private async void OnImportGrokCookies(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        await ImportGrokCookiesAsync();
-    }
-
-    private async Task ImportGrokCookiesAsync()
-    {
-        var state = await RefreshGrokAccountAsync();
-        if (ShowGrokAccountProbeError(state)) return;
-        if (!state.IsInstalled)
-        {
-            MessageBox.Show(this, "The reviewed Grok runtime is not available.", "Grok runtime not found",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var cookieText = PromptForGrokCookies();
-        if (cookieText is null) return;
-        using var imported = GrokCookieImportService.Parse(cookieText);
-        cookieText = string.Empty;
-        if (!imported.Success)
-        {
-            MessageBox.Show(this, imported.Error ?? "The Grok cookie export is not usable.",
-                "Grok cookies not imported", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        await RunGrokLoginAsync(GrokLoginMode.ExistingBrowserSession, imported);
-    }
-
-    private async Task SignInToGrokAsync()
-    {
-        switch (PromptForGrokSignInChoice())
-        {
-            case GrokSignInChoice.Browser:
-                await RunGrokLoginAsync(GrokLoginMode.ExistingBrowserSession);
-                break;
-            case GrokSignInChoice.DeviceCode:
-                await RunGrokLoginAsync(GrokLoginMode.DeviceCode);
-                break;
-            case GrokSignInChoice.Cookies:
-                await ImportGrokCookiesAsync();
-                break;
-        }
-    }
-
-    private async Task RunGrokLoginAsync(GrokLoginMode mode, GrokCookieImportResult? cookieImport = null)
-    {
-        using var cancellation = new CancellationTokenSource();
-        var status = new TextBlock
-        {
-            Text = "Starting Grok's device-code sign-in…\nYour browser will open when xAI returns the verification link.",
-            Foreground = (Brush)FindResource("Muted"),
-            FontSize = 13,
-            TextWrapping = TextWrapping.Wrap,
-        };
-        status.Text = cookieImport is not null
-            ? "Preparing a private Grok sign-in window for the pasted cookies..."
-            : mode == GrokLoginMode.ExistingBrowserSession
-                ? "Starting Grok's browser sign-in...\nxAI can reuse the session already present in your default browser."
-                : "Starting Grok's device-code sign-in...\nYour browser will open when xAI returns the verification link.";
-        var cancel = new Button
-        {
-            Content = "Cancel", HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 14, 0, 0), Padding = new Thickness(14, 6, 14, 6),
-        };
-        cancel.SetResourceReference(StyleProperty, "GhostButton");
-        var panel = new StackPanel { Margin = new Thickness(18) };
-        panel.Children.Add(status);
-        panel.Children.Add(cancel);
-        var progress = CreateThemedDialog("Sign in to Grok", panel, 430);
-        var closingForResult = false;
-        cancel.Click += (_, _) => cancellation.Cancel();
-        progress.Closing += (_, _) => { if (!closingForResult) cancellation.Cancel(); };
-        progress.Show();
-
-        GrokCookieLoginWindow? cookieWindow = null;
-        string? cookieBrowserError = null;
-        var browserOpened = true;
-        var result = await GrokAccountService.Instance.AddAsync(
-            mode,
-            url => Dispatcher.BeginInvoke(async () =>
-            {
-                if (cookieImport is null)
-                {
-                    browserOpened = ShowSignInLink(panel, status, url, mode == GrokLoginMode.DeviceCode
-                        ? "Approve the device code with xAI in your browser.\nVibeCode will detect it automatically."
-                        : "Finish signing in to Grok with xAI in your browser.\nYour existing browser session should be reused.");
-                    return;
-                }
-
-                // WebView2 does not exist on Linux, so the private-browser exchange cannot run under Wine. The
-                // handshake itself is plain HTTP, so fall through to the direct exchange instead of failing.
-                if (!ExternalBrowser.IsWine)
-                {
-                    try
-                    {
-                        status.Text = "Loading your Grok session into a temporary private browser...";
-                        cookieWindow = new GrokCookieLoginWindow { Owner = this };
-                        cookieWindow.UserCancelled += (_, _) => cancellation.Cancel();
-                        cookieWindow.Show();
-                        await cookieWindow.InitializeAsync(cookieImport.Cookies, url);
-                        status.Text = "Waiting for xAI to finish the official OAuth exchange...";
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        cookieBrowserError = "The private sign-in browser could not start (" + ex.Message
-                                             + "). Completing the exchange directly instead.";
-                        if (cookieWindow is { IsLoaded: true }) await cookieWindow.ClearAndCloseAsync();
-                        cookieWindow = null;
-                    }
-                }
-
-                status.Text = "Completing the xAI sign-in with your pasted session...";
-                var exchange = await GrokCookieAuthExchange.RunAsync(cookieImport.Cookies, url, cancellation.Token);
-                if (exchange.Success)
-                {
-                    cookieBrowserError = null;
-                    status.Text = "Waiting for xAI to finish the official OAuth exchange...";
-                    return;
-                }
-                cookieBrowserError = exchange.Error;
-                cancellation.Cancel();
-            }),
-            line => Dispatcher.BeginInvoke(() =>
-            {
-                if (browserOpened && !line.Contains("[xAI sign-in link]", StringComparison.Ordinal))
-                    status.Text = line.Length > 240 ? line[..240] + "…" : line;
-            }),
-            cancellation.Token);
-
-        closingForResult = true;
-        if (progress.IsVisible) progress.Close();
-        if (cookieWindow is { IsLoaded: true })
-            await cookieWindow.ClearAndCloseAsync();
-        if (!result.Success)
-        {
-            var userCancelled = cancellation.IsCancellationRequested && cookieBrowserError is null;
-            if (cookieImport is not null && !userCancelled)
-            {
-                var detail = cookieBrowserError ?? result.Error ?? "The pasted Grok session was not accepted.";
-                if (detail.Length > 600) detail = detail[..600] + "...";
-                var retry = MessageBox.Show(this,
-                    detail + "\n\nThe pasted cookies may be stale or tied to another browser. Try device-code sign-in instead?",
-                    "Grok cookie sign-in did not finish", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (retry == MessageBoxResult.Yes)
-                    await RunGrokLoginAsync(GrokLoginMode.DeviceCode);
-            }
-            else if (!userCancelled)
-                MessageBox.Show(this, result.Error ?? "Grok sign-in failed.", "Grok account not added",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        _vm.ApplyGrokAccount(new GrokAccountState
-        {
-            IsInstalled = true,
-            IsSignedIn = true,
-            Version = result.Version,
-        });
-        _vm.ApplyGrokAccounts(GrokAccountService.Instance.List());
-        SetNewChatProvider("grok", persist: true);
-        var identity = !string.IsNullOrWhiteSpace(result.Name)
-            ? result.Name
-            : !string.IsNullOrWhiteSpace(result.Email) ? result.Email : "Grok account";
-        MessageBox.Show(this,
-            cookieImport is null
-                ? $"{identity} is ready. New Grok chats and Bridge agents use this isolated xAI login."
-                : $"{identity} is ready. The temporary cookie browser was cleared; the isolated CLI login was saved.",
-            "Grok account ready", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
     /// <summary>
     /// Hand the provider's sign-in URL to a browser and leave the link on screen either way.
     ///
@@ -4538,6 +4058,7 @@ public partial class MainWindow : Window
 
     private async Task SignInToCodexAsync()
     {
+        if (!await EnsureCliInstalledAsync("codex")) return;
         using var cancellation = new CancellationTokenSource();
         var status = new TextBlock
         {
@@ -4596,7 +4117,10 @@ public partial class MainWindow : Window
         var wait = CreateThemedDialog("Testing account", new TextBlock
         {
             Text = $"Testing {a.Label}…\nRunning claude against this account's saved login.",
-            Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(18), FontSize = 13, TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("Muted"),
+            Margin = new Thickness(18),
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
         }, 300);
         wait.Show();
         AccountTestResult result;
@@ -4647,7 +4171,10 @@ public partial class MainWindow : Window
         var wait = CreateThemedDialog("Testing account", new TextBlock
         {
             Text = $"Testing {a.Label}…\nAsking Codex to validate this account's saved login.",
-            Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(18), FontSize = 13, TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("Muted"),
+            Margin = new Thickness(18),
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
         }, 300);
         wait.Show();
         AccountTestResult result;
@@ -4681,271 +4208,6 @@ public partial class MainWindow : Window
                     "Account not removed", MessageBoxButton.OK, MessageBoxImage.Warning);
                 break;
         }
-    }
-
-    // ---------- Grok account switch/test/logout/remove ----------
-
-    private GrokAccountInfo? _ctxGrokAccount;
-    private void OnGrokAccountRightDown(object sender, MouseButtonEventArgs e) =>
-        _ctxGrokAccount = Ctx<GrokAccountInfo>(sender);
-
-    private void OnSwitchGrokAccount(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        if (Ctx<GrokAccountInfo>(sender) is not { } account) return;
-        switch (_vm.SwitchGrokAccount(account))
-        {
-            case GrokAccountOutcome.Ok:
-                SetNewChatProvider("grok", persist: true);
-                MessageBox.Show(this,
-                    $"Grok is now active as {account.Label}.\n\n" +
-                    "New chats use this account. " + OtherAccountChatsNote,
-                    "Account switched", MessageBoxButton.OK,
-                    account.AtLimit ? MessageBoxImage.Warning : MessageBoxImage.Information);
-                break;
-            case GrokAccountOutcome.NeedsRelogin:
-                MessageBox.Show(this,
-                    $"{account.Label} is signed out. Add the account again to refresh only its private Grok login.",
-                    "Account needs sign-in", MessageBoxButton.OK, MessageBoxImage.Warning);
-                break;
-            case GrokAccountOutcome.Missing:
-                MessageBox.Show(this, "That Grok account is no longer saved.",
-                    "Account unavailable", MessageBoxButton.OK, MessageBoxImage.Warning);
-                break;
-            case GrokAccountOutcome.SaveFailed:
-                MessageBox.Show(this,
-                    "VibeCode couldn't save the Grok account selection.\n\n" +
-                    (GrokAccountService.Instance.LastError ?? "Unknown account-store error."),
-                    "Switch not saved", MessageBoxButton.OK, MessageBoxImage.Warning);
-                break;
-        }
-    }
-
-    private async void OnTestGrokAccount(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        if (_ctxGrokAccount is not { } account) return;
-        var wait = CreateThemedDialog("Testing Grok account", new TextBlock
-        {
-            Text = $"Testing {account.Label}…\nAuthenticating its isolated CLI login and reading xAI billing.",
-            Foreground = (Brush)FindResource("Muted"), Margin = new Thickness(18),
-            FontSize = 13, TextWrapping = TextWrapping.Wrap,
-        }, 320);
-        wait.Show();
-        AccountTestResult result;
-        try { result = await GrokAccountService.Instance.TestAccountAsync(account.Id); }
-        finally { wait.Close(); }
-        _vm.ApplyGrokAccounts(GrokAccountService.Instance.List());
-        var body = result.Detail;
-        if (!string.IsNullOrWhiteSpace(result.Raw)) body += "\n\n" + result.Raw;
-        MessageBox.Show(this, body, $"Test: {account.Label} — {result.Verdict}",
-            MessageBoxButton.OK, result.Ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
-    }
-
-    private async void OnLogoutGrokAccount(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        if (_ctxGrokAccount is not { } account) return;
-        if (MessageBox.Show(this,
-                $"Sign out {account.Label}?\n\nVibeCode will run Grok's supported logout command against only this saved profile. Other Grok accounts stay signed in.",
-                "Sign out Grok account", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-            return;
-        var result = await GrokAccountService.Instance.LogoutAsync(account.Id);
-        _vm.ApplyGrokAccounts(GrokAccountService.Instance.List());
-        if (!result.Success)
-            MessageBox.Show(this, result.Error ?? "Grok logout failed.", "Could not sign out",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-    }
-
-    private void OnRemoveGrokAccount(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        if (_ctxGrokAccount is not { } account) return;
-        var mainNote = account.IsCurrent
-            ? "\n\nThis is the active Grok account. VibeCode will fall back to another saved Grok login if one exists, otherwise nothing."
-            : "";
-        if (MessageBox.Show(this,
-                $"Remove {account.Label} from VibeCode?{mainNote}\n\nSign out first if you want Grok to revoke its cached CLI session.",
-                "Remove Grok account", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-            return;
-        switch (_vm.ForgetGrokAccount(account))
-        {
-            case GrokAccountOutcome.SaveFailed:
-                MessageBox.Show(this,
-                    $"Couldn't remove {account.Label}.\n\n" +
-                    (GrokAccountService.Instance.LastError ?? "Unknown account-store error."),
-                    "Account not removed", MessageBoxButton.OK, MessageBoxImage.Warning);
-                break;
-        }
-    }
-
-    private async void OnDeleteAllGrokChats(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        if (_ctxGrokAccount is not { } account) return;
-        if (!account.Usable)
-        {
-            MessageBox.Show(this,
-                $"{account.Label} is signed out. Add the account again before deleting its chats.",
-                "Sign in first", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (MessageBox.Show(this,
-                $"Delete ALL Grok chats for {account.Label}?\n\n" +
-                "This permanently removes every conversation on this account at grok.com. It cannot be undone.\n\n" +
-                "(Projects/workspaces are left untouched.)",
-                "Delete all Grok chats", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-            return;
-
-        var authPath = GrokAccountService.Instance.AuthPathFor(account.Id);
-        if (!GrokChatBulkDeleteService.TryReadCredential(authPath, out _, out _))
-        {
-            MessageBox.Show(this,
-                $"VibeCode couldn't read {account.Label}'s saved login, so it can't delete its chats. Sign in again and retry.",
-                "Login unavailable", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        // grok.com's chat API is Cloudflare-walled from most home IPs, so deletion routes through a proxy the
-        // user enters here (pre-filled with whatever was saved last time). Blank host = try directly.
-        var chosen = PromptForProxy(AppSettings.Current.GrokDeleteProxy);
-        if (chosen is null) return; // cancelled
-        var proxy = string.IsNullOrWhiteSpace(chosen) ? null : chosen;
-        AppSettings.Current.GrokDeleteProxy = proxy;
-        AppSettings.Current.Save();
-
-        var progress = new TextBlock
-        {
-            Text = $"Clearing every chat on {account.Label}…",
-            Foreground = (Brush)FindResource("Muted"),
-            Margin = new Thickness(18),
-            FontSize = 13,
-            TextWrapping = TextWrapping.Wrap,
-        };
-        var wait = CreateThemedDialog("Deleting Grok chats", progress, 340);
-        wait.Show();
-
-        var reporter = new Progress<int>(n => progress.Text = $"Deleted {n} chats…");
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(15));
-        GrokChatBulkDeleteResult result;
-        try
-        {
-            result = await GrokChatBulkDeleteService.DeleteAllAsync(
-                authPath, string.IsNullOrWhiteSpace(proxy) ? null : proxy, reporter, cancellation.Token);
-        }
-        catch (Exception ex)
-        {
-            result = new GrokChatBulkDeleteResult { Error = ex.Message };
-        }
-        finally
-        {
-            wait.Close();
-        }
-
-        if (result.NeedsProxy)
-        {
-            // Keep the entered proxy saved so the next attempt's dialog is pre-filled and they can just tweak it.
-            MessageBox.Show(this, result.Error, "Cloudflare blocked deletion",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (result.Success)
-            MessageBox.Show(this,
-                result.Deleted == 0
-                    ? $"{account.Label} had no chats to delete — it's already clear."
-                    : $"Deleted {result.Deleted} chat(s) from {account.Label}. Its chat list is now empty.",
-                "Grok chats deleted", MessageBoxButton.OK, MessageBoxImage.Information);
-        else
-            MessageBox.Show(this,
-                result.Error ?? "Grok chat deletion failed.",
-                "Could not delete chats", MessageBoxButton.OK, MessageBoxImage.Warning);
-    }
-
-    /// <summary>
-    /// Proxy entry for the Grok "Delete all chats" action: type (HTTP/SOCKS5), host/IP, port, and optional
-    /// username + password. Pre-filled from the saved proxy. Returns the canonical proxy string, "" to try
-    /// directly (blank host), or null if cancelled.
-    /// </summary>
-    private string? PromptForProxy(string? current)
-    {
-        var parts = GrokChatBulkDeleteService.ParseProxy(current);
-        var muted = (Brush)FindResource("Muted");
-
-        var intro = new TextBlock
-        {
-            Text = "grok.com is behind Cloudflare, which blocks chat deletion from most home connections. "
-                   + "Enter a proxy to route through a clean IP. Leave the host blank to try directly.",
-            Foreground = muted, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(0, 0, 0, 14),
-        };
-
-        var type = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
-        type.Items.Add("HTTP");
-        type.Items.Add("SOCKS5");
-        type.SelectedIndex = string.Equals(parts?.Kind, "socks5", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
-
-        var host = new TextBox { Text = parts?.Host ?? "", Margin = new Thickness(0, 3, 0, 3) };
-        var port = new TextBox { Text = parts is { Port: > 0 } ? parts.Port.ToString() : "", Margin = new Thickness(0, 3, 0, 3) };
-        var user = new TextBox { Text = parts?.User ?? "", Margin = new Thickness(0, 3, 0, 3) };
-        var pass = new PasswordBox { Password = parts?.Pass ?? "", Margin = new Thickness(0, 3, 0, 3) };
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(94) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        void AddRow(int r, string label, FrameworkElement field)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var lbl = new TextBlock
-            {
-                Text = label, Foreground = muted, VerticalAlignment = VerticalAlignment.Center,
-                FontSize = 12.5, Margin = new Thickness(0, 0, 10, 0),
-            };
-            Grid.SetRow(lbl, r); Grid.SetColumn(lbl, 0);
-            Grid.SetRow(field, r); Grid.SetColumn(field, 1);
-            grid.Children.Add(lbl); grid.Children.Add(field);
-        }
-        AddRow(0, "Type", type);
-        AddRow(1, "Host / IP", host);
-        AddRow(2, "Port", port);
-        AddRow(3, "Username", user);
-        AddRow(4, "Password", pass);
-
-        var ok = new Button { Content = "Save & delete", Width = 128, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
-        var cancel = new Button { Content = "Cancel", Width = 90, IsCancel = true };
-        var buttons = new StackPanel
-        {
-            Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 18, 0, 0),
-        };
-        buttons.Children.Add(ok);
-        buttons.Children.Add(cancel);
-
-        var panel = new StackPanel { Margin = new Thickness(18) };
-        panel.Children.Add(intro);
-        panel.Children.Add(grid);
-        panel.Children.Add(buttons);
-
-        var dialog = CreateThemedDialog("Proxy for deleting Grok chats", panel, 380);
-        string? result = null;
-        ok.Click += (_, _) =>
-        {
-            var enteredHost = host.Text.Trim();
-            if (enteredHost.Length == 0) { result = ""; dialog.DialogResult = true; return; }  // blank = try directly
-            if (!int.TryParse(port.Text.Trim(), out var enteredPort) || enteredPort is < 1 or > 65535)
-            {
-                MessageBox.Show(dialog, "Enter a valid port (1–65535).", "Proxy",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            var kind = type.SelectedIndex == 1 ? "socks5" : "http";
-            var enteredUser = user.Text.Trim();
-            result = GrokChatBulkDeleteService.BuildProxyString(new GrokChatBulkDeleteService.ProxyParts(
-                kind, enteredHost, enteredPort,
-                enteredUser.Length == 0 ? null : enteredUser,
-                pass.Password.Length == 0 ? null : pass.Password));
-            dialog.DialogResult = true;
-        };
-        host.Loaded += (_, _) => host.Focus();
-        return dialog.ShowDialog() == true ? result : null;
     }
 
     // ---------- Spotify inline player ----------
@@ -5022,7 +4284,7 @@ public partial class MainWindow : Window
         // The draft remains open until Close, Escape, or a successful start.
         if (chat is null) return;
         BridgeSetup.Configure(chat, _vm.MaximumFreshOrchestratorWorkers,
-            workerCapacity: _ => _vm.MaximumFreshOrchestratorWorkers);
+            workerCapacity: _ => _vm.MaximumFreshOrchestratorWorkers, includeKimiAccount: _vm.IsKimiSignedIn);
         BridgePeerPopup.PlacementTarget = this;
         BridgeSetup.MaxWidth = Math.Max(640, Math.Min(960, ActualWidth - 64));
         BridgeSetup.MaxHeight = Math.Max(300, Math.Min(SystemParameters.WorkArea.Height - 100, ActualHeight - 80));
@@ -5091,6 +4353,10 @@ public partial class MainWindow : Window
             return;
         }
         if (sender is not Button { ContextMenu: { } menu } button) return;
+        // Accounts can be added or signed out between opens, so each provider's account submenu is rebuilt here.
+        var accounts = BridgeAccountChoice.Load(_vm.IsKimiSignedIn);
+        foreach (var item in menu.Items.OfType<MenuItem>())
+            AttachBridgeAccountMenu(item, accounts, account => AddBridgeAgentForWindow(account.Provider, account.AccountId));
         menu.PlacementTarget = button;
         menu.Placement = PlacementMode.Bottom;
         menu.IsOpen = true;
@@ -5102,7 +4368,6 @@ public partial class MainWindow : Window
     {
         BridgeUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
         BridgeKimiUsagePopup.IsOpen = false;
         BridgeAnnouncePopup.IsOpen = false;
         BridgeMorePopup.IsOpen = true;
@@ -5134,7 +4399,14 @@ public partial class MainWindow : Window
 
     private void OnAddBridgeProvider(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.Tag is not string provider) return;
+        // A provider with several signed-in accounts adds from its account submenu instead.
+        if (sender is not MenuItem { Tag: string provider, HasItems: false }) return;
+        AddBridgeAgentForWindow(provider,
+            BridgeAccountChoice.OnlyUsable(BridgeAccountChoice.For(provider, _vm.IsKimiSignedIn))?.AccountId);
+    }
+
+    private void AddBridgeAgentForWindow(string provider, string? accountId)
+    {
         if (!CanAddBridgeAgentForWindow)
         {
             ShowBridgeAgentLimitReached();
@@ -5144,12 +4416,12 @@ public partial class MainWindow : Window
         // flag to set and nothing to re-split.
         if (OwnsSecondaryBridge)
         {
-            _vm.AddBridgeAgentOnSecondary(provider);
+            _vm.AddBridgeAgentOnSecondary(provider, accountId);
             ScheduleBridgeGridRows();
             return;
         }
         var before = _vm.BridgePanes.Count;
-        _vm.AddBridgeAgent(provider);
+        _vm.AddBridgeAgent(provider, accountId);
         if (_vm.BridgePanes.Count <= before) return;   // refused: already at the agent cap
         // An agent added from the second-monitor window belongs to that display and stays there.
         _vm.BridgePanes[^1].OnSecondMonitor = _isBridgeMonitor && SplitActive;
@@ -5273,12 +4545,6 @@ public partial class MainWindow : Window
         NewChatForWindow(pane.Cwd, sid, fork: true, title: pane.Title + " (fork)", provider: pane.Provider);
     }
 
-    // Crown this pane as the bridge MANAGER (the brain that dispatches its peers), or step it down again.
-    private void OnToggleBridgeManager(object sender, RoutedEventArgs e)
-    {
-        if (Ctx<ChatViewModel>(sender) is { } vm) _vm.ToggleBridgeManager(vm);
-    }
-
     // Expand one bridge agent to fill the whole bridge (focus mode), or restore the grid if it's already expanded.
     private void OnToggleBridgePaneExpand(object sender, RoutedEventArgs e)
     {
@@ -5286,16 +4552,10 @@ public partial class MainWindow : Window
         _vm.ToggleBridgeExpand(vm, SplitActive ? PaneBelongsToThisBridgeSurface : null);
     }
 
-    // ---------- bridge pane ⋮ overflow (Manager / Fork / Todos / Subagents / Messages) ----------
+    // ---------- bridge pane ⋮ overflow (Fork / Todos / Subagents / Messages) ----------
     // Expand + Close stay as standalone header buttons; everything else opens from this menu.
     // Feature panels (todos / subagents / messages) open after the menu dismisses so the same click
     // that chose the row doesn't also kill the follow-up popup (same pattern as OnMenuBridge).
-
-    private void OnPaneMenuManager(object sender, RoutedEventArgs e)
-    {
-        ClosePaneMoreMenu(sender);
-        OnToggleBridgeManager(sender, e);
-    }
 
     private void OnPaneMenuFork(object sender, RoutedEventArgs e)
     {
@@ -5639,34 +4899,13 @@ public partial class MainWindow : Window
             return;
         }
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
         BridgeKimiUsagePopup.IsOpen = false;
-        GrokUsagePopup.IsOpen = false;
         UsagePopup.IsOpen = true;
         UsageService.Instance.Refresh(force: true);   // always fetch fresh numbers when the panel opens
     }
 
     private void OnUsageUnchecked(object sender, RoutedEventArgs e) => UsagePopup.IsOpen = false;
     private void OnUsagePopupClosed(object? sender, EventArgs e) => UsageToggle.IsChecked = false;
-
-    private void OnGrokUsageChecked(object sender, RoutedEventArgs e)
-    {
-        if (ActiveChatForWindow?.IsGrok != true)
-        {
-            GrokAccountUsageToggle.IsChecked = false;
-            return;
-        }
-        UsagePopup.IsOpen = false;
-        BridgeUsagePopup.IsOpen = false;
-        BridgeCodexUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = false;
-        GrokUsagePopup.IsOpen = true;
-        KickGrokAccountRefresh();
-    }
-    private void OnGrokUsageUnchecked(object sender, RoutedEventArgs e) => GrokUsagePopup.IsOpen = false;
-    private void OnGrokUsagePopupClosed(object? sender, EventArgs e) => GrokAccountUsageToggle.IsChecked = false;
-    private void OnGrokUsageRefresh(object sender, RoutedEventArgs e) => KickGrokAccountRefresh();
     // Normal Codex chats share the same live account/rate-limit card as Bridge. Move the one popup to the
     // active surface's pill so its data and refresh behavior cannot drift between chat modes.
     private void OnCodexUsageChecked(object sender, RoutedEventArgs e)
@@ -5677,9 +4916,7 @@ public partial class MainWindow : Window
             return;
         }
         UsagePopup.IsOpen = false;
-        GrokUsagePopup.IsOpen = false;
         BridgeUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
         BridgeKimiUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.PlacementTarget = CodexUsageToggle;
@@ -5698,7 +4935,6 @@ public partial class MainWindow : Window
     private void OnBridgeUsageChecked(object sender, RoutedEventArgs e)
     {
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
         BridgeKimiUsagePopup.IsOpen = false;
         BridgeUsagePopup.IsOpen = true;
         UsageService.Instance.Refresh(force: true);
@@ -5712,7 +4948,6 @@ public partial class MainWindow : Window
     {
         BridgeUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
         BridgeKimiUsagePopup.IsOpen = false;
         BridgeAnnouncePopup.IsOpen = true;
         // Focus the field once the popup has realized its content.
@@ -5755,7 +4990,6 @@ public partial class MainWindow : Window
     private void OnBridgeCodexUsageChecked(object sender, RoutedEventArgs e)
     {
         BridgeUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
         BridgeKimiUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.PlacementTarget = BridgeCodexUsageToggle;
@@ -5778,24 +5012,6 @@ public partial class MainWindow : Window
     }
     private void OnBridgeCodexUsageRefresh(object sender, RoutedEventArgs e) => KickCodexAccountRefresh(forceRefresh: true);
 
-    private void OnBridgeGrokUsageChecked(object sender, RoutedEventArgs e)
-    {
-        if (!_vm.BridgeUsesGrok)
-        {
-            BridgeHeaderGrokUsageToggle.IsChecked = false;
-            return;
-        }
-        UsagePopup.IsOpen = false;
-        GrokUsagePopup.IsOpen = false;
-        BridgeUsagePopup.IsOpen = false;
-        BridgeCodexUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = true;
-        KickGrokAccountRefresh();
-    }
-    private void OnBridgeGrokUsageUnchecked(object sender, RoutedEventArgs e) => BridgeGrokUsagePopup.IsOpen = false;
-    private void OnBridgeGrokUsagePopupClosed(object? sender, EventArgs e) => BridgeHeaderGrokUsageToggle.IsChecked = false;
-    private void OnBridgeGrokUsageRefresh(object sender, RoutedEventArgs e) => KickGrokAccountRefresh();
-
     private void OnBridgeKimiUsageChecked(object sender, RoutedEventArgs e)
     {
         if (!_vm.BridgeUsesKimi)
@@ -5804,10 +5020,8 @@ public partial class MainWindow : Window
             return;
         }
         UsagePopup.IsOpen = false;
-        GrokUsagePopup.IsOpen = false;
         BridgeUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeGrokUsagePopup.IsOpen = false;
         BridgeKimiUsagePopup.IsOpen = true;
         KimiUsageService.Instance.Refresh(force: true);
     }
@@ -5979,8 +5193,11 @@ public partial class MainWindow : Window
             var png = PngFromBitmap(src);
             chat.Attachments.Add(new Attachment
             {
-                Kind = "image", FileName = "pasted-image.png", MediaType = "image/png",
-                Data = png, Preview = LoadThumb(png),
+                Kind = "image",
+                FileName = "pasted-image.png",
+                MediaType = "image/png",
+                Data = png,
+                Preview = LoadThumb(png),
             });
             return true;
         }
@@ -5999,8 +5216,11 @@ public partial class MainWindow : Window
                 // png/jpeg/gif/webp are sent as-is; bmp isn't an accepted media type, so re-encode to png.
                 var media = ext.ToLowerInvariant() switch
                 {
-                    ".png" => "image/png", ".gif" => "image/gif", ".webp" => "image/webp",
-                    ".jpg" or ".jpeg" => "image/jpeg", _ => "image/png",
+                    ".png" => "image/png",
+                    ".gif" => "image/gif",
+                    ".webp" => "image/webp",
+                    ".jpg" or ".jpeg" => "image/jpeg",
+                    _ => "image/png",
                 };
                 if (ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase))
                 {
@@ -6011,14 +5231,21 @@ public partial class MainWindow : Window
                 }
                 chat.Attachments.Add(new Attachment
                 {
-                    Kind = "image", FileName = name, MediaType = media, Data = bytes, Preview = LoadThumb(bytes),
+                    Kind = "image",
+                    FileName = name,
+                    MediaType = media,
+                    Data = bytes,
+                    Preview = LoadThumb(bytes),
                 });
             }
             else if (ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
             {
                 chat.Attachments.Add(new Attachment
                 {
-                    Kind = "document", FileName = name, MediaType = "application/pdf", Data = File.ReadAllBytes(path),
+                    Kind = "document",
+                    FileName = name,
+                    MediaType = "application/pdf",
+                    Data = File.ReadAllBytes(path),
                 });
             }
             else
@@ -6275,22 +5502,31 @@ public partial class MainWindow : Window
         ThinkPopup.IsOpen = false;
     }
 
-    // Fast-mode toggle in the effort dropdown. Keep the popup open so the check flips in place.
+    // Speed controls sit beside effort and change only the chat that owns the composer.
     private void OnFastModePick(object sender, RoutedEventArgs e) =>
-        ToggleFastMode(Ctx<ChatViewModel>(sender) ?? ActiveChatForWindow);
+        ApplySpeedToggle(sender, Ctx<ChatViewModel>(sender) ?? ActiveChatForWindow, ultrafast: false);
 
-    // Same row in a Bridge pane's effort popup. The pane owns the popup's DataContext, so read the chat from there
-    // rather than from ActiveChatForWindow - in Bridge there is no single active chat to speak of.
+    // Each Bridge pane owns its speed controls, independently of the selected ordinary chat.
     private void OnPaneFastModePick(object sender, RoutedEventArgs e) =>
-        ToggleFastMode(Ctx<ChatViewModel>(sender));
+        ApplySpeedToggle(sender, Ctx<ChatViewModel>(sender), ultrafast: false);
 
-    /// <summary>
-    /// Flip fast mode on the chat whose row was clicked - and on nothing else. It used to be one global setting
-    /// that every chat read, so this handler had to broadcast a refresh to the siblings; in a four-agent Bridge that
-    /// meant turning fast mode off on one pane turned it off on all four. Each chat now owns the flag (the setting
-    /// only seeds the next new chat), so the neighbours are left exactly as the user left them.
-    /// </summary>
-    private void ToggleFastMode(ChatViewModel? origin) => origin?.SetFastMode(!origin.FastMode);
+    private void OnUltrafastModePick(object sender, RoutedEventArgs e) =>
+        ApplySpeedToggle(sender, Ctx<ChatViewModel>(sender) ?? ActiveChatForWindow, ultrafast: true);
+
+    private void OnPaneUltrafastModePick(object sender, RoutedEventArgs e) =>
+        ApplySpeedToggle(sender, Ctx<ChatViewModel>(sender), ultrafast: true);
+
+    private static void ApplySpeedToggle(object sender, ChatViewModel? chat, bool ultrafast)
+    {
+        if (sender is not ToggleButton toggle || chat is null) return;
+        var on = toggle.IsChecked == true;
+        // Checked/Unchecked supports mouse, keyboard and UI Automation. A binding refresh must not save a seed.
+        if (ultrafast)
+        {
+            if (chat.UltrafastMode != on) chat.SetUltrafastMode(on);
+        }
+        else if (chat.FastMode != on) chat.SetFastMode(on);
+    }
 
 
     // ---------- permissions ----------

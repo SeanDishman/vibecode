@@ -17,7 +17,6 @@ namespace VibeCode.Services;
 public sealed class ApiKeyAccount : Observable
 {
     public required string Id { get; init; }
-    /// <summary>claude | codex | grok | kimi | glm - matches AppSettings.DefaultProvider.</summary>
     public required string Provider { get; init; }
     /// <summary>GLM service identity. Old accounts without this field remain on Baseten.</summary>
     public string GlmBackend { get; init; } = GlmPreset.Baseten;
@@ -34,7 +33,8 @@ public sealed class ApiKeyAccount : Observable
     [JsonIgnore] public string ProviderDisplay => ApiKeyAccountService.ProviderName(Provider);
     [JsonIgnore] public string Initial => ProviderDisplay.Length > 0 ? ProviderDisplay[..1] : "?";
     [JsonIgnore] public string ConnectionDisplay => GlmPreset.Is(Provider) ? GlmPreset.BackendName(GlmBackend) : ProviderDisplay;
-    [JsonIgnore] public string Title => string.IsNullOrWhiteSpace(Label)
+    [JsonIgnore]
+    public string Title => string.IsNullOrWhiteSpace(Label)
         ? GlmPreset.Is(Provider) ? $"{ConnectionDisplay} account" : $"{ProviderDisplay} API key"
         : Label;
     [JsonIgnore] public string Subtitle => $"{ConnectionDisplay} · {Masked}";
@@ -44,16 +44,9 @@ public sealed class ApiKeyAccount : Observable
         string.Equals(AppSettings.Current.DefaultProvider, Provider, StringComparison.OrdinalIgnoreCase) &&
         IsPreferred;
 
-    /// <summary>
-    /// True when this is the key chosen for its own provider, whether or not that provider is the active one.
-    ///
-    /// Distinct from <see cref="IsSelected"/> on purpose. That one answers "is this the credential the next chat
-    /// will run on", which is false for every Grok key while Claude is the active provider - so a per-provider
-    /// key list using it would show no key as chosen at all, and offer to switch to the one already in use.
-    /// </summary>
     [JsonIgnore]
     public bool IsPreferred =>
-        string.Equals(ApiKeyAccountService.Instance.SelectedFor(Provider)?.Id, Id, StringComparison.Ordinal);
+    string.Equals(ApiKeyAccountService.Instance.SelectedFor(Provider)?.Id, Id, StringComparison.Ordinal);
 
     public void RefreshSelection() { Raise(nameof(IsSelected)); Raise(nameof(IsPreferred)); }
 }
@@ -99,7 +92,6 @@ public sealed class ApiKeyAccountService : Observable
     {
         "claude" => "Claude",
         "codex" => "ChatGPT",
-        "grok" => "Grok",
         "kimi" => "Kimi",
         VibeCode.Protocol.GlmPreset.ProviderId => VibeCode.Protocol.GlmPreset.DisplayName,
         _ => provider ?? "",
@@ -122,7 +114,7 @@ public sealed class ApiKeyAccountService : Observable
         /// <see cref="DropRetiredProviders"/> checks, so omitting it would silently delete every saved GLM key
         /// on the next launch.</remarks>
         internal static readonly string[] InMenuOrder =
-            ["claude", "codex", "grok", "kimi", VibeCode.Protocol.GlmPreset.ProviderId];
+            ["claude", "codex", "kimi", VibeCode.Protocol.GlmPreset.ProviderId];
     }
 
     /// <summary>The providers that can be signed into with a key, in menu order.</summary>
@@ -194,16 +186,34 @@ public sealed class ApiKeyAccountService : Observable
     /* ── the actual point: putting the key in front of the CLI ────────────── */
 
     /// <summary>
-    /// Inject this provider's key into a CLI launch, if (and only if) the selected account for that
-    /// provider is a key account. Call AFTER any env scrubbing so the deliberate value survives.
+    /// Inject the captured account's key into a CLI launch. Null uses the provider's default selection;
+    /// a subscription identity (including empty for a shared login) suppresses key overrides.
+    /// Call AFTER any env scrubbing so the deliberate value survives.
     /// </summary>
-    public bool ApplyTo(System.Diagnostics.ProcessStartInfo psi, string provider)
+    public bool ApplyTo(System.Diagnostics.ProcessStartInfo psi, string provider, string? accountId = null)
     {
-        var account = SelectedFor(provider);
+        // Null preserves provider-default callers. A chat supplies its captured identity (empty for a shared
+        // subscription login), so another window's selected API key cannot override this chat's account.
+        if (accountId is not null)
+        {
+            string[] variables = provider.ToLowerInvariant() switch
+            {
+                "claude" => ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+                "codex" => ["OPENAI_API_KEY", "CODEX_API_KEY"],
+                "kimi" => ["MOONSHOT_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
+                _ => [],
+            };
+            foreach (var variable in variables) psi.Environment.Remove(variable);
+        }
+        var account = accountId is null ? SelectedFor(provider) : For(provider).FirstOrDefault(a => a.Id == accountId);
         if (account is null) return false;
 
         var key = Reveal(account);
-        if (string.IsNullOrWhiteSpace(key)) return false;
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            if (accountId is not null) throw new InvalidOperationException("The selected API key is unavailable. Reconnect it in AI accounts.");
+            return false;
+        }
 
         switch (provider.ToLowerInvariant())
         {
@@ -212,11 +222,6 @@ public sealed class ApiKeyAccountService : Observable
                 break;
             case "codex":
                 psi.Environment["OPENAI_API_KEY"] = key;
-                break;
-            case "grok":
-                // The Grok CLI reads either name; set both so it works whichever build is installed.
-                psi.Environment["XAI_API_KEY"] = key;
-                psi.Environment["GROK_API_KEY"] = key;
                 break;
             case "kimi":
                 // Moonshot speaks the Anthropic wire format, so a Kimi key drives an Anthropic-shaped
@@ -298,8 +303,6 @@ public sealed class ApiKeyAccountService : Observable
                     r.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
                 })),
             "codex" => ("https://api.openai.com/v1/models",
-                r => r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key)),
-            "grok" => ("https://api.x.ai/v1/models",
                 r => r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key)),
             "kimi" => ("https://api.moonshot.ai/v1/models",
                 r => r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key)),

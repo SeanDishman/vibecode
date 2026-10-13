@@ -38,8 +38,11 @@ public sealed class CodexAccountInfo : INotifyPropertyChanged
     public string RateLimitStatus { get; init; } = "";
 
     public bool NeedsRelogin => !Usable;
-    public bool AtLimit => SessionPercent >= 100 || WeekPercent >= 100
-                           || !string.IsNullOrWhiteSpace(RateLimitStatusDisplay);
+    public bool IncludedUsageExhausted => SessionPercent >= 100 || WeekPercent >= 100 || RateLimitStatus == "rate_limit_reached";
+    public bool CanUseCredits => (HasCredits == true || UnlimitedCredits == true)
+                                && !CodexCreditPolicy.IsBlockingStatus(RateLimitStatus) && SpendLimit?.RemainingPercent is not <= 0;
+    public bool AtLimit => CodexCreditPolicy.IsBlockingStatus(RateLimitStatus) || SpendLimit?.RemainingPercent is <= 0
+                           || IncludedUsageExhausted && !CanUseCredits;
     public bool IsVibeCodeSelected => IsCurrent
                                       && string.Equals(AppSettings.Current.DefaultProvider, "codex", StringComparison.OrdinalIgnoreCase);
     public string Label => !string.IsNullOrWhiteSpace(Name) && !LooksLikeEmail(Name)
@@ -59,7 +62,8 @@ public sealed class CodexAccountInfo : INotifyPropertyChanged
             if (WeekPercent is { } week) parts.Add($"{week}% week");
             if (parts.Count == 0)
                 return NeedsRelogin ? "" : AtLimit ? "at limit" : UsageUpdatedAt is null ? "checking…" : "usage unavailable";
-            return string.Join(" · ", parts) + (AtLimit ? " · at limit" : "");
+            return string.Join(" · ", parts) + (AtLimit ? " · at limit"
+                : IncludedUsageExhausted && CanUseCredits ? " · credits available" : "");
         }
     }
     public string UsageUpdatedText
@@ -308,7 +312,8 @@ public sealed class CodexAccountService
         if (!state.IsSignedIn || (!string.IsNullOrWhiteSpace(state.Error) && !state.UsageReadSucceeded))
             return new AccountTestResult
             {
-                Ok = false, Verdict = "Credentials invalid",
+                Ok = false,
+                Verdict = "Credentials invalid",
                 Detail = string.IsNullOrWhiteSpace(state.Error)
                     ? "This Codex login is signed out. Re-add the account (account menu → Add account) to refresh it."
                     : $"Codex rejected this login: {state.Error}",
@@ -317,7 +322,8 @@ public sealed class CodexAccountService
         if (!string.IsNullOrWhiteSpace(state.AccountId) && state.AccountId != id)
             return new AccountTestResult
             {
-                Ok = false, Verdict = "Wrong account on disk",
+                Ok = false,
+                Verdict = "Wrong account on disk",
                 Detail = "This profile's home now holds a different ChatGPT account. Re-add both accounts to untangle them.",
                 Raw = raw,
             };
@@ -588,25 +594,25 @@ public sealed class CodexAccountService
     {
         var active = ResolveActiveId(accounts);
         return accounts.Select(x => new CodexAccountInfo
-            {
-                Id = x.Metadata.Id,
-                Name = x.Metadata.Name,
-                Email = x.Metadata.Email,
-                Plan = x.Metadata.Plan,
-                IsCurrent = x.Metadata.Id == active,
-                Usable = IsUsable(x),
-                SavedAt = x.Metadata.SavedAt,
-                SessionPercent = x.Metadata.SessionPercent,
-                WeekPercent = x.Metadata.WeekPercent,
-                UsageLimits = EffectiveUsageLimits(x.Metadata),
-                UsageUpdatedAt = x.Metadata.UsageUpdatedAt,
-                AvailableResetCredits = x.Metadata.AvailableResetCredits,
-                HasCredits = x.Metadata.HasCredits,
-                UnlimitedCredits = x.Metadata.UnlimitedCredits,
-                CreditBalance = x.Metadata.CreditBalance,
-                SpendLimit = x.Metadata.SpendLimit,
-                RateLimitStatus = x.Metadata.RateLimitStatus,
-            })
+        {
+            Id = x.Metadata.Id,
+            Name = x.Metadata.Name,
+            Email = x.Metadata.Email,
+            Plan = x.Metadata.Plan,
+            IsCurrent = x.Metadata.Id == active,
+            Usable = IsUsable(x),
+            SavedAt = x.Metadata.SavedAt,
+            SessionPercent = x.Metadata.SessionPercent,
+            WeekPercent = x.Metadata.WeekPercent,
+            UsageLimits = EffectiveUsageLimits(x.Metadata),
+            UsageUpdatedAt = x.Metadata.UsageUpdatedAt,
+            AvailableResetCredits = x.Metadata.AvailableResetCredits,
+            HasCredits = x.Metadata.HasCredits,
+            UnlimitedCredits = x.Metadata.UnlimitedCredits,
+            CreditBalance = x.Metadata.CreditBalance,
+            SpendLimit = x.Metadata.SpendLimit,
+            RateLimitStatus = x.Metadata.RateLimitStatus,
+        })
             .OrderByDescending(x => x.IsCurrent)
             .ThenByDescending(x => x.SavedAt)
             .ToList();

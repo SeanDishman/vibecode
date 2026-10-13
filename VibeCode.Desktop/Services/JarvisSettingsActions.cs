@@ -9,7 +9,7 @@ namespace VibeCode.Services;
 public static class JarvisSettingsActions
 {
     private static readonly string[] McpFields =
-        ["Name", "Transport", "Enabled", "UseClaude", "UseCodex", "UseKimi", "UseGrok", "Command", "Arguments", "Url",
+        ["Name", "Transport", "Enabled", "UseClaude", "UseCodex", "UseKimi", "UseGemini", "Command", "Arguments", "Url",
          "Environment", "Headers", "BearerTokenEnvironmentVariable", "StartupTimeoutSeconds", "ToolTimeoutSeconds"];
 
     public static bool IsSettingsAction(string kind) => kind is
@@ -22,7 +22,7 @@ public static class JarvisSettingsActions
             case "read_settings":
             case "open_settings":
                 if (action.Changes.Count > 0) throw new ArgumentException("Only update_settings can change preferences.");
-                if (action.Target.Length > 0 && !JarvisSettingsCatalog.Categories.Contains(action.Target, StringComparer.OrdinalIgnoreCase)
+                if (action.Target.Length > 0 && SettingsNavigation.NormalizeCategory(action.Target) is null
                     && !(action.Kind == "read_settings" && JarvisSettingsCatalog.HasSetting(action.Target)))
                     throw new ArgumentException("Use a settings category from the catalog.");
                 break;
@@ -63,22 +63,26 @@ public static class JarvisSettingsActions
         if (action.Kind == "open_settings")
         {
             if (openSettings is null) throw new InvalidOperationException("The settings window is unavailable.");
-            var category = action.Target.Length == 0 ? "General" : action.Target;
+            var category = action.Target.Length == 0 ? "General" : SettingsNavigation.NormalizeCategory(action.Target)!;
             openSettings(category);
-            return Receipt($"Opened VibeCode settings > {category}.");
+            return Receipt($"Opened VibeCode {SettingsNavigation.Resolve(category)!.Path}.");
         }
         if (action.Kind == "read_settings")
         {
             var snapshot = JarvisSettingsCatalog.Snapshot(settings);
+            var category = SettingsNavigation.NormalizeCategory(action.Target);
             if (action.Target.Length > 0)
                 snapshot["preferences"] = new JsonArray(snapshot["preferences"]!.AsArray()
-                    .Where(node => node!["category"]!.ToString().Equals(action.Target, StringComparison.OrdinalIgnoreCase)
-                        || node["name"]!.ToString().Equals(action.Target, StringComparison.OrdinalIgnoreCase))
+                    .Where(node => category is not null && SettingsNavigation.ContainsCategory(category, node!["category"]!.ToString())
+                        || node!["name"]!.ToString().Equals(action.Target, StringComparison.OrdinalIgnoreCase))
                     .Select(node => node!.DeepClone()).ToArray());
-            return Receipt("Current VibeCode settings" + (action.Target.Length > 0 ? " > " + action.Target : "")
+            var path = category is not null ? SettingsNavigation.Resolve(category)!.Path
+                : "Settings" + (action.Target.Length > 0 ? " > " + action.Target : "");
+            return Receipt("Current VibeCode " + path
                 + ":\n" + string.Join("\n", snapshot["preferences"]!.AsArray().Select(node =>
                     "- " + node!["name"] + " = " + (node["value"]?.ToJsonString() ?? "default")))
-                + (action.Target is "" or "MCP servers" ? "\n\nMCP servers:\n" + (settings.McpServers.Count == 0 ? "None configured."
+                + (action.Target.Length == 0 || category is not null && SettingsNavigation.ContainsCategory(category, "MCP servers")
+                    ? "\n\nMCP servers:\n" + (settings.McpServers.Count == 0 ? "None configured."
                     : string.Join("\n", settings.McpServers.Select(server => $"- {server.Name}: {server.Transport}, {(server.Enabled ? "enabled" : "disabled")}, {server.TargetsSummary}"))) : ""));
         }
         save ??= () => settings.TrySave(defaultModeIsDeliberate: action.Changes.Any(change =>
@@ -101,8 +105,7 @@ public static class JarvisSettingsActions
             foreach (var (property, provider) in new[]
             {
                 (nameof(AppSettings.DefaultModel), "claude"), (nameof(AppSettings.DefaultCodexModel), "codex"),
-                (nameof(AppSettings.DefaultKimiModel), "kimi"), (nameof(AppSettings.DefaultGrokModel), "grok"),
-                (nameof(AppSettings.DefaultGlmModel), "glm"),
+                (nameof(AppSettings.DefaultKimiModel), "kimi"),                 (nameof(AppSettings.DefaultGlmModel), "glm"),
             })
                 if (changes.Any(change => change.Property.Name == property))
                     RequireCompatibleModel((string?)typeof(AppSettings).GetProperty(property)!.GetValue(candidate), provider);
@@ -123,8 +126,7 @@ public static class JarvisSettingsActions
                 if (!Equivalent(change.Property.GetValue(settings), change.Property.GetValue(saved)))
                     throw new IOException($"Could not verify the saved value of {change.Property.Name}.");
             return Receipt("Updated VibeCode settings:\n" + string.Join("\n", changes.Select(change =>
-                "- " + change.Property.Name + " = " + (change.Property.Name == nameof(AppSettings.GrokDeleteProxy) ? "[redacted]"
-                    : JsonSerializer.Serialize(change.Property.GetValue(saved))))));
+                "- " + change.Property.Name + " = " + (JsonSerializer.Serialize(change.Property.GetValue(saved))))));
         }
 
         JarvisActionReceipt UpdateMcp()

@@ -8,7 +8,7 @@ internal static class TokenRateTests
 {
     private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
     private static int _checks;
-public static void Run()
+    public static void Run()
     {
         RollingWindows();
         Batched50k();
@@ -125,7 +125,7 @@ public static void Run()
         Call(protocol, "TranslateSessionUpdate", new JsonObject
         {
             ["sessionUpdate"] = kind,
-            ["content"] = new JsonObject { ["type"] = "text", ["text"] = new string('x', characters) },
+            ["content"] = new JsonObject { ["type"] = "text", ["text"] = new string('x', characters) }
         });
 
     private static object Tracker(TestClock clock) => Activator.CreateInstance(
@@ -191,19 +191,25 @@ public static void Run()
 
     private static JsonObject Bucket(long input, long cached, long output) => new()
     {
-        ["input_tokens"] = input, ["cache_read_input_tokens"] = cached, ["output_tokens"] = output,
+        ["input_tokens"] = input,
+        ["cache_read_input_tokens"] = cached,
+        ["output_tokens"] = output
     };
 
     private static void Usage(ChatViewModel chat, long input, long cached, long output) =>
         Call(chat, "IngestSdk", new JsonObject
         {
-            ["type"] = "system", ["subtype"] = "usage_update", ["usage"] = Bucket(input, cached, output),
+            ["type"] = "system",
+            ["subtype"] = "usage_update",
+            ["usage"] = Bucket(input, cached, output)
         });
 
     private static void Result(ChatViewModel chat, long input, long cached, long output) =>
         Call(chat, "IngestSdk", new JsonObject
         {
-            ["type"] = "result", ["subtype"] = "success", ["usage"] = Bucket(input, cached, output),
+            ["type"] = "result",
+            ["subtype"] = "success",
+            ["usage"] = Bucket(input, cached, output)
         });
 
     private static DispatcherTimer Timer(ChatViewModel chat) =>

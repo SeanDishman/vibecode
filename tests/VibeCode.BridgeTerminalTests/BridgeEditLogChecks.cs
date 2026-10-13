@@ -47,16 +47,24 @@ internal static partial class Program
         Call(pane, "IngestSdk", new JsonObject
         {
             ["type"] = "assistant",
-            ["message"] = new JsonObject { ["role"] = "assistant", ["content"] = new JsonArray(new JsonObject
-                { ["type"] = "tool_use", ["id"] = id, ["name"] = "Bash", ["input"] = new JsonObject { ["command"] = "edit files" } }) },
+            ["message"] = new JsonObject
+            {
+                ["role"] = "assistant",
+                ["content"] = new JsonArray(new JsonObject
+                { ["type"] = "tool_use", ["id"] = id, ["name"] = "Bash", ["input"] = new JsonObject { ["command"] = "edit files" } })
+            },
         });
         change();
         Thread.Sleep(500); // the watcher reports changes on its own threads, before the provider's result arrives
         Call(pane, "IngestSdk", new JsonObject
         {
             ["type"] = "user",
-            ["message"] = new JsonObject { ["role"] = "user", ["content"] = new JsonArray(new JsonObject
-                { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = failed ? "exit code 1" : "done", ["is_error"] = failed }) },
+            ["message"] = new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray(new JsonObject
+                { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = failed ? "exit code 1" : "done", ["is_error"] = failed })
+            },
         });
         if (!BridgeEditLedger.PendingWrites.Wait(10_000)) throw new TimeoutException("Edit log write did not finish.");
     }
@@ -136,8 +144,15 @@ internal static partial class Program
         Thread.Sleep(2000); // let that unattributed write age out of the next command's look-back
 
         // Agent 3 runs a long command while Agent 2 edits with a quick one and with an edit tool.
-        Call(team[2], "IngestSdk", new JsonObject { ["type"] = "assistant", ["message"] = new JsonObject { ["role"] = "assistant",
-            ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_use", ["id"] = "long-build", ["name"] = "Bash", ["input"] = new JsonObject { ["command"] = "dotnet test" } }) } });
+        Call(team[2], "IngestSdk", new JsonObject
+        {
+            ["type"] = "assistant",
+            ["message"] = new JsonObject
+            {
+                ["role"] = "assistant",
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_use", ["id"] = "long-build", ["name"] = "Bash", ["input"] = new JsonObject { ["command"] = "dotnet test" } })
+            }
+        });
         ShellCommand(team[1], "sed-3", () => File.WriteAllText(Path.Combine(src, "shared.md"), "one\nTWO\nthree\n"));
         current = File.ReadAllLines(script).ToList();
         current[29] = "$value30 = 3000";
@@ -145,8 +160,15 @@ internal static partial class Program
         IngestEdit(team[1], "edit-30", "Edit", new() { ["file_path"] = script, ["old_string"] = "$value30 = 30", ["new_string"] = "$value30 = 3000" },
             new() { ["structuredPatch"] = new JsonArray(Hunk(30, "-$value30 = 30", "+$value30 = 3000")) });
         Thread.Sleep(500);
-        Call(team[2], "IngestSdk", new JsonObject { ["type"] = "user", ["message"] = new JsonObject { ["role"] = "user",
-            ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = "long-build", ["content"] = "Passed" }) } });
+        Call(team[2], "IngestSdk", new JsonObject
+        {
+            ["type"] = "user",
+            ["message"] = new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = "long-build", ["content"] = "Passed" })
+            }
+        });
         BridgeEditLedger.PendingWrites.Wait(10_000);
         Check("the quick command that finished first gets the change, marked approximate because another command was running",
             Logged("src/shared.md") is [{ Lines: "about 2", Exact: false }] && Logged("src/shared.md")[0].AgentId == team[1].BridgeAgentId);
@@ -167,7 +189,7 @@ internal static partial class Program
         BridgeEditDiff.Analyze(new BridgeEditObservation(tool, input, result, @"C:\work"), _ => file);
 
     private static JsonObject Hunk(int newStart, params string[] lines) => new()
-        { ["oldStart"] = newStart, ["oldLines"] = 0, ["newStart"] = newStart, ["newLines"] = 0, ["lines"] = new JsonArray(lines.Select(l => (JsonNode?)l).ToArray()) };
+    { ["oldStart"] = newStart, ["oldLines"] = 0, ["newStart"] = newStart, ["newLines"] = 0, ["lines"] = new JsonArray(lines.Select(l => (JsonNode?)l).ToArray()) };
 
     private static void VerifyEditLineMath()
     {
@@ -189,12 +211,14 @@ internal static partial class Program
 
         var numbered = Analyze("CodexEdit", new()
         {
-            ["file_path"] = "b.cs", ["kind"] = "update", ["diff_format"] = "unified",
+            ["file_path"] = "b.cs",
+            ["kind"] = "update",
+            ["diff_format"] = "unified",
             ["diff"] = "--- a/b.cs\n+++ b/b.cs\n@@ -1,3 +1,4 @@\n one\n+two\n three\n four\n@@ -20,2 +21,2 @@\n-old\n+new\n same\n",
         })!;
         Check("Codex numbered unified diffs are exact", numbered.Exact && numbered.Ranges.SequenceEqual([new BridgeEditRange(2, 2, 1, 0), new BridgeEditRange(21, 21, 1, 1)]));
         var applyPatch = Analyze("CodexEdit", new()
-            { ["file_path"] = "c.cs", ["kind"] = "update", ["diff_format"] = "unified", ["diff"] = "@@ beta\n beta\n-gamma\n+GAMMA\n delta" },
+        { ["file_path"] = "c.cs", ["kind"] = "update", ["diff_format"] = "unified", ["diff"] = "@@ beta\n beta\n-gamma\n+GAMMA\n delta" },
             file: "alpha\r\nbeta\r\nGAMMA\r\ndelta\r\nepsilon\r\n")!;
         Check("apply_patch hunks without numbers are located in the edited file", applyPatch.Exact && applyPatch.Ranges.Single() == new BridgeEditRange(3, 3, 1, 1));
         var unlocated = Analyze("CodexEdit", new() { ["file_path"] = "c.cs", ["kind"] = "update", ["diff"] = "@@\n-gone\n+here\n" }, file: "something else\n")!;
@@ -202,23 +226,32 @@ internal static partial class Program
             && BridgeEditDiff.Describe(unlocated.Change, unlocated.Ranges, unlocated.Exact) == "unknown");
         var added = Analyze("CodexEdit", new() { ["file_path"] = "d.cs", ["kind"] = "add", ["diff_format"] = "content", ["diff"] = "a\nb\n" })!;
         var removed = Analyze("CodexEdit", new() { ["file_path"] = "d.cs", ["kind"] = "delete", ["diff_format"] = "content", ["diff"] = "a\nb\nc" })!;
-        var turnDelete = Analyze("CodexEdit", new() { ["file_path"] = "e.cs", ["kind"] = "delete", ["diff_format"] = "unified",
-            ["diff"] = "diff --git a/e.cs b/e.cs\ndeleted file mode 100644\n--- a/e.cs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b" })!;
+        var turnDelete = Analyze("CodexEdit", new()
+        {
+            ["file_path"] = "e.cs",
+            ["kind"] = "delete",
+            ["diff_format"] = "unified",
+            ["diff"] = "diff --git a/e.cs b/e.cs\ndeleted file mode 100644\n--- a/e.cs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b"
+        })!;
         Check("Codex file creation and deletion are recorded as such", added.Change == "create" && added.Ranges.Single() == new BridgeEditRange(1, 2, 2, 0)
             && removed.Change == "delete" && removed.Removed == 3 && turnDelete.Change == "delete" && turnDelete.Removed == 2
             && BridgeEditDiff.Describe(removed.Change, removed.Ranges, removed.Exact) == "whole file deleted");
 
         const string source = "one\ntwo\n    var retries = 5;\nfoo();\nx = 1;\nfoo();\nx = 1;\n";
         var partial = Analyze("Edit", new() { ["file_path"] = "r.ts", ["old_string"] = "retries = 3", ["new_string"] = "retries = 5" }, file: source)!;
-        Check("snippet edits (Kimi, Grok, GLM) find a partial-line change in the edited file", partial.Exact && partial.Ranges.Single() == new BridgeEditRange(3, 3, 1, 1));
+        Check("snippet edits (Kimi, GLM) find a partial-line change in the edited file", partial.Exact && partial.Ranges.Single() == new BridgeEditRange(3, 3, 1, 1));
         var ambiguous = Analyze("Edit", new() { ["file_path"] = "r.ts", ["old_string"] = "x = 0;", ["new_string"] = "x = 1;" }, file: source)!;
         Check("a snippet that appears twice is marked approximate", !ambiguous.Exact && ambiguous.Ranges.Single().Start == 5
             && BridgeEditDiff.Describe(ambiguous.Change, ambiguous.Ranges, ambiguous.Exact) == "about 5");
         var everywhere = Analyze("Edit", new() { ["file_path"] = "r.ts", ["old_string"] = "bar();", ["new_string"] = "foo();", ["replace_all"] = true }, file: source)!;
         Check("replace_all records every replaced occurrence", everywhere.Exact && everywhere.Ranges.Select(r => r.Start).SequenceEqual([4, 6]) && everywhere.Added == 2);
-        var multi = Analyze("MultiEdit", new() { ["file_path"] = "r.ts", ["edits"] = new JsonArray(
+        var multi = Analyze("MultiEdit", new()
+        {
+            ["file_path"] = "r.ts",
+            ["edits"] = new JsonArray(
             new JsonObject { ["old_string"] = "x = 0;\nfoo();", ["new_string"] = "x = 1;\nfoo();" },
-            new JsonObject { ["old_string"] = "TWO", ["new_string"] = "two" }) }, file: source.Replace("x = 1;\nfoo();\nx = 1;", "x = 1;\nfoo();\nx = 2;"))!;
+            new JsonObject { ["old_string"] = "TWO", ["new_string"] = "two" })
+        }, file: source.Replace("x = 1;\nfoo();\nx = 1;", "x = 1;\nfoo();\nx = 2;"))!;
         Check("MultiEdit records each edit at its own line", multi.Ranges.Select(r => r.Start).SequenceEqual([2, 5]));
         var wholeFile = Analyze("Edit", new() { ["file_path"] = "r.ts", ["old_string"] = "one\ntwo\n", ["new_string"] = source }, file: source)!;
         Check("ACP whole-file old/new text maps straight onto file lines", wholeFile.Exact && wholeFile.Ranges.Single() == new BridgeEditRange(3, 7, 5, 0));
@@ -234,8 +267,16 @@ internal static partial class Program
         var directory = BridgeEditLedger.DirectoryFor(workspace);
         BridgeEditEntry Entry(DateTimeOffset at, string file, string agent = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1") => new()
         {
-            Id = Guid.NewGuid().ToString("N")[..12], At = at, AgentId = agent, Agent = 1, Label = "Codex 1", Provider = "codex",
-            File = file, Ranges = [new BridgeEditRange(1, 2, 2, 0)], Added = 2, Tool = "Edit",
+            Id = Guid.NewGuid().ToString("N")[..12],
+            At = at,
+            AgentId = agent,
+            Agent = 1,
+            Label = "Codex 1",
+            Provider = "codex",
+            File = file,
+            Ranges = [new BridgeEditRange(1, 2, 2, 0)],
+            Added = 2,
+            Tool = "Edit",
         };
         string Day(string date) => Path.Combine(directory, "edits-" + date + ".jsonl");
 
@@ -301,14 +342,22 @@ internal static partial class Program
         Call(pane, "IngestSdk", new JsonObject
         {
             ["type"] = "assistant",
-            ["message"] = new JsonObject { ["role"] = "assistant", ["content"] = new JsonArray(new JsonObject
-                { ["type"] = "tool_use", ["id"] = id, ["name"] = tool, ["input"] = input }) },
+            ["message"] = new JsonObject
+            {
+                ["role"] = "assistant",
+                ["content"] = new JsonArray(new JsonObject
+                { ["type"] = "tool_use", ["id"] = id, ["name"] = tool, ["input"] = input })
+            },
         });
         var user = new JsonObject
         {
             ["type"] = "user",
-            ["message"] = new JsonObject { ["role"] = "user", ["content"] = new JsonArray(new JsonObject
-                { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = failed ? "String to replace not found" : "ok", ["is_error"] = failed }) },
+            ["message"] = new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray(new JsonObject
+                { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = failed ? "String to replace not found" : "ok", ["is_error"] = failed })
+            },
         };
         if (toolUseResult is not null) user["tool_use_result"] = toolUseResult;
         Call(pane, "IngestSdk", user);
@@ -329,8 +378,13 @@ internal static partial class Program
 
         IngestEdit(team[1], "claude-1", "Edit", new() { ["file_path"] = app, ["old_string"] = "line 12;", ["new_string"] = "line 12;\nline 12b;" },
             new() { ["filePath"] = app, ["structuredPatch"] = new JsonArray(Hunk(10, " line 10;", " line 11;", "-line 12;", "+line twelve;", "+line 12b;", " line 13;")) });
-        IngestEdit(team[2], "codex-1", "CodexEdit", new() { ["file_path"] = "src/app.ts", ["kind"] = "update", ["diff_format"] = "unified",
-            ["diff"] = "@@ -21,1 +21,1 @@\n-line 21;\n+line twenty-one;\n" });
+        IngestEdit(team[2], "codex-1", "CodexEdit", new()
+        {
+            ["file_path"] = "src/app.ts",
+            ["kind"] = "update",
+            ["diff_format"] = "unified",
+            ["diff"] = "@@ -21,1 +21,1 @@\n-line 21;\n+line twenty-one;\n"
+        });
         IngestEdit(team[2], "codex-failed", "CodexEdit", new() { ["file_path"] = "src/app.ts", ["kind"] = "update", ["diff"] = "@@ -2,1 +2,1 @@\n-a\n+b\n" }, failed: true);
         // Two back-to-back snippet edits to one file share a transcript card; each must still be logged with its own lines.
         IngestEdit(team[1], "kimi-1", "Edit", new() { ["file_path"] = app, ["old_string"] = "const retries = 3;", ["new_string"] = "const retries = 5;" });
@@ -355,12 +409,14 @@ internal static partial class Program
 
         var all = Tool(team[0], "bridge_file_edits");
         var edits = all["edits"]!.AsArray();
-        Check("only successful live edits by bridge panes are logged", all["matched"]!.GetValue<int>() == 5
-            && edits.All(e => e!["file"]!.ToString() is "src/app.ts" or "src/config.ts"));
+        Check("only successful live edits by project chats and bridge panes are logged", all["matched"]!.GetValue<int>() == 6
+            && edits.All(e => e!["file"]!.ToString() is "src/app.ts" or "src/config.ts" or "solo.txt")
+            && edits.Single(e => e!["file"]!.ToString() == "solo.txt") is { } independent
+            && independent["role"]!.ToString() == "independent_chat" && !independent["in_your_bridge"]!.GetValue<bool>());
         Check("newest edit comes first with its author, role and task", edits[0]!["file"]!.ToString() == "src/config.ts" && edits[0]!["agent"]!.ToString() == "Codex 3"
             && edits[0]!["role"]!.ToString() == "worker" && edits[0]!["task"]!.ToString() == "Wire config loader" && edits[0]!["change"]!.ToString() == "write"
             && edits[0]!["lines"]!.ToString() == "1-2" && edits[0]!["in_your_bridge"]!.GetValue<bool>() && !edits[0]!["you"]!.GetValue<bool>());
-        Check("each logged edit keeps its own lines even when cards are folded", edits.Select(e => e!["lines"]!.ToString()).SequenceEqual(["1-2", "35", "30", "21", "12-13"])
+        Check("each logged edit keeps its own lines even when cards are folded", edits.Select(e => e!["lines"]!.ToString()).SequenceEqual(["1-2", "1", "35", "30", "21", "12-13"])
             && edits.All(e => e!["lines_exact"]!.GetValue<bool>()));
         Check("an overview lists files with the agents that touched them", all["files"]!.AsArray().First()!["file"]!.ToString() == "src/config.ts"
             && all["files"]!.AsArray().Single(f => f!["file"]!.ToString() == "src/app.ts")!["agents"]!.AsArray().Select(a => a!.ToString()).SequenceEqual(["Codex 2", "Codex 3"]));
@@ -393,8 +449,14 @@ internal static partial class Program
         Check("the real named-pipe MCP endpoint serves the edit log", request.GetAwaiter().GetResult()["edits"]![0]!["task"]!.ToString() == "Wire config loader");
 
         var host = new AgentStatusMcpHost(BridgeMcpTools.Create((_, _) => new JsonObject()), serverName: "vibecode-bridge", instructions: BridgeMcpTools.Instructions);
-        host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "initialize", ["params"] = new JsonObject
-            { ["protocolVersion"] = "2025-11-25", ["capabilities"] = new JsonObject(), ["clientInfo"] = new JsonObject { ["name"] = "fixture", ["version"] = "1" } } });
+        host.Dispatch(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            { ["protocolVersion"] = "2025-11-25", ["capabilities"] = new JsonObject(), ["clientInfo"] = new JsonObject { ["name"] = "fixture", ["version"] = "1" } }
+        });
         host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" });
         var definition = host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 2, ["method"] = "tools/list" })!["result"]!["tools"]!.AsArray()
             .Single(t => t!["name"]!.ToString() == "bridge_file_edits")!;

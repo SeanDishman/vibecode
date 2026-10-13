@@ -450,7 +450,9 @@ public sealed class DiffSignConverter : IValueConverter
 {
     public object Convert(object? value, Type t, object? p, CultureInfo c) => value switch
     {
-        "add" => "+", "del" => "−", _ => " ",
+        "add" => "+",
+        "del" => "−",
+        _ => " ",
     };
     public object ConvertBack(object? v, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }

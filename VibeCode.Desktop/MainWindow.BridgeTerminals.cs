@@ -17,6 +17,7 @@ public partial class MainWindow
         try
         {
             var setup = BridgeSetup;
+            var peerAccount = setup.IsAdvanced ? null : setup.RequirePeerAccount();
             if (setup.IsAdvanced && setup.Provider == host.Provider && !host.CanAcceptBridgeObjective)
                 throw new InvalidOperationException("Reconnect this chat’s account before using it as the orchestrator, or choose another provider.");
             // A fresh advanced roster contains the selected roles. Keep an unmatched or busy source chat
@@ -34,7 +35,7 @@ public partial class MainWindow
             }
             if (!ReferenceEquals(ActiveChatForWindow, host)) OpenChatForWindow(host);
             ActivateBridgeForWindow(setup.IsAdvanced && setup.Provider == host.Provider
-                ? setup.WorkerConfiguration.Provider : setup.Provider);
+                ? setup.WorkerConfiguration.Provider : setup.Provider, peerAccount?.AccountId);
             if (setup.IsAdvanced)
             {
                 var coordinator = setup.Provider == host.Provider ? host
@@ -75,7 +76,8 @@ public partial class MainWindow
                 - BridgeRosterForWindow.Count - 1 + BridgeRosterForWindow.Count(p => !p.IsBridgeManager &&
                     p.BridgeCoordinatorAgentId is null && p.AvailableForBridgeAssignment &&
                     p.Provider == _orchestratorSetupDraft.WorkerConfiguration.Provider)),
-            hasOtherOrchestrators: BridgeRosterForWindow.Any(p => p.IsBridgeManager)) { Owner = this };
+            hasOtherOrchestrators: BridgeRosterForWindow.Any(p => p.IsBridgeManager))
+        { Owner = this };
         if (setup.ShowDialog() != true) return;
         try
         {
@@ -110,18 +112,76 @@ public partial class MainWindow
         if (SharedTerminalForWindow.Target is not { } template || e.OriginalSource is not FrameworkElement anchor) return;
         if (!CanAddBridgeAgentForWindow) { ShowBridgeAgentLimitReached(); return; }
         var menu = CreateBridgeMenu(anchor);
-        foreach (var (provider, label) in new[] { ("claude", "Claude Code"), ("codex", "Codex"), ("kimi", "Kimi Code"), ("grok", "Grok"), ("glm", "GLM") })
+        var accounts = BridgeAccountChoice.Load(_vm.IsKimiSignedIn);
+        foreach (var (provider, label) in new[] { ("claude", "Claude Code"), ("codex", "Codex"), ("kimi", "Kimi Code"), ("gemini", "Gemini"), ("glm", "GLM") })
         {
-            var item = new MenuItem { Header = label };
+            var item = new MenuItem { Header = label, Tag = provider };
+            AttachBridgeAccountMenu(item, accounts, account => LaunchWorker(account.Provider, account.AccountId));
             item.Click += (_, _) =>
             {
-                try { _vm.LaunchBridgeWorker(template, provider); RefreshBridgePartitions(); }
-                catch (Exception ex) { ShowBridgeHint(ex.Message); }
+                if (!item.HasItems) LaunchWorker(provider, BridgeAccountChoice.OnlyUsable(accounts.Where(a => a.Provider == provider))?.AccountId);
             };
             menu.Items.Add(item);
         }
         menu.IsOpen = true;
         e.Handled = true;
+
+        void LaunchWorker(string provider, string? accountId)
+        {
+            try { _vm.LaunchBridgeWorker(template, provider, accountId: accountId); RefreshBridgePartitions(); }
+            catch (Exception ex) { ShowBridgeHint(ex.Message); }
+        }
+    }
+
+    /// <summary>Give a provider row its accounts as a submenu when there is a real choice: two or more signed-in
+    /// accounts. One account, or none, keeps the row a single click.</summary>
+    private static void AttachBridgeAccountMenu(MenuItem providerItem, IReadOnlyList<BridgeAccountChoice> accounts,
+        Action<BridgeAccountChoice> add)
+    {
+        providerItem.Items.Clear();
+        if (providerItem.Tag is not string provider) return;
+        var choices = accounts.Where(a => a.Provider == provider).ToArray();
+        if (choices.Count(a => a.IsUsable) < 2) return;
+        foreach (var account in choices)
+        {
+            var detail = new TextBlock
+            {
+                Text = account.Detail,
+                FontSize = 11.5,
+                Margin = new Thickness(0, 2, 0, 0),
+                MaxWidth = 280,
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            detail.SetResourceReference(TextBlock.ForegroundProperty, account.IsUsable ? "MenuSecondary" : "Faint");
+            var header = new StackPanel();
+            var label = new TextBlock
+            {
+                Text = account.Label,
+                MaxWidth = 280,
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            label.SetResourceReference(TextBlock.ForegroundProperty, account.IsUsable ? "Text" : "Faint");
+            header.Children.Add(label);
+            header.Children.Add(detail);
+            var item = new MenuItem
+            {
+                Header = header,
+                Tag = account,
+                IsEnabled = account.IsUsable,
+                MinWidth = 220,
+                Padding = new Thickness(12, 8, 12, 8),
+                ToolTip = account.AccessibleLabel
+            };
+            System.Windows.Automation.AutomationProperties.SetName(item, account.AccessibleLabel);
+            item.Click += (_, e) =>
+            {
+                e.Handled = true;   // the provider row underneath also handles Click; one choice adds one agent
+                add(account);
+            };
+            providerItem.Items.Add(item);
+        }
     }
 
     private void OnSharedAgentMenu(object sender, RoutedEventArgs e)
@@ -136,8 +196,12 @@ public partial class MainWindow
             var group = new MenuItem { Header = "Worker group", IsEnabled = !agent.IsWorking };
             foreach (var coordinator in BridgeRosterForWindow.Where(p => p.IsBridgeManager))
             {
-                var item = new MenuItem { Header = coordinator.BridgeTerminalIdentity, IsCheckable = true,
-                    IsChecked = agent.BridgeCoordinatorAgentId == coordinator.BridgeAgentId };
+                var item = new MenuItem
+                {
+                    Header = coordinator.BridgeTerminalIdentity,
+                    IsCheckable = true,
+                    IsChecked = agent.BridgeCoordinatorAgentId == coordinator.BridgeAgentId
+                };
                 item.Click += (_, _) =>
                 {
                     try { _vm.AssignBridgeWorker(agent, coordinator); }

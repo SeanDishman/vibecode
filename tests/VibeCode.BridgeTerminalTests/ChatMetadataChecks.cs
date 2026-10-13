@@ -17,6 +17,7 @@ internal static partial class Program
     {
         var (vm, team) = Team("chat-metadata", 2);
         vm.BridgePanes.Clear(); // Both are ordinary chats, with the real built-in MCP handler.
+        foreach (var ordinary in team) ordinary.BridgeLabel = "";
         typeof(MainViewModel).GetField("_sessionRestored", Flags)!.SetValue(vm, true);
         var chat = team[0]; var other = team[1];
         chat.Status = other.Status = "idle";
@@ -147,7 +148,9 @@ internal static partial class Program
         var fullName = "mcp__" + registration.RuntimeName + "__chat_set_title";
         var options = new VibeCode.Protocol.ClaudeSessionOptions
         {
-            Cwd = directory, PermissionMode = "plan", McpServers = [registration],
+            Cwd = directory,
+            PermissionMode = "plan",
+            McpServers = [registration],
             AppendSystemPrompt = BridgeMcpTools.ChatTitleInstructions,
         };
         var start = (System.Diagnostics.ProcessStartInfo)typeof(VibeCode.Protocol.ClaudeSession).GetMethod("CreateStartInfo", Flags)!.Invoke(null, [options])!;
@@ -226,8 +229,6 @@ internal static partial class Program
         var providerName = useClaude ? "Claude" : "Luna";
         AppSettings.Current.DefaultCodexModel = "gpt-6-luna";
         AppSettings.Current.DefaultCodexEffort = "low";
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.McpServers.Clear();
         var workspace = Path.Combine(_root, "naming-live-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspace);

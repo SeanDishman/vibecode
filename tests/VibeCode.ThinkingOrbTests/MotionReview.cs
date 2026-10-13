@@ -145,8 +145,13 @@ internal static class MotionReview
         foreach (var orb in orbs) host.Children.Add(orb);
         var window = new Window
         {
-            Left = 6100, Top = 300, Width = 150, Height = 320,
-            ShowActivated = false, ShowInTaskbar = false, Content = host,
+            Left = 6100,
+            Top = 300,
+            Width = 150,
+            Height = 320,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            Content = host,
         };
         var captures = orbs.Select(_ => new List<BitmapSource>()).ToArray();
         var phases = orbs.Select(_ => new List<double>()).ToArray();
@@ -206,13 +211,19 @@ internal static class MotionReview
     }
     private static TextBlock Label(string text, int fontSize) => new()
     {
-        Text = text, FontSize = fontSize, FontFamily = (FontFamily)Application.Current.Resources["Ui"],
-        Foreground = (Brush)Application.Current.Resources["Text"], VerticalAlignment = VerticalAlignment.Center,
+        Text = text,
+        FontSize = fontSize,
+        FontFamily = (FontFamily)Application.Current.Resources["Ui"],
+        Foreground = (Brush)Application.Current.Resources["Text"],
+        VerticalAlignment = VerticalAlignment.Center,
         Margin = new Thickness(0, 4, 0, 4),
     };
     private static Image Picture(BitmapSource frame, int size) => new()
     {
-        Source = frame, Width = size, Height = size, Margin = new Thickness(7, 0, 7, 0),
+        Source = frame,
+        Width = size,
+        Height = size,
+        Margin = new Thickness(7, 0, 7, 0),
         VerticalAlignment = VerticalAlignment.Center,
     };
 

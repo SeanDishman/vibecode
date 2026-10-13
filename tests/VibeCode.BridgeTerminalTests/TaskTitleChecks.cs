@@ -78,17 +78,23 @@ internal static partial class Program
             BridgeTaskTitlePolicy.TurnReminder("Fix login redirect", "codex") + "\n\nMy actual request.")! == "My actual request.");
         Check("visible prompt rows keep only the typed text", agent.Items.OfType<UserItem>().All(u => !u.Text.Contains(BridgeTaskTitlePolicy.Header)));
         var listTool = TaskTitleTool("codex").Replace("bridge_set_task_title", "bridge_list_agents");
-        Call(agent, "IngestMessagePayload", "assistant", new JsonObject { ["content"] = new JsonArray(
+        Call(agent, "IngestMessagePayload", "assistant", new JsonObject
+        {
+            ["content"] = new JsonArray(
             new JsonObject { ["type"] = "tool_use", ["id"] = "title-card", ["name"] = TaskTitleTool("codex"), ["input"] = new JsonObject { ["title"] = "Fix login" } },
-            new JsonObject { ["type"] = "tool_use", ["id"] = "roster-card", ["name"] = listTool, ["input"] = new JsonObject() }) }, null, true, null);
+            new JsonObject { ["type"] = "tool_use", ["id"] = "roster-card", ["name"] = listTool, ["input"] = new JsonObject() })
+        }, null, true, null);
         var shownTools = agent.Items.OfType<ToolItem>().Concat(agent.Items.OfType<CompactToolGroupItem>().SelectMany(g => g.Tools)).ToArray();
         Check("title calls never add a transcript card; the header is their display", shownTools.All(t => t.Id != "title-card") && shownTools.Any(t => t.Id == "roster-card"));
-        Call(agent, "IngestMessagePayload", "assistant", new JsonObject { ["content"] = new JsonArray(
-            new JsonObject { ["type"] = "tool_use", ["id"] = "lookalike-card", ["name"] = "mcp__untrusted__bridge_set_task_title", ["input"] = new JsonObject { ["title"] = "x" } }) }, null, true, null);
+        Call(agent, "IngestMessagePayload", "assistant", new JsonObject
+        {
+            ["content"] = new JsonArray(
+            new JsonObject { ["type"] = "tool_use", ["id"] = "lookalike-card", ["name"] = "mcp__untrusted__bridge_set_task_title", ["input"] = new JsonObject { ["title"] = "x" } })
+        }, null, true, null);
         Check("a lookalike third-party title tool still shows its card", agent.Items.OfType<CompactToolGroupItem>().SelectMany(g => g.Tools).Any(t => t.Id == "lookalike-card")
             || agent.Items.OfType<ToolItem>().Any(t => t.Id == "lookalike-card"));
         Check("the activity summary still accepts a task_name for compatibility", Tool(team[2], "bridge_report_activity", new()
-            { ["summary"] = "Reviewing the checkout flow", ["task_name"] = "Review checkout" })["task_name"]!.ToString() == "Review checkout"
+        { ["summary"] = "Reviewing the checkout flow", ["task_name"] = "Review checkout" })["task_name"]!.ToString() == "Review checkout"
             && team[2].BridgeHeaderTaskTitle == "Review checkout");
         Call(vm, "SaveBridge", vm.BridgePanes, ".vibecode-bridge.md");
         var saved = AppSettings.Current.SavedBridges.Single(s => s.HostSessionId == agent.SessionId);
@@ -112,14 +118,11 @@ internal static partial class Program
 
         foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
             Check(provider + " skips permission only for the exact built-in task-title tool", TitlePermission(provider, TaskTitleTool(provider), new JsonObject { ["title"] = "Fix login" }));
-        Check("grok skips permission only for an inline use_tool call to the exact task-title tool", TitlePermission("grok", "use_tool",
-            new JsonObject { ["tool_name"] = TaskTitleTool("grok"), ["tool_input"] = new JsonObject { ["title"] = "Fix login" } }));
-        Check("a lookalike third-party title tool still needs permission", !TitlePermission("claude", "mcp__untrusted__bridge_set_task_title", null)
-            && !TitlePermission("grok", "use_tool", new JsonObject { ["tool_name"] = "untrusted__bridge_set_task_title", ["tool_input"] = new JsonObject { ["title"] = "x" } }));
+        Check("a lookalike third-party title tool still needs permission", !TitlePermission("claude", "mcp__untrusted__bridge_set_task_title", null));
         agent.SetMode("plan");
         var cards = agent.Items.OfType<PermItem>().Count();
         Call(agent, "OnPermissionRequested", new VibeCode.Protocol.PermissionRequest
-            { RequestId = "task-title-permission", ToolName = TaskTitleTool(agent.Provider), Input = new JsonObject { ["title"] = "Fix login" } });
+        { RequestId = "task-title-permission", ToolName = TaskTitleTool(agent.Provider), Input = new JsonObject { ["title"] = "Fix login" } });
         Check("the task-title tool never shows a permission card in Plan mode", agent.Items.OfType<PermItem>().Count() == cards
             && Session(agent).PermissionResponses.Last()["behavior"]!.ToString() == "allow");
         var registration = (McpServerDefinition)Call(Call(agent, "EnsureBridgeMcp")!, "Registration")!;
@@ -325,23 +328,23 @@ internal static partial class Program
         AppSettings.Current.DefaultCodexEffort = "low";
         AppSettings.Current.SecondBrainEnabled = false;
         AppSettings.Current.AgentMemoryEnabled = false;
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.McpServers.Clear();
         var reportPath = Path.Combine(_root, "luna-task-titles-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + ".json");
         var results = new List<object>();
         var failures = new List<string>();
         void Save() => File.WriteAllText(reportPath, JsonSerializer.Serialize(new
         {
-            model = "gpt-6-luna", effort = "low",
+            model = "gpt-6-luna",
+            effort = "low",
             method = "Real authenticated Luna turns in Codex plan mode (read-only sandbox, no approvals) using the production bridge MCP endpoint and routing. Peers are passive in-process sessions.",
-            results, failures,
+            results,
+            failures,
         }, new JsonSerializerOptions { WriteIndented = true }));
 
         (ChatViewModel Actor, List<JsonObject> Calls) Live(MainViewModel vm, string cwd, string label)
         {
             var actor = new ChatViewModel(cwd, title: "Bridge task title simulation", provider: "codex")
-                { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true, BridgeLabel = label };
+            { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true, BridgeLabel = label };
             Chats.Add(actor); vm.Chats.Add(actor); vm.BridgePanes.Add(actor); Call(vm, "Track", actor);
             var calls = new List<JsonObject>();
             var handler = (Func<string, JsonObject, JsonObject>)Property(actor, "BridgeToolHandler")!;
@@ -393,9 +396,15 @@ internal static partial class Program
             {
                 results.Add(new
                 {
-                    name, passed = failure is null, failure, request, header_title = actor.BridgeHeaderTaskTitle,
-                    title_calls = titles.Select(c => c.DeepClone()).ToArray(), elapsed_seconds = watch.Elapsed.TotalSeconds,
-                    input_tokens = actor.TotalIn - inputBefore, output_tokens = actor.TotalOut - outputBefore,
+                    name,
+                    passed = failure is null,
+                    failure,
+                    request,
+                    header_title = actor.BridgeHeaderTaskTitle,
+                    title_calls = titles.Select(c => c.DeepClone()).ToArray(),
+                    elapsed_seconds = watch.Elapsed.TotalSeconds,
+                    input_tokens = actor.TotalIn - inputBefore,
+                    output_tokens = actor.TotalOut - outputBefore,
                     bridge_calls = calls.Skip(firstCall).Select(c => c.DeepClone()).ToArray(),
                     tools = actor.Items.OfType<ToolItem>().Select(t => t.Name).ToArray(),
                     reply = actor.Items.OfType<TextItem>().LastOrDefault()?.Text,

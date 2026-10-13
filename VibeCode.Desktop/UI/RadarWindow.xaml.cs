@@ -91,12 +91,18 @@ public partial class RadarWindow : Window
     private readonly DispatcherTimer _anim = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private List<string> _frames = new();
     private bool _loadingFrames;                 // suppresses the ValueChanged handler while the timeline is rebuilt
+    private CancellationTokenSource? _frameLoad;
+    private bool _closed;
+    private bool _loopFrameFailed;
     private CancellationTokenSource? _spcLoad;
     private SpcOutlook? _currentSpc;
     private bool _spcMode;
     private int _spcDay = 1;
 
-    public RadarWindow()
+    public RadarWindow() : this(loadData: true) { }
+
+    // Offline view verification supplies tile responses and frame times without contacting weather services.
+    internal RadarWindow(bool loadData)
     {
         InitializeComponent();
 
@@ -104,14 +110,18 @@ public partial class RadarWindow : Window
         Map.RadarOpacity = OpacitySlider.Value / 100.0;
 
         _anim.Tick += OnAnimTick;
+        Map.RadarLoadStateChanged += OnRadarLoadStateChanged;
         _weather.LocationChanged += OnLocationChanged;
         _weather.PropertyChanged += OnWeatherChanged;
 
         ApplyLocation(recentre: true);
         ApplyConditions();
 
-        _ = _weather.RefreshAsync();
-        _ = LoadFramesAsync();
+        if (loadData)
+        {
+            _ = _weather.RefreshAsync();
+            _ = LoadFramesAsync();
+        }
     }
 
     // ---------- location + conditions ----------
@@ -170,7 +180,15 @@ public partial class RadarWindow : Window
 
     private async Task LoadFramesAsync()
     {
-        var frames = await WeatherService.RadarFrameTimesAsync();
+        _frameLoad?.Cancel();
+        _frameLoad?.Dispose();
+        _frameLoad = new CancellationTokenSource();
+        var token = _frameLoad.Token;
+        StopLoop();
+        List<string> frames;
+        try { frames = await WeatherService.RadarFrameTimesAsync(ct: token); }
+        catch (OperationCanceledException) { return; }
+        if (token.IsCancellationRequested || _closed) return;
 
         _loadingFrames = true;
         try
@@ -191,11 +209,22 @@ public partial class RadarWindow : Window
     /// <summary>Points the map at one frame. An empty frame list means "whatever the server serves now".</summary>
     private void ShowFrame(int index)
     {
+        _loopFrameFailed = false;
         var iso = index >= 0 && index < _frames.Count ? _frames[index] : null;
         Map.FrameTime = iso;
         FrameLabel.Text = _frames.Count == 0 ? "Latest"
             : index == _frames.Count - 1 ? "Latest"
             : WeatherService.FrameLabel(iso);
+        UpdateRadarLoadStatus();
+    }
+
+    private void OnRadarLoadStateChanged(object? sender, EventArgs e) => UpdateRadarLoadStatus();
+
+    private void UpdateRadarLoadStatus()
+    {
+        RadarMessage.Visibility = !_spcMode && (!Map.IsRadarFrameReady || _loopFrameFailed) ? Visibility.Visible : Visibility.Collapsed;
+        RadarMessageText.Text = _loopFrameFailed ? "Radar loop unavailable. Refresh to retry."
+            : Map.HasRadarFrameFailures ? "Radar unavailable. Refresh to retry." : "Loading radar…";
     }
 
     private void OnTimelineChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -207,8 +236,18 @@ public partial class RadarWindow : Window
     private void OnAnimTick(object? sender, EventArgs e)
     {
         if (_frames.Count < 2) { StopLoop(); return; }
+        // Changing timestamps faster than NOAA can supply them used to queue hundreds of obsolete tiles.
+        // Keep a complete frame visible while warming only the next frame's visible cells.
+        if (!Map.PrepareRadarFrame(Map.FrameTime)) return;
         var next = (int)Math.Round(Timeline.Value) + 1;
-        Timeline.Value = next > Timeline.Maximum ? 0 : next;   // ValueChanged draws the frame
+        if (next > Timeline.Maximum) next = 0;
+        if (Map.PrepareRadarFrame(_frames[next])) Timeline.Value = next;
+        else if (Map.RadarFrameFailed(_frames[next]))
+        {
+            _loopFrameFailed = true;
+            StopLoop();
+            UpdateRadarLoadStatus();
+        }
     }
 
     private void OnPlayPause(object sender, RoutedEventArgs e)
@@ -255,6 +294,7 @@ public partial class RadarWindow : Window
             return;
         }
         _ = _weather.RefreshAsync();
+        Map.RefreshRadar();
         _ = LoadFramesAsync();
     }
 
@@ -273,6 +313,7 @@ public partial class RadarWindow : Window
         SpcDayPicker.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
         SpcLegend.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
         Map.ShowRadar = !enabled;
+        UpdateRadarLoadStatus();
         TitleMode.Text = enabled ? "SPC outlook" : "NWS radar";
         TitleGlyph.Text = enabled ? "\uE945" : _weather.ConditionGlyph;
         AutomationProperties.SetName(Map, enabled ? "SPC categorical outlook map" : "Radar map");
@@ -417,6 +458,10 @@ public partial class RadarWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _closed = true;
+        _frameLoad?.Cancel();
+        _frameLoad?.Dispose();
+        Map.RadarLoadStateChanged -= OnRadarLoadStateChanged;
         SaveBounds();
         _spcLoad?.Cancel();
         _spcLoad?.Dispose();

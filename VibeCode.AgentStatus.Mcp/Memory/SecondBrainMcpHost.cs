@@ -145,6 +145,8 @@ public sealed class SecondBrainMcpHost
     private static JsonObject Result(JsonNode id, JsonObject result) => new() { ["jsonrpc"] = "2.0", ["id"] = id.DeepClone(), ["result"] = result };
     private static JsonObject Error(JsonNode? id, int code, string message) => new()
     {
-        ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
+        ["jsonrpc"] = "2.0",
+        ["id"] = id?.DeepClone(),
+        ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
     };
 }

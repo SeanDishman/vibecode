@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using VibeCode.Services;
 
 namespace VibeCode.UI;
@@ -28,10 +29,15 @@ public partial class BridgeAgentOptionsPanel : UserControl
     }
 
     public BridgeAgentConfiguration OrchestratorConfiguration => Read(_orchestratorProvider, OrchestratorModelBox, OrchestratorEffortBox, OrchestratorReviewBox,
-        OrchestratorFastModeToggle.IsChecked == true);
-    public BridgeAgentConfiguration WorkerConfiguration => Read(_workerProvider, WorkerModelBox, WorkerEffortBox, WorkerReviewBox, _workerFastMode);
+        OrchestratorFastModeToggle.IsChecked == true, OrchestratorUltrafastModeToggle.IsChecked == true);
+    public BridgeAgentConfiguration WorkerConfiguration => Read(_workerProvider, WorkerModelBox, WorkerEffortBox, WorkerReviewBox,
+        _workerFastMode, WorkerUltrafastModeToggle.IsChecked == true);
     public BridgeAgentConfiguration CentralConfiguration => new(_centralProvider,
-        (CentralModelBox.SelectedItem as ModelChoice)?.Value, (CentralEffortBox.SelectedItem as EffortChoice)?.Value);
+        (CentralModelBox.SelectedItem as ModelChoice)?.Value, (CentralEffortBox.SelectedItem as EffortChoice)?.Value,
+        FastMode: CentralFastModeToggle.IsChecked == true
+            && BridgeAgentConfigurationPolicy.SupportsFastMode(_centralProvider, CentralModelBox.SelectedItem as ModelChoice),
+        UltrafastMode: CentralUltrafastModeToggle.IsChecked == true
+            && BridgeAgentConfigurationPolicy.SupportsUltrafastMode(_centralProvider, CentralModelBox.SelectedItem as ModelChoice));
     public void ShowCentralPlanner(bool visible) => CentralFields.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
     public void Configure(ChatViewModel host, string orchestratorProvider)
@@ -56,9 +62,10 @@ public partial class BridgeAgentOptionsPanel : UserControl
             WorkerProviderBox.SelectedValue = _workerProvider;
             Populate(_workerProvider, worker, WorkerModelBox, WorkerEffortBox, WorkerEffortNote);
             _workerFastMode = worker.FastMode ?? host.FastMode;
+            WorkerUltrafastModeToggle.IsChecked = worker.UltrafastMode;
+            RefreshUltrafastMode(_workerProvider, WorkerModelBox, WorkerUltrafastModeToggle);
             CentralProviderBox.SelectedValue = _centralProvider;
-            Populate(_centralProvider, BridgeAgentConfigurationPolicy.Defaults(_centralProvider, host),
-                CentralModelBox, CentralEffortBox, CentralEffortNote);
+            PopulateCentral(BridgeAgentConfigurationPolicy.Defaults(_centralProvider, host));
         }
         finally { _updating = false; }
     }
@@ -78,39 +85,93 @@ public partial class BridgeAgentOptionsPanel : UserControl
         ConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private static BridgeAgentConfiguration Read(string provider, ComboBox models, ComboBox efforts, ComboBox reviews, bool fastMode) =>
+    private static BridgeAgentConfiguration Read(string provider, ComboBox models, ComboBox efforts, ComboBox reviews, bool fastMode, bool ultrafastMode) =>
         new(provider, (models.SelectedItem as ModelChoice)?.Value, (efforts.SelectedItem as EffortChoice)?.Value,
             reviews.SelectedValue as string ?? BridgeReviewPolicy.Normal,
-            fastMode && BridgeAgentConfigurationPolicy.SupportsFastMode(provider, models.SelectedItem as ModelChoice));
+            fastMode && !ultrafastMode && BridgeAgentConfigurationPolicy.SupportsFastMode(provider, models.SelectedItem as ModelChoice),
+            ultrafastMode && BridgeAgentConfigurationPolicy.SupportsUltrafastMode(provider, models.SelectedItem as ModelChoice));
 
     private void PopulateOrchestrator(BridgeAgentConfiguration configuration)
     {
         Populate(_orchestratorProvider, configuration, OrchestratorModelBox, OrchestratorEffortBox, OrchestratorEffortNote);
         OrchestratorFastModeToggle.IsChecked = configuration.FastMode == true;
-        RefreshFastMode();
+        RefreshFastMode(_orchestratorProvider, OrchestratorModelBox, OrchestratorFastModeToggle, "orchestrator");
+        OrchestratorUltrafastModeToggle.IsChecked = configuration.UltrafastMode;
+        RefreshUltrafastMode(_orchestratorProvider, OrchestratorModelBox, OrchestratorUltrafastModeToggle);
     }
 
-    private void RefreshFastMode()
+    private void PopulateCentral(BridgeAgentConfiguration configuration)
     {
-        var visible = _orchestratorProvider is "claude" or "codex";
-        var supported = BridgeAgentConfigurationPolicy.SupportsFastMode(_orchestratorProvider, OrchestratorModelBox.SelectedItem as ModelChoice);
-        OrchestratorFastModeToggle.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        OrchestratorFastModeToggle.IsEnabled = supported;
-        if (!supported) OrchestratorFastModeToggle.IsChecked = false;
-        OrchestratorFastModeToggle.ToolTip = supported
-            ? "Faster output for the orchestrator only. Increased usage."
+        Populate(_centralProvider, configuration, CentralModelBox, CentralEffortBox, CentralEffortNote);
+        CentralFastModeToggle.IsChecked = configuration.FastMode == true;
+        RefreshFastMode(_centralProvider, CentralModelBox, CentralFastModeToggle, "central planner");
+        CentralUltrafastModeToggle.IsChecked = configuration.UltrafastMode;
+        RefreshUltrafastMode(_centralProvider, CentralModelBox, CentralUltrafastModeToggle);
+    }
+
+    private static void RefreshFastMode(string provider, ComboBox models, ToggleButton toggle, string role)
+    {
+        var visible = provider is "claude" or "codex";
+        var supported = BridgeAgentConfigurationPolicy.SupportsFastMode(provider, models.SelectedItem as ModelChoice);
+        toggle.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        toggle.IsEnabled = supported;
+        if (!supported) toggle.IsChecked = false;
+        toggle.ToolTip = supported
+            ? $"Fast mode: faster output for the {role} only. Increased usage."
             : "Fast mode is unavailable for this model.";
     }
 
     private void OnFastModeChanged(object sender, RoutedEventArgs e)
     {
-        if (!_updating) ConfigurationChanged?.Invoke(this, EventArgs.Empty);
+        if (_updating) return;
+        _updating = true;
+        try
+        {
+            if (sender is ToggleButton { IsChecked: true } toggle)
+            {
+                if (ReferenceEquals(toggle, OrchestratorFastModeToggle)) OrchestratorUltrafastModeToggle.IsChecked = false;
+                if (ReferenceEquals(toggle, OrchestratorUltrafastModeToggle)) OrchestratorFastModeToggle.IsChecked = false;
+                if (ReferenceEquals(toggle, CentralFastModeToggle)) CentralUltrafastModeToggle.IsChecked = false;
+                if (ReferenceEquals(toggle, CentralUltrafastModeToggle)) CentralFastModeToggle.IsChecked = false;
+                if (ReferenceEquals(toggle, WorkerUltrafastModeToggle)) _workerFastMode = false;
+            }
+        }
+        finally { _updating = false; }
+        ConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private static void Populate(string provider, BridgeAgentConfiguration configuration, ComboBox models, ComboBox efforts, TextBlock note)
+    private static void RefreshUltrafastMode(string provider, ComboBox models, ToggleButton toggle)
+    {
+        var supported = BridgeAgentConfigurationPolicy.SupportsUltrafastMode(provider, models.SelectedItem as ModelChoice);
+        toggle.Visibility = supported ? Visibility.Visible : Visibility.Collapsed;
+        toggle.IsEnabled = supported;
+        if (!supported) toggle.IsChecked = false;
+        toggle.ToolTip = supported
+            ? "Ultrafast for this role only. 6× credit/API cost; 8× included usage. Requires an eligible account."
+            : "Ultrafast requires a supported model and eligible account.";
+        System.Windows.Automation.AutomationProperties.SetHelpText(toggle, (string)toggle.ToolTip);
+    }
+
+    private void Populate(string provider, BridgeAgentConfiguration configuration, ComboBox models, ComboBox efforts, TextBlock note)
     {
         configuration = BridgeAgentConfigurationPolicy.Normalize(configuration);
-        models.ItemsSource = BridgeAgentConfigurationPolicy.ModelsFor(provider);
+        var catalog = BridgeAgentConfigurationPolicy.ModelsFor(provider);
+        // The provider-wide preview may have come from another login. Only this host's live catalog proves
+        // its account can offer Ultrafast; switching to another provider must wait for that account's catalog.
+        models.ItemsSource = provider != "codex" ? catalog : catalog.Select(model => new ModelChoice
+        {
+            Provider = model.Provider,
+            Value = model.Value,
+            Display = model.Display,
+            Description = model.Description,
+            ResolvedModel = model.ResolvedModel,
+            SupportsEffort = model.SupportsEffort,
+            EffortLevels = model.EffortLevels,
+            SupportsAutoMode = model.SupportsAutoMode,
+            SupportsFastMode = model.SupportsFastMode,
+            SupportsUltrafastMode = _host?.IsCodex == true && _host.Models.Any(owned =>
+                owned.Value == model.Value && owned.SupportsUltrafastMode),
+        }).ToArray();
         models.SelectedItem = models.Items.OfType<ModelChoice>().FirstOrDefault(model => model.Value == configuration.Model);
         PopulateEfforts(provider, models, efforts, note, configuration.Effort);
     }
@@ -139,6 +200,8 @@ public partial class BridgeAgentOptionsPanel : UserControl
             var configuration = _workerChoices.GetValueOrDefault(provider) ?? BridgeAgentConfigurationPolicy.Defaults(provider, _host);
             Populate(provider, configuration, WorkerModelBox, WorkerEffortBox, WorkerEffortNote);
             _workerFastMode = configuration.FastMode ?? _host?.FastMode == true;
+            WorkerUltrafastModeToggle.IsChecked = configuration.UltrafastMode;
+            RefreshUltrafastMode(provider, WorkerModelBox, WorkerUltrafastModeToggle);
         }
         finally { _updating = false; }
         ConfigurationChanged?.Invoke(this, EventArgs.Empty);
@@ -159,8 +222,7 @@ public partial class BridgeAgentOptionsPanel : UserControl
         _updating = true;
         try
         {
-            Populate(provider, _centralChoices.GetValueOrDefault(provider) ?? BridgeAgentConfigurationPolicy.Defaults(provider, _host),
-                CentralModelBox, CentralEffortBox, CentralEffortNote);
+            PopulateCentral(_centralChoices.GetValueOrDefault(provider) ?? BridgeAgentConfigurationPolicy.Defaults(provider, _host));
         }
         finally { _updating = false; }
         ConfigurationChanged?.Invoke(this, EventArgs.Empty);
@@ -173,7 +235,18 @@ public partial class BridgeAgentOptionsPanel : UserControl
         try
         {
             PopulateEfforts(provider, models, efforts, note, previousEffort);
-            if (ReferenceEquals(models, OrchestratorModelBox)) RefreshFastMode();
+            if (ReferenceEquals(models, OrchestratorModelBox))
+            {
+                RefreshFastMode(provider, models, OrchestratorFastModeToggle, "orchestrator");
+                RefreshUltrafastMode(provider, models, OrchestratorUltrafastModeToggle);
+            }
+            if (ReferenceEquals(models, CentralModelBox))
+            {
+                RefreshFastMode(provider, models, CentralFastModeToggle, "central planner");
+                RefreshUltrafastMode(provider, models, CentralUltrafastModeToggle);
+            }
+            if (ReferenceEquals(models, WorkerModelBox))
+                RefreshUltrafastMode(provider, models, WorkerUltrafastModeToggle);
         }
         finally { _updating = false; }
         ConfigurationChanged?.Invoke(this, EventArgs.Empty);

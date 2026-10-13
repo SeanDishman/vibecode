@@ -97,12 +97,23 @@ public static class BridgeEditLedger
             BridgeShellEdits.Find(edit.Cwd)?.Remember(change.FullPath, ReadSource(change.FullPath), DateTime.UtcNow);
             Append(workspace, new BridgeEditEntry
             {
-                Id = Guid.NewGuid().ToString("N")[..12], At = at, Run = author.RunId,
-                AgentId = author.AgentId, Agent = author.Number, Label = author.Label, Provider = author.Provider,
-                Model = string.IsNullOrWhiteSpace(author.Model) ? null : author.Model, Role = author.Role,
+                Id = Guid.NewGuid().ToString("N")[..12],
+                At = at,
+                Run = author.RunId,
+                AgentId = author.AgentId,
+                Agent = author.Number,
+                Label = author.Label,
+                Provider = author.Provider,
+                Model = string.IsNullOrWhiteSpace(author.Model) ? null : author.Model,
+                Role = author.Role,
                 Task = string.IsNullOrWhiteSpace(author.Task) ? null : author.Task,
-                File = file, Change = change.Change, Ranges = change.Ranges.ToList(),
-                Added = change.Added, Removed = change.Removed, Exact = change.Exact, Tool = edit.Tool,
+                File = file,
+                Change = change.Change,
+                Ranges = change.Ranges.ToList(),
+                Added = change.Added,
+                Removed = change.Removed,
+                Exact = change.Exact,
+                Tool = edit.Tool,
             });
             LastError = null;
         }

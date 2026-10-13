@@ -18,21 +18,30 @@ internal static class OrbPreview
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(14, 7, 14, 7) };
             row.Children.Add(new TextBlock
             {
-                Text = option.Name, Width = 98, FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
-                Foreground = (Brush)resources["Text"], FontFamily = (FontFamily)resources["Ui"],
+                Text = option.Name,
+                Width = 98,
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = (Brush)resources["Text"],
+                FontFamily = (FontFamily)resources["Ui"],
             });
             foreach (var phase in new[] { 0.0, 0.12, 0.25, 0.37, 0.5, 0.62, 0.75, 0.87 })
             {
                 row.Children.Add(new Image
                 {
                     Source = Program.Frame(option.Style, 44, (Brush)resources["Accent"], phase),
-                    Width = 44, Height = 44, Margin = new Thickness(9, 0, 9, 0),
+                    Width = 44,
+                    Height = 44,
+                    Margin = new Thickness(9, 0, 9, 0),
                 });
             }
             row.Children.Add(new Image
             {
-                Source = Program.Frame(option.Style, 22, (Brush)resources["Accent"], 0.137), Width = 22, Height = 22,
-                Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+                Source = Program.Frame(option.Style, 22, (Brush)resources["Accent"], 0.137),
+                Width = 22,
+                Height = 22,
+                Margin = new Thickness(12, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
             });
             host.Children.Add(row);
         }

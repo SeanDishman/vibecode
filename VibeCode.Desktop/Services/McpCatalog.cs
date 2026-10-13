@@ -22,7 +22,7 @@ public sealed class McpServerDefinition
     public bool UseClaude { get; set; } = true;
     public bool UseCodex { get; set; } = true;
     public bool UseKimi { get; set; } = true;
-    public bool UseGrok { get; set; } = true;
+    public bool UseGemini { get; set; } = true;
     public string Command { get; set; } = "";
     public List<string> Arguments { get; set; } = new();
     public string Url { get; set; } = "";
@@ -35,14 +35,16 @@ public sealed class McpServerDefinition
     [JsonIgnore] public bool IsStdio => Transport == McpCatalog.StdioTransport;
     [JsonIgnore] public bool IsSse => Transport == McpCatalog.SseTransport;
     [JsonIgnore] public string TransportLabel => IsStdio ? "Local · stdio" : IsSse ? "Remote · legacy SSE" : "Remote · Streamable HTTP";
-    [JsonIgnore] public string EndpointSummary => IsStdio
+    [JsonIgnore]
+    public string EndpointSummary => IsStdio
         ? (Arguments?.Count ?? 0) == 0
             ? Command
             : $"{Command} | {Arguments?.Count ?? 0} argument{((Arguments?.Count ?? 0) == 1 ? "" : "s")}"
         : Url;
     [JsonIgnore] public string RuntimeName => McpCatalog.RuntimeServerName(this);
     [JsonIgnore] public string RuntimeNameLabel => "Runtime: " + RuntimeName;
-    [JsonIgnore] public string TargetsSummary
+    [JsonIgnore]
+    public string TargetsSummary
     {
         get
         {
@@ -50,12 +52,13 @@ public sealed class McpServerDefinition
             if (UseClaude) targets.Add("Claude");
             if (UseCodex && !IsSse) targets.Add("Codex");
             if (UseKimi) targets.Add("Kimi");
-            if (UseGrok) targets.Add("Grok");
+            if (UseGemini) targets.Add("Gemini");
             return targets.Count == 0 ? "No compatible CLI selected" : string.Join(" · ", targets);
         }
     }
-    [JsonIgnore] public string CompatibilityNote => IsSse
-        ? "Legacy SSE is sent to Claude, Kimi, and Grok; current Codex releases do not support it."
+    [JsonIgnore]
+    public string CompatibilityNote => IsSse
+        ? "Legacy SSE is sent to Claude, Kimi, and Gemini; current Codex releases do not support it."
         : "Applied to each selected CLI when a chat next starts or reconnects.";
 
     public McpServerDefinition Clone() => new()
@@ -67,7 +70,7 @@ public sealed class McpServerDefinition
         UseClaude = UseClaude,
         UseCodex = UseCodex,
         UseKimi = UseKimi,
-        UseGrok = UseGrok,
+        UseGemini = UseGemini,
         Command = Command,
         Arguments = new List<string>(Arguments ?? new List<string>()),
         Url = Url,
@@ -219,7 +222,7 @@ public static partial class McpCatalog
 
         if (definition.Transport is not (StdioTransport or HttpTransport or SseTransport))
             messages.Add(Error("Transport must be stdio, Streamable HTTP, or legacy SSE."));
-        if (!definition.UseClaude && !definition.UseCodex && !definition.UseKimi && !definition.UseGrok)
+        if (!definition.UseClaude && !definition.UseCodex && !definition.UseKimi && !definition.UseGemini)
             messages.Add(Error("Select at least one CLI."));
         if (definition.IsSse && definition.UseCodex)
             messages.Add(new McpValidationMessage(McpValidationSeverity.Warning,
@@ -242,7 +245,7 @@ public static partial class McpCatalog
                     && Path.IsPathRooted(expandedCommand) && !File.Exists(expandedCommand))
                     messages.Add(new McpValidationMessage(McpValidationSeverity.Warning,
                         "The selected MCP server executable does not currently exist."));
-                else if ((definition.UseKimi || definition.UseGrok) && !Path.IsPathRooted(expandedCommand)
+                else if ((definition.UseKimi || definition.UseGemini) && !Path.IsPathRooted(expandedCommand)
                                                && ResolveExecutable(definition.Command ?? "") is null)
                     messages.Add(new McpValidationMessage(McpValidationSeverity.Warning,
                         "ACP asks for an absolute executable path, and this command is not currently on PATH."));
@@ -373,7 +376,7 @@ public static partial class McpCatalog
                     if (definition.Environment.Values.Select(ExpandEnvironmentTemplates).Any(value => value.Length > 8192))
                         problems.Add($"{definition.Name}: an expanded environment value exceeds 8,192 characters");
 
-                    if (provider is "kimi" or "grok")
+                    if (provider is "kimi" or "gemini")
                     {
                         var executable = ResolveExecutable(definition.Command ?? "", sessionDirectory);
                         if (executable is null || !Path.IsPathRooted(executable) || !File.Exists(executable))
@@ -404,7 +407,7 @@ public static partial class McpCatalog
         var distinct = problems.Distinct(StringComparer.Ordinal).ToArray();
         if (distinct.Length > 0)
         {
-            var providerName = provider switch { "claude" => "Claude", "codex" => "Codex", "kimi" => "Kimi", "grok" => "Grok", _ => provider };
+            var providerName = provider switch { "claude" => "Claude", "codex" => "Codex", "kimi" => "Kimi", "gemini" => "Gemini", _ => provider };
             throw new InvalidOperationException($"Cannot launch {providerName} with the selected MCP catalog: "
                                                 + string.Join("; ", distinct) + ".");
         }
@@ -545,8 +548,8 @@ public static partial class McpCatalog
     public static JsonArray BuildKimiAcpServers(IEnumerable<McpServerDefinition>? definitions, string? sessionDirectory = null)
         => BuildAcpServers(definitions, "kimi", sessionDirectory);
 
-    public static JsonArray BuildGrokAcpServers(IEnumerable<McpServerDefinition>? definitions, string? sessionDirectory = null)
-        => BuildAcpServers(definitions, "grok", sessionDirectory);
+    public static JsonArray BuildGeminiAcpServers(IEnumerable<McpServerDefinition>? definitions, string? sessionDirectory = null)
+        => BuildAcpServers(definitions, "gemini", sessionDirectory);
 
     private static JsonArray BuildAcpServers(IEnumerable<McpServerDefinition>? definitions, string provider,
         string? sessionDirectory)
@@ -654,11 +657,11 @@ public static partial class McpCatalog
                 : new[] { "" };
             foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "")
                          .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            foreach (var extension in extensions)
-            {
-                var candidate = Path.Combine(directory.Trim('"'), command + extension);
-                if (File.Exists(candidate)) return Path.GetFullPath(candidate);
-            }
+                foreach (var extension in extensions)
+                {
+                    var candidate = Path.Combine(directory.Trim('"'), command + extension);
+                    if (File.Exists(candidate)) return Path.GetFullPath(candidate);
+                }
         }
         catch { }
         return null;
@@ -686,7 +689,7 @@ public static partial class McpCatalog
         "claude" => definition.UseClaude,
         "codex" => definition.UseCodex && !definition.IsSse,
         "kimi" => definition.UseKimi,
-        "grok" => definition.UseGrok,
+        "gemini" => definition.UseGemini,
         _ => false,
     };
 

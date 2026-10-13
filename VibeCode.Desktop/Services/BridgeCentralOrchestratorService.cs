@@ -25,6 +25,7 @@ public sealed class BridgeCentralPlan
     public List<BridgeOrchestratorAssignment> Assignments { get; set; } = new();
     public HashSet<string> PublishedPlans { get; set; } = new();
     [JsonIgnore] public CancellationTokenSource? Cancellation { get; set; }
+    [JsonIgnore] public CentralPlannerActivity? Activity { get; set; }
 }
 
 public static class BridgeCentralOrchestratorService
@@ -55,7 +56,8 @@ public static class BridgeCentralOrchestratorService
 
     public static async Task<IReadOnlyList<BridgeOrchestratorAssignment>> DivideAsync(ChatViewModel host,
         BridgeAgentConfiguration configuration, IReadOnlyList<BridgeOrchestratorGroup> groups, CancellationToken cancellationToken,
-        Action<bool>? waitingForLimit = null)
+        Action<bool>? waitingForLimit = null, Action<JsonNode>? observe = null, Action<string>? stageChanged = null,
+        Action<BridgeUsageSummary>? usageChanged = null)
     {
         if (groups.Count < 2) throw new ArgumentException("Central orchestration needs at least two groups.", nameof(groups));
         cancellationToken.ThrowIfCancellationRequested();
@@ -66,12 +68,14 @@ public static class BridgeCentralOrchestratorService
         var done = new TaskCompletionSource<JsonNode>(TaskCreationOptions.RunContinuationsAsynchronously);
         var chunks = new List<string>();
         var gate = new object();
-        var usage = new BridgeSuggestionUsage(configuration.Provider, configuration.Model, host.Cwd);
+        using var usage = new BridgeSuggestionUsage(configuration.Provider, configuration.Model, host.Cwd,
+            configuration.UltrafastMode ? "ultrafast" : configuration.FastMode == true ? "fast" : "standard", usageChanged);
         var planner = PlannerName(host, configuration);
         var progress = new CentralPlannerProgress();
         session.Initialized += () =>
         {
             progress.Ready();
+            stageChanged?.Invoke("Provider connected");
             ready.TrySetResult();
         };
         session.Exited += (code, stderr) =>
@@ -84,7 +88,9 @@ public static class BridgeCentralOrchestratorService
             new JsonObject { ["behavior"] = "deny", ["message"] = "The central orchestrator only divides the task." }, r.ToolUseId);
         session.MessageReceived += node =>
         {
+            usage.Observe(node, session.SessionId, session.Models);
             progress.Observe(node);
+            observe?.Invoke(node);
             if (node["type"]?.ToString() == "assistant" && node["message"]?["content"] is JsonArray content)
                 lock (gate)
                     foreach (var block in content.OfType<JsonObject>().Where(b => b["type"]?.ToString() == "text"))
@@ -100,10 +106,16 @@ public static class BridgeCentralOrchestratorService
         {
             await Task.Run(session.Start, timeout.Token);
             await ready.Task.WaitAsync(timeout.Token);
+            stageChanged?.Invoke("Dividing the task…");
             session.SendUser(JsonValue.Create("[CENTRAL ORCHESTRATOR INPUT]\n" + JsonSerializer.Serialize(new
             {
-                groups = groups.Select(g => new { agent_id = g.AgentId, worker_count = g.WorkerCount,
-                    objective = g.Objective, existing_scope = g.ExistingScope })
+                groups = groups.Select(g => new
+                {
+                    agent_id = g.AgentId,
+                    worker_count = g.WorkerCount,
+                    objective = g.Objective,
+                    existing_scope = g.ExistingScope
+                })
             })));
             progress.Sent();
             var attempts = 0;
@@ -111,22 +123,44 @@ public static class BridgeCentralOrchestratorService
             while (true)
             {
                 response = await done.Task.WaitAsync(timeout.Token);
+                if (BridgeErrorRecovery.IsTransient(response))
+                {
+                    waiting = true;
+                    stageChanged?.Invoke("Temporary provider error. Continuing in 1 minute…");
+                    try { await Task.Delay(BridgeErrorRecovery.Delay, timeout.Token); }
+                    finally { waiting = false; }
+                    if (session.HasExited)
+                        throw new CentralPlannerException("The central planner disconnected while waiting to retry. Start a new team to reconnect it.", "the planner's CLI exited");
+                    lock (gate) chunks.Clear();
+                    done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    progress = new CentralPlannerProgress();
+                    progress.Ready(); progress.Sent();
+                    usage.BeginTurn();
+                    stageChanged?.Invoke("Continuing task division after the provider error…");
+                    session.SendUser(JsonValue.Create("Continue the central assignment after the temporary provider error. Return the complete JSON handoff for the supplied groups."));
+                    continue;
+                }
                 if (!UsageLimitRecovery.IsLimitError(response) || !AppSettings.Current.ContinueAfterLimitResets) break;
                 waiting = true;
                 waitingForLimit?.Invoke(true);
                 bool recovered;
-                try { recovered = await UsageLimitRecovery.WaitForResetAsync(response, configuration.Provider, configuration.Model,
-                    accountId, session, attempts++, timeout.Token); }
+                try
+                {
+                    recovered = await UsageLimitRecovery.WaitForResetAsync(response, configuration.Provider, configuration.Model,
+                    accountId, session, attempts++, timeout.Token);
+                }
                 finally { waiting = false; waitingForLimit?.Invoke(false); }
                 if (!recovered) break;
                 lock (gate) chunks.Clear();
                 done = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 progress = new CentralPlannerProgress();
                 progress.Ready(); progress.Sent();
+                usage.BeginTurn();
                 session.SendUser(JsonValue.Create("Continue the central assignment after the usage limit. Return the complete JSON handoff for the supplied groups."));
             }
             if (response["is_error"]?.ToString() == "true" || (response["subtype"]?.ToString() ?? "").Contains("error", StringComparison.OrdinalIgnoreCase))
                 throw new CentralPlannerException(progress.DescribeError(planner, response), "the provider returned an error");
+            stageChanged?.Invoke("Checking assignments…");
             var result = response["result"]?.ToString() ?? "";
             string? why = null;
             lock (gate)

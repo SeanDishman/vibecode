@@ -31,7 +31,10 @@ internal static partial class Program
 
     private static JsonObject PriceUsage(double input = 1000, double read = 0, double output = 100, string? speed = null) => new()
     {
-        ["input_tokens"] = input, ["cache_read_input_tokens"] = read, ["output_tokens"] = output, ["speed"] = speed,
+        ["input_tokens"] = input,
+        ["cache_read_input_tokens"] = read,
+        ["output_tokens"] = output,
+        ["speed"] = speed,
     };
 
     private static void VerifyCodexRequestPricing(Action<string, double, double> near)
@@ -44,9 +47,16 @@ internal static partial class Program
         void Request(double input, double totalInput, double totalOutput, string? tier = null, string thread = "price-root", string? model = null)
         {
             var last = new JsonObject { ["inputTokens"] = input, ["outputTokens"] = 100, ["cachedInputTokens"] = 0 };
-            Call(session, "CaptureUsage", new JsonObject { ["model"] = model, ["serviceTier"] = tier,
-                ["tokenUsage"] = new JsonObject { ["last"] = last,
-                    ["total"] = new JsonObject { ["inputTokens"] = totalInput, ["outputTokens"] = totalOutput, ["cachedInputTokens"] = 0 } } }, thread);
+            Call(session, "CaptureUsage", new JsonObject
+            {
+                ["model"] = model,
+                ["serviceTier"] = tier,
+                ["tokenUsage"] = new JsonObject
+                {
+                    ["last"] = last,
+                    ["total"] = new JsonObject { ["inputTokens"] = totalInput, ["outputTokens"] = totalOutput, ["cachedInputTokens"] = 0 }
+                }
+            }, thread);
         }
         double Cost() => messages.Last()["usage"]!["estimated_cost_usd"]!.GetValue<double>();
         Request(150000, 150000, 100);
@@ -64,8 +74,8 @@ internal static partial class Program
         Request(1000, 1000, 100, "default", "child", "gpt-6-sol");
         near("reported child model and tier use their own rates", Cost(), 0.1984);
         var usage = messages.Last()["usage"]!.DeepClone();
-        var planner = Activator.CreateInstance(typeof(ModelPricing).Assembly.GetType("VibeCode.Services.BridgeSuggestionUsage")!, Flags, null,
-            ["codex", "gpt-6-luna", "pricing-fixture"], null)!;
+        using var planner = (IDisposable)Activator.CreateInstance(typeof(ModelPricing).Assembly.GetType("VibeCode.Services.BridgeSuggestionUsage")!, Flags, null,
+            ["codex", "gpt-6-luna", "pricing-fixture", null, null], null)!;
         Call(planner, "Record", new JsonObject { ["usage"] = usage }, "price-planner", new JsonArray());
         near("background planning preserves adapter request pricing", UsageLog.Instance.Entries().Last().CostUsd, 0.1984);
     }
@@ -105,13 +115,6 @@ internal static partial class Program
         Check("provider-reported Claude cost is marked as reported", UsageLog.Instance.Entries().Last().CostReported);
         Call(claude, "ApplyResult", new JsonObject { ["usage"] = PriceUsage(), ["total_cost_usd"] = 0.07 });
         near("cumulative provider totals log only the new spend", UsageLog.Instance.Entries().Last().CostUsd, 0.03);
-
-        var grok = new ChatViewModel(_root, provider: "grok") { Model = "grok-4.7-fast", FastMode = true };
-        Chats.Add(grok); Call(grok, "BeginTurnPricing");
-        Call(grok, "ApplyResult", new JsonObject { ["usage"] = PriceUsage(), ["total_cost_usd"] = 0.123 });
-        near("Grok fast keeps the provider's actual cost", UsageLog.Instance.Entries().Last().CostUsd, 0.123);
-        Call(grok, "ApplyResult", new JsonObject { ["usage"] = PriceUsage() });
-        Check("missing Grok prices are not invented or marked reported", UsageLog.Instance.Entries().Last() is { CostUsd: 0, CostReported: false });
     }
 
     private static void VerifyLivePriceAccounting(Action<string, double, double> near)
@@ -127,8 +130,6 @@ internal static partial class Program
         telemetry.Report(owner, "codex", "gpt-6-luna", 2000, 0, 0, 200, "price-flow", _root, 0.0004);
         near("same-token price corrections reach the flow", telemetry.Flow().Where(e => e.SessionId == "price-flow").Sum(e => e.CostUsd), 0.0004);
         telemetry.Clear(owner);
-        telemetry.Report(owner, "grok", "grok-4.7-fast", 1000, 0, 0, 100, "price-grok", _root);
-        near("live Grok cannot borrow another provider's fallback price", telemetry.Merge([]).Single().CostUsd, 0);
         telemetry.Clear(owner);
     }
 }

@@ -22,17 +22,17 @@ internal static partial class Program
         AppSettings.Current.DefaultCodexEffort = "low";
         AppSettings.Current.SecondBrainEnabled = false;
         AppSettings.Current.AgentMemoryEnabled = false;
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.McpServers.Clear();
         var reportPath = Path.Combine(_root, "luna-edit-log-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + ".json");
         var results = new List<object>();
         var failures = new List<string>();
         void Save() => File.WriteAllText(reportPath, JsonSerializer.Serialize(new
         {
-            model = "gpt-6-luna", effort = "low",
+            model = "gpt-6-luna",
+            effort = "low",
             method = "Real authenticated Luna turns using the production bridge MCP endpoint and routing. Peer edits are recorded through the same tool-result capture path live providers use; older history is appended to the same ledger.",
-            results, failures,
+            results,
+            failures,
         }, new JsonSerializerOptions { WriteIndented = true }));
 
         Scenario("normal-who-changed-lines", 3, "plan", (vm, team, actor) =>
@@ -180,7 +180,7 @@ internal static partial class Program
             var (vm, team) = Team("luna-edits-" + name, peers);
             foreach (var peer in team) { peer.Status = "running"; Property(peer, "BridgeTaskState", "working"); }
             var actor = new ChatViewModel(team[0].Cwd, title: "Bridge edit log simulation", provider: "codex")
-                { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true, BridgeLabel = "Codex " + (peers + 1) };
+            { Model = "gpt-6-luna", Effort = "low", ExcludeFromMemory = true, BridgeLabel = "Codex " + (peers + 1) };
             Chats.Add(actor); vm.Chats.Add(actor); vm.BridgePanes.Add(actor); Call(vm, "Track", actor);
             var calls = new List<JsonObject>();
             var handler = (Func<string, JsonObject, JsonObject>)Property(actor, "BridgeToolHandler")!;
@@ -226,8 +226,14 @@ internal static partial class Program
             {
                 results.Add(new
                 {
-                    name, passed = failure is null, failure, prompt, reply, elapsed_seconds = watch.Elapsed.TotalSeconds,
-                    input_tokens = actor.TotalIn, output_tokens = actor.TotalOut,
+                    name,
+                    passed = failure is null,
+                    failure,
+                    prompt,
+                    reply,
+                    elapsed_seconds = watch.Elapsed.TotalSeconds,
+                    input_tokens = actor.TotalIn,
+                    output_tokens = actor.TotalOut,
                     bridge_calls = calls.Select(c => c.DeepClone()).ToArray(),
                     tools = AllTools(actor).Select(t => t.Name).ToArray(),
                     edit_log = BridgeEditLedger.Read(team[0].Cwd, DateTimeOffset.UtcNow).Select(e => new { e.File, e.Lines, e.Label, e.Task, e.Role }).ToArray(),
@@ -275,8 +281,18 @@ internal static partial class Program
     private static void SeedOld(ChatViewModel pane, string relative, int start, int end, string task, TimeSpan ago) =>
         BridgeEditLedger.Append(pane.Cwd, new BridgeEditEntry
         {
-            Id = Guid.NewGuid().ToString("N")[..12], At = DateTimeOffset.UtcNow - ago, AgentId = pane.BridgeAgentId,
-            Agent = int.Parse(pane.BridgeLabel.Split(' ').Last()), Label = pane.BridgeLabel, Provider = pane.Provider, Role = "agent",
-            Task = task, File = relative, Ranges = [new BridgeEditRange(start, end, end - start + 1, 1)], Added = end - start + 1, Removed = 1, Tool = "Edit",
+            Id = Guid.NewGuid().ToString("N")[..12],
+            At = DateTimeOffset.UtcNow - ago,
+            AgentId = pane.BridgeAgentId,
+            Agent = int.Parse(pane.BridgeLabel.Split(' ').Last()),
+            Label = pane.BridgeLabel,
+            Provider = pane.Provider,
+            Role = "agent",
+            Task = task,
+            File = relative,
+            Ranges = [new BridgeEditRange(start, end, end - start + 1, 1)],
+            Added = end - start + 1,
+            Removed = 1,
+            Tool = "Edit",
         });
 }

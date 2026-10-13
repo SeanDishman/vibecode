@@ -13,7 +13,7 @@ internal static partial class Program
 {
     private static void SubagentOrbChecks()
     {
-        foreach (var provider in new[] { "claude", "codex", "grok", "kimi", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
         {
             var (chat, session) = NewChat("orb-" + provider, provider);
             var child = new SubagentItem { ThreadId = "child", Status = "running" };
@@ -120,9 +120,9 @@ internal static partial class Program
         SelectRoleEffort(options, "CentralEffortBox", "high");
         ((TextBox)panel.FindName("ObjectiveBox")).Text = "Build the account settings and usage dashboard. Verify both flows together.";
         Check("Claude orchestrator, GLM workers and Codex planner have independent explicit settings",
-            panel.OrchestratorConfiguration == new BridgeAgentConfiguration("claude", "claude-opus-5", "xhigh")
-            && panel.WorkerConfiguration == new BridgeAgentConfiguration("glm", "glm-5.3", "high")
-            && panel.CentralConfiguration == new BridgeAgentConfiguration("codex", "gpt-6.1-sol", "high"));
+            panel.OrchestratorConfiguration == new BridgeAgentConfiguration("claude", "claude-opus-5", "xhigh", FastMode: false)
+            && panel.WorkerConfiguration == new BridgeAgentConfiguration("glm", "glm-5.3", "high", FastMode: false)
+            && panel.CentralConfiguration == new BridgeAgentConfiguration("codex", "gpt-6.1-sol", "high", FastMode: false));
         Check("multiple orchestrators expose central planner", ((FrameworkElement)options.FindName("CentralFields")).Visibility == Visibility.Visible);
         var choice = panel.CentralConfiguration;
         central.SelectedValue = "kimi"; central.SelectedValue = "codex";
@@ -149,7 +149,7 @@ internal static partial class Program
         VerifyGlmWorkerTeam();
 
         var factory = typeof(BridgeTeamSuggestionService).GetMethod("CreateSession", Flags)!;
-        foreach (var provider in new[] { "claude", "codex", "kimi", "grok", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
         {
             central.SelectedValue = provider;
             var models = (ComboBox)options.FindName("CentralModelBox");
@@ -161,7 +161,7 @@ internal static partial class Program
             var configuration = options.CentralConfiguration;
             using var session = (ICodingSession)factory.Invoke(null, new object?[] { host, null, configuration, true, null, null })!;
             Check(provider + " planner uses its own native adapter", session.GetType().Name.Equals(provider + "Session", StringComparison.OrdinalIgnoreCase));
-            var inner = session is GrokSession ? session.GetType().GetField("_inner", Flags)!.GetValue(session)! : session;
+            var inner = session;
             var field = inner.GetType().GetFields(Flags).First(f => f.FieldType.Name.EndsWith("SessionOptions"));
             var actual = field.GetValue(inner)!;
             var model = actual.GetType().GetProperty("Model")!.GetValue(actual) as string;

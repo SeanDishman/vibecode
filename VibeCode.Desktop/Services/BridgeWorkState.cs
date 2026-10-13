@@ -16,6 +16,12 @@ public sealed class BridgeWorkState
     public List<BridgeWorkTask> Tasks { get; set; } = new();
     public Dictionary<string, string> OrchestratorObjectives { get; set; } = new();
     public BridgeCentralPlan? CentralPlan { get; set; }
+    public BridgeUsageSummary PlanningUsage { get; set; } = new();
+
+    // Runtime-only: a saved bridge must not start model turns just because it was reopened.
+    internal bool IdlePlanRemindersPaused { get; set; }
+    internal bool IdlePlanReminderScheduled { get; set; }
+    internal Dictionary<string, string> IdlePlanReminderSignatures { get; } = new(StringComparer.Ordinal);
 
     public static string PeerKey(string from, string to) => from + ":" + to;
     public bool Confirmed(string agentId) => ConfirmedVersions.GetValueOrDefault(agentId) == PlanVersion;
@@ -23,6 +29,7 @@ public sealed class BridgeWorkState
 
     public void Recover()
     {
+        IdlePlanRemindersPaused = true;
         if (CentralPlan is { State: "planning" or "handing_off" } central)
         {
             central.State = "interrupted";

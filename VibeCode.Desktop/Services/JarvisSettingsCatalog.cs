@@ -11,7 +11,7 @@ namespace VibeCode.Services;
 public static class JarvisSettingsCatalog
 {
     public static IReadOnlyList<string> Categories { get; } =
-        ["General", "Appearance", "Notifications", "Bridge", "Usage", "Projects", "MCP servers", "Extensions", "Jarvis", "Privacy", "About"];
+        SettingsNavigation.Destinations.Select(destination => destination.Category).ToArray();
 
     private static readonly IReadOnlyDictionary<string, Setting> Entries = Build();
     private sealed record Setting(PropertyInfo Property, string Category);
@@ -19,15 +19,15 @@ public static class JarvisSettingsCatalog
     private static IReadOnlyDictionary<string, Setting> Build()
     {
         var result = new Dictionary<string, Setting>(StringComparer.OrdinalIgnoreCase);
-        Add("General", "RunInBackground ContinueAfterLimitResets DefaultProvider DefaultMode DefaultModel DefaultEffort DefaultCodexModel DefaultCodexEffort DefaultKimiModel DefaultKimiEffort DefaultGrokModel DefaultGrokEffort DefaultGlmModel DefaultGlmEffort FastMode");
+        Add("General", "RunInBackground ContinueAfterLimitResets DefaultProvider DefaultMode DefaultModel DefaultEffort DefaultCodexModel DefaultCodexEffort DefaultKimiModel DefaultKimiEffort DefaultGlmModel DefaultGlmEffort FastMode");
         Add("Appearance", "UiMode Borderless ThinkingOrbStyle CompactMode Backgrounds ActiveBackground RandomBackground BackgroundVisibility");
         Add("Notifications", "NotifyOnTurnEnd NotifyOnAwaitingInput NotificationSound");
-        Add("Bridge", "BridgeOrchestratorCount BridgeOrchestratorWorkerCounts DualMonitorBridge DualMonitorDoubleSessions BridgeAgentLimit BridgeRealtimeSharing BridgePeerMessaging ShowAgentMessageDividers AgentSwarmsEnabled AgentSwarmsInBridge SwarmMaxWorkers AgentSupervisionEnabled SupervisionStaleSeconds SupervisionIdleSeconds SupervisionInterventionGraceSeconds SupervisionMaxTaskSeconds SupervisionMaxInterventions SupervisionMaxRestarts SupervisionLoopRepeatThreshold");
+        Add("Bridge", "BridgeOrchestratorCount BridgeOrchestratorWorkerCounts DualMonitorBridge DualMonitorDoubleSessions BridgeAgentLimit BridgePeerMessaging ShowAgentMessageDividers SwarmMaxWorkers AgentSupervisionEnabled SupervisionStaleSeconds SupervisionIdleSeconds SupervisionInterventionGraceSeconds SupervisionMaxTaskSeconds SupervisionMaxInterventions SupervisionMaxRestarts SupervisionLoopRepeatThreshold");
         Add("Usage", "TelemetryOnCompanionDisplay TelemetryLiveAnimation TelemetryWallRangeHours");
-        Add("Projects", "ShowOnlyOwnedSessions HiddenProjects");
+        Add("Projects", "ShowOnlyOwnedSessions HiddenProjects IsolateChatsByAccount");
         Add("Extensions", "SecondBrainEnabled AgentMemoryEnabled AgentMemoryAutoRecall AgentMemoryAutoRemember AgentMemoryEndpoint SpotifyEnabled SpotifyClientId WeatherEnabled WeatherPlace WeatherLat WeatherLon WeatherCountryCode GroqSpeechEnabled PhoneEnabled PhoneBridgeEnabled PhoneBridgePort");
         Add("Jarvis", "JarvisProvider JarvisModel JarvisEffort JarvisVoiceEnabled JarvisVoiceId JarvisSpeechRate JarvisSpeechVolume");
-        Add("Privacy", "HideEmails IsolateChatsByAccount GrokDeleteProxy");
+        Add("Privacy", "HideEmails");
         return result;
 
         void Add(string category, string names)
@@ -47,26 +47,33 @@ public static class JarvisSettingsCatalog
             var type = Nullable.GetUnderlyingType(entry.Property.PropertyType) ?? entry.Property.PropertyType;
             values.Add(new JsonObject
             {
-                ["name"] = name, ["category"] = entry.Category,
+                ["name"] = name,
+                ["category"] = entry.Category,
+                ["path"] = SettingsNavigation.Resolve(entry.Category)?.Path,
                 ["type"] = type == typeof(bool) ? "boolean" : type == typeof(int) || type == typeof(double) ? "number"
                     : type == typeof(string) ? "string" : "JSON array",
-                ["value"] = name == nameof(AppSettings.GrokDeleteProxy)
-                    ? JsonValue.Create(entry.Property.GetValue(settings) is null ? "default" : "[redacted]")
-                    : JsonSerializer.SerializeToNode(entry.Property.GetValue(settings)),
+                ["value"] = JsonSerializer.SerializeToNode(entry.Property.GetValue(settings)),
                 ["choices"] = new JsonArray(Choices(name).Select(choice => (JsonNode?)JsonValue.Create(choice)).ToArray()),
-                ["minimum"] = range?.Minimum, ["maximum"] = range?.Maximum,
+                ["minimum"] = range?.Minimum,
+                ["maximum"] = range?.Maximum,
             });
         }
         return new()
         {
             ["preferences"] = values,
             ["categories"] = new JsonArray(Categories.Select(category => (JsonNode?)JsonValue.Create(category)).ToArray()),
+            ["navigation"] = new JsonArray(SettingsNavigation.Destinations.Select(destination => (JsonNode?)new JsonObject
+            {
+                ["category"] = destination.Category,
+                ["path"] = destination.Path,
+            }).ToArray()),
             ["mcp_servers"] = new JsonArray(settings.McpServers.Select(server => (JsonNode?)DescribeServer(server)).ToArray()),
             ["models"] = new JsonObject(BridgeAgentConfigurationPolicy.Providers.Select(provider =>
                 new KeyValuePair<string, JsonNode?>(provider, new JsonArray(BridgeAgentConfigurationPolicy.ModelsFor(provider)
                     .Select(model => (JsonNode?)new JsonObject
                     {
-                        ["id"] = model.Value, ["label"] = model.Display,
+                        ["id"] = model.Value,
+                        ["label"] = model.Display,
                         ["efforts"] = new JsonArray(model.EffortLevels.Select(effort => (JsonNode?)JsonValue.Create(effort)).ToArray()),
                     }).ToArray())))),
         };
@@ -74,15 +81,22 @@ public static class JarvisSettingsCatalog
 
     public static JsonObject DescribeServer(McpServerDefinition server) => new()
     {
-        ["id"] = server.Id, ["name"] = server.Name, ["transport"] = server.Transport, ["enabled"] = server.Enabled,
-        ["command"] = server.Command, ["argument_count"] = server.Arguments.Count,
+        ["id"] = server.Id,
+        ["name"] = server.Name,
+        ["transport"] = server.Transport,
+        ["enabled"] = server.Enabled,
+        ["command"] = server.Command,
+        ["argument_count"] = server.Arguments.Count,
         ["url"] = PublicUrl(server.Url),
         ["environment_variables"] = new JsonArray(server.Environment.Keys.Select(key => (JsonNode?)JsonValue.Create(key)).ToArray()),
         ["headers"] = new JsonArray(server.Headers.Keys.Select(key => (JsonNode?)JsonValue.Create(key)).ToArray()),
         ["bearerTokenEnvironmentVariable"] = server.BearerTokenEnvironmentVariable,
-        ["startupTimeoutSeconds"] = server.StartupTimeoutSeconds, ["toolTimeoutSeconds"] = server.ToolTimeoutSeconds,
-        ["useClaude"] = server.UseClaude, ["useCodex"] = server.UseCodex,
-        ["useKimi"] = server.UseKimi, ["useGrok"] = server.UseGrok,
+        ["startupTimeoutSeconds"] = server.StartupTimeoutSeconds,
+        ["toolTimeoutSeconds"] = server.ToolTimeoutSeconds,
+        ["useClaude"] = server.UseClaude,
+        ["useCodex"] = server.UseCodex,
+        ["useKimi"] = server.UseKimi,
+        ["useGemini"] = server.UseGemini,
     };
 
     private static string PublicUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
@@ -162,20 +176,20 @@ public static class JarvisSettingsCatalog
         nameof(AppSettings.SupervisionLoopRepeatThreshold) => (2, 100),
         nameof(AppSettings.TelemetryWallRangeHours) => (1, 720),
         nameof(AppSettings.PhoneBridgePort) => (0, 65535),
-        nameof(AppSettings.WeatherLat) => (-90, 90), nameof(AppSettings.WeatherLon) => (-180, 180),
+        nameof(AppSettings.WeatherLat) => (-90, 90),
+        nameof(AppSettings.WeatherLon) => (-180, 180),
         _ => null,
     };
 
     private static IReadOnlyList<string> Choices(string name) => name switch
     {
         nameof(AppSettings.UiMode) => ["background", "cli"],
-        nameof(AppSettings.DefaultProvider) or nameof(AppSettings.JarvisProvider) => ["claude", "codex", "kimi", "grok", "glm"],
+        nameof(AppSettings.DefaultProvider) or nameof(AppSettings.JarvisProvider) => ["claude", "codex", "kimi", "glm", "gemini"],
         nameof(AppSettings.DefaultMode) => ["default", "auto", "plan", "acceptEdits", "bypassPermissions", "dontAsk"],
         nameof(AppSettings.ThinkingOrbStyle) => ThinkingOrbStyles.All.Select(orb => orb.Id).ToArray(),
         nameof(AppSettings.NotificationSound) => NotificationSounds.All.Select(sound => sound.Id).ToArray(),
         nameof(AppSettings.JarvisVoiceId) => JarvisSpeechService.GetVoices().Select(voice => voice.Id).ToArray(),
-        nameof(AppSettings.JarvisEffort) or nameof(AppSettings.DefaultEffort) or nameof(AppSettings.DefaultCodexEffort)
-            or nameof(AppSettings.DefaultGrokEffort) or nameof(AppSettings.DefaultGlmEffort)
+        nameof(AppSettings.JarvisEffort) or nameof(AppSettings.DefaultEffort) or nameof(AppSettings.DefaultCodexEffort) or nameof(AppSettings.DefaultGlmEffort)
             => ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode"],
         nameof(AppSettings.DefaultKimiEffort) => ["on", "off", "low", "high", "max"],
         _ => [],

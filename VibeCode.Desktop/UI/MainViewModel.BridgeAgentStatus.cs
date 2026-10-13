@@ -46,6 +46,7 @@ public sealed partial class MainViewModel
     private static string AgentRunState(ChatViewModel p) =>
         p.Status == "closed" ? "closed"
         : p.WaitingForLimitReset ? "waiting_for_limit_reset"
+        : p.WaitingForBridgeRetry ? "waiting_to_retry"
         : p.Status == "error" ? "error"
         : p.Status is "running" or "preparing" ? p.PendingPermissionCount > 0 ? "awaiting_approval" : "working"
         : p.QueuedPromptCount > 0 ? "queued"
@@ -56,7 +57,7 @@ public sealed partial class MainViewModel
 
     /// <summary>Busy = working now, or will carry on by itself (queued prompts, workers to hear from, a limit reset).</summary>
     private static bool IsBusyState(string state) =>
-        state is "working" or "awaiting_approval" or "queued" or "waiting" or "waiting_for_limit_reset";
+        state is "working" or "awaiting_approval" or "queued" or "waiting" or "waiting_for_limit_reset" or "waiting_to_retry";
 
     private static JsonObject AgentStatusJson(ChatViewModel caller, ChatViewModel p, LiveBridge bridge,
         IReadOnlyList<BridgeEditEntry> edits, DateTimeOffset now)
@@ -68,7 +69,9 @@ public sealed partial class MainViewModel
         var idleFor = !p.IsWorking && p.WorkEndedAtUtc is { } ended ? Elapsed(now.UtcDateTime - ended) : null;
         return new JsonObject
         {
-            ["agent_id"] = p.BridgeAgentId, ["number"] = BridgeNumberOf(p), ["label"] = p.BridgeLabel,
+            ["agent_id"] = p.BridgeAgentId,
+            ["number"] = BridgeNumberOf(p),
+            ["label"] = p.BridgeLabel,
             ["message_recipient"] = BridgeMessageRecipient(p, bridge.Panes),
             ["you"] = ReferenceEquals(p, caller),
             ["state"] = state,
@@ -98,6 +101,7 @@ public sealed partial class MainViewModel
             "queued" => $"{name} is between turns with {p.QueuedPromptCount} queued prompt(s) it will start next. Treat it as busy.",
             "waiting" => $"{name} is between turns, waiting on its workers or replies{on}, and will continue on its own. Treat its area as taken.",
             "waiting_for_limit_reset" => $"{name} is paused by its provider's usage limit and will resume{on} automatically. Treat its area as taken.",
+            "waiting_to_retry" => $"{name} is waiting one minute after a temporary provider error and will resume{on} automatically. Treat its area as taken.",
             "starting" => $"{name}'s session is still starting; it has not begun any work.",
             "finished" => $"{name} finished{on}" + (idleFor is null ? "" : $" {idleFor} ago") +
                 " and is not working now. Its area is free unless it is given new work.",
@@ -113,7 +117,10 @@ public sealed partial class MainViewModel
         var last = edits.FirstOrDefault(e => e.AgentId == agentId);
         return new JsonObject
         {
-            ["agent_id"] = agentId, ["state"] = "left", ["working"] = false, ["busy"] = false,
+            ["agent_id"] = agentId,
+            ["state"] = "left",
+            ["working"] = false,
+            ["busy"] = false,
             ["last_file_edit"] = last is null ? null : $"{last.File}: {last.Lines} ({Age(now - last.At)})",
             ["verdict"] = (last is null ? "That agent" : last.Label) + " has left this bridge and is not working. Its recorded edits remain in bridge_file_edits.",
         };

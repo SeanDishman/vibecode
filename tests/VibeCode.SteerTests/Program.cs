@@ -71,7 +71,8 @@ internal static class Program
             var p = requests[0].Parameters;
             Require(p["threadId"]?.GetValue<string>() == "thread-1"
                     && p["expectedTurnId"]?.GetValue<string>() == "turn-1"
-                    && p["input"]?[0]?["text"]?.GetValue<string>() == "Focus on failing tests.",
+                    && p["input"]?[0]?["text"]?.GetValue<string>() is { } wire
+                    && wire.EndsWith("Focus on failing tests.") && wire.Contains("[VIBECODE CHILD-AGENT POLICY]"),
                 "steering request lost its turn precondition or text");
             Require(p["model"] is null && p["cwd"] is null,
                 "steering tried to override active turn settings");
@@ -94,14 +95,19 @@ internal static class Program
                         ["result"] = new JsonObject { ["turnId"] = "turn-1" },
                     });
                 }));
-            Queue("Queued guidance");
+            AppSettings.Current.SwarmMaxWorkers = 2;
+            Queue("Use two subagents to check the parser and UI.");
             var queued = chat.Items.OfType<QueuedItem>().Single();
             Require(queued.QueueActionText == "Send message now", "Codex follow-up action does not match the requested label");
             Require(await chat.SteerQueuedAsync(queued) && !chat.HasQueued && !chat.Items.Contains(queued),
                 "accepted queued steer remained pending for a second dispatch");
-            Require(chat.Items.OfType<UserItem>().Last().Text == "Queued guidance"
+            Require(chat.Items.OfType<UserItem>().Last().Text == "Use two subagents to check the parser and UI."
                     && requests.Last().Method == "turn/steer",
                 "queued guidance was not added to the active turn");
+            Require(requests.Last().Parameters["input"]?[0]?["text"]?.GetValue<string>() is { } swarmWire
+                    && swarmWire.Contains("at most 2 concurrent or total child workers")
+                    && !swarmWire.Contains("VIBECODE SWARM REQUEST"),
+                "a plain-language swarm request did not receive the current limit when steered");
 
             Queue("Restore this queued guidance");
             var rejected = chat.Items.OfType<QueuedItem>().Single();

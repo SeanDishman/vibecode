@@ -318,8 +318,11 @@ public static class SyntaxHighlighter
 
     private static Lang CSharp() => new()
     {
-        Name = "C#", LineComments = new[] { "//" }, Block = ("/*", "*/"),
-        Strings = new[] { "\"\"\"", "\"", "'" }, CaseTypes = true,
+        Name = "C#",
+        LineComments = new[] { "//" },
+        Block = ("/*", "*/"),
+        Strings = new[] { "\"\"\"", "\"", "'" },
+        CaseTypes = true,
         Keywords = Set("abstract as async await base checked class const delegate enum event explicit extern false fixed get global implicit in init interface internal is lock nameof namespace new null operator out override params partial private protected public readonly record ref remove sealed set sizeof stackalloc static struct this throw true typeof unchecked unsafe using value virtual volatile where with add extern"),
         Control = Set("if else for foreach while do switch case break continue return goto throw try catch finally yield when default"),
         Types = Set("bool byte char decimal double float int long object sbyte short string uint ulong ushort void var dynamic nint nuint Task"),
@@ -327,8 +330,12 @@ public static class SyntaxHighlighter
 
     private static Lang JsTs() => new()
     {
-        Name = "TypeScript", LineComments = new[] { "//" }, Block = ("/*", "*/"),
-        Strings = new[] { "\"", "'", "`" }, MetaAt = true, CaseTypes = true,
+        Name = "TypeScript",
+        LineComments = new[] { "//" },
+        Block = ("/*", "*/"),
+        Strings = new[] { "\"", "'", "`" },
+        MetaAt = true,
+        CaseTypes = true,
         Keywords = Set("abstract as async await class const declare default delete enum export extends false from function get implements import in instanceof interface is keyof let module namespace new null of package private protected public readonly satisfies set static super this true type typeof undefined var with yield override infer asserts"),
         Control = Set("if else for while do switch case break continue return throw try catch finally yield await"),
         Types = Set("any boolean number string symbol void undefined null never unknown object bigint Array Promise Record"),
@@ -336,8 +343,11 @@ public static class SyntaxHighlighter
 
     private static Lang Python() => new()
     {
-        Name = "Python", LineComments = new[] { "#" }, Block = null,
-        Strings = new[] { "\"\"\"", "'''", "\"", "'" }, MetaAt = true,
+        Name = "Python",
+        LineComments = new[] { "#" },
+        Block = null,
+        Strings = new[] { "\"\"\"", "'''", "\"", "'" },
+        MetaAt = true,
         Keywords = Set("and as assert async await class def del False from global import in is lambda None nonlocal not or pass self cls True with as"),
         Control = Set("if elif else for while try except finally return yield raise break continue pass match case"),
         Types = Set("int float str bool bytes list dict set tuple frozenset object complex bytearray range type"),
@@ -345,8 +355,11 @@ public static class SyntaxHighlighter
 
     private static Lang Css() => new()
     {
-        Name = "CSS", LineComments = Array.Empty<string>(), Block = ("/*", "*/"),
-        Strings = new[] { "\"", "'" }, MetaAt = true,
+        Name = "CSS",
+        LineComments = Array.Empty<string>(),
+        Block = ("/*", "*/"),
+        Strings = new[] { "\"", "'" },
+        MetaAt = true,
         Keywords = Set("important inherit initial unset auto none flex grid block inline absolute relative fixed static hidden solid dashed dotted bold normal center left right top bottom"),
         Control = Set(""),
         Types = Set(""),
@@ -354,25 +367,36 @@ public static class SyntaxHighlighter
 
     private static Lang Json() => new()
     {
-        Name = "JSON", LineComments = new[] { "//" }, Block = ("/*", "*/"),
+        Name = "JSON",
+        LineComments = new[] { "//" },
+        Block = ("/*", "*/"),
         Strings = new[] { "\"" },
         Keywords = Set("true false null"),
-        Control = Set(""), Types = Set(""),
+        Control = Set(""),
+        Types = Set(""),
     };
 
     private static Lang Markdown() => new()
     {
-        Name = "Markdown", LineComments = Array.Empty<string>(), Block = null,
-        Strings = new[] { "`" }, Escapes = false,
-        Keywords = Set(""), Control = Set(""), Types = Set(""),
+        Name = "Markdown",
+        LineComments = Array.Empty<string>(),
+        Block = null,
+        Strings = new[] { "`" },
+        Escapes = false,
+        Keywords = Set(""),
+        Control = Set(""),
+        Types = Set(""),
     };
 
     private static Lang Xml() => new() { Name = "XML", Xml = true, Strings = new[] { "\"", "'" } };
 
     private static Lang Generic() => new()
     {
-        Name = "Text", LineComments = new[] { "//", "#" }, Block = ("/*", "*/"),
-        Strings = new[] { "\"", "'", "`" }, CaseTypes = false,
+        Name = "Text",
+        LineComments = new[] { "//", "#" },
+        Block = ("/*", "*/"),
+        Strings = new[] { "\"", "'", "`" },
+        CaseTypes = false,
         Keywords = Set("if else for while do return function func fn def class struct enum interface import from export public private protected static const let var new try catch finally switch case break continue throw true false null nil void package namespace using module type val fun end then begin"),
         Control = Set("if else for while do return switch case break continue throw try catch finally"),
         Types = Set("int string bool float double char long short byte void object"),

@@ -26,7 +26,7 @@ internal sealed class SecondBrainMcpConnection : IDisposable
         definition.Id = AgentMemoryService.ManagedMcpId;
         definition.Name = "agentmemory";
         definition.Arguments[^1] = "--second-brain-mcp";
-        definition.UseClaude = definition.UseCodex = definition.UseKimi = definition.UseGrok = true;
+        definition.UseClaude = definition.UseCodex = definition.UseKimi = true;
         definition.StartupTimeoutSeconds = 15;
         definition.ToolTimeoutSeconds = 75;
         return definition;
@@ -72,9 +72,12 @@ internal sealed class SecondBrainMcpConnection : IDisposable
                 }
                 catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
                 {
-                    envelope = new JsonObject { ["error"] = AppSettings.Current.SecondBrainEnabled
+                    envelope = new JsonObject
+                    {
+                        ["error"] = AppSettings.Current.SecondBrainEnabled
                         ? "Second Brain access was revoked or timed out; no memory result was returned."
-                        : AgentMemoryService.DisabledExplanation };
+                        : AgentMemoryService.DisabledExplanation
+                    };
                 }
                 catch (InvalidOperationException ex) { envelope = new JsonObject { ["error"] = ex.Message }; }
                 catch (Exception ex) when (ex is IOException or JsonException or System.Net.Http.HttpRequestException)

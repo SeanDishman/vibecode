@@ -27,14 +27,6 @@ public static partial class UsageLimitRecovery
                 : UsageRecoverySnapshot.FromWindows(usage.Limits.Where(l => l.ShortLabel != "tools")
                     .Select(l => (l.Percent, l.ResetsAt)));
         }
-        if (provider == "grok" && accountId is { Length: > 0 })
-        {
-            var started = DateTimeOffset.Now;
-            var test = await GrokAccountService.Instance.TestAccountAsync(accountId);
-            var account = GrokAccountService.Instance.List().FirstOrDefault(a => a.Id == accountId);
-            return test.Ok && account?.UsageUpdatedAt >= started && account.UsagePercent is { } percent
-                ? UsageRecoverySnapshot.FromWindows([(percent, account.UsageResetsAt)]) : UsageRecoverySnapshot.Unknown;
-        }
         return UsageRecoverySnapshot.Unknown;
     }
 

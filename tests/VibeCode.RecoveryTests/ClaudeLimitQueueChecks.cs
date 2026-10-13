@@ -10,7 +10,10 @@ internal static partial class Program
     /// <summary>The exact terminal envelope Claude Code 2.1.286 sent every Bridge pane when its session limit hit.</summary>
     private static JsonObject ClaudeLimitResult() => new()
     {
-        ["type"] = "result", ["subtype"] = "success", ["is_error"] = true, ["result"] = ClaudeSessionLimit,
+        ["type"] = "result",
+        ["subtype"] = "success",
+        ["is_error"] = true,
+        ["result"] = ClaudeSessionLimit,
     };
 
     private static void ClaudeLimitQueueChecks()
@@ -69,7 +72,7 @@ internal static partial class Program
         Check("user prompt is accepted by the errored orchestrator", orchestrator.Send("start them back up"));
         var userCard = orchestrator.Items.OfType<QueuedItem>().Single(q => q.Text == "start them back up");
         Check("queued user prompt is not mislabelled as waiting for swarm capacity",
-            !userCard.WaitingForSwarmCapacity && !userCard.QueueStatusText.Contains("swarm"));
+            !userCard.QueueStatusText.Contains("swarm"));
         Pump(() => os.Sent.Count == 1);
         Check("sending to an errored pane drains the held queue in FIFO order",
             os.Sent[0].Contains("[MANAGER UPDATE]") && !orchestrator.WaitingForLimitReset && orchestrator.HasQueued);

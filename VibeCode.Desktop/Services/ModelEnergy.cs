@@ -91,60 +91,56 @@ public static class ModelEnergy
     private static readonly IReadOnlyDictionary<string, double> ActiveParamsB = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
     {
         // Claude. Frontier tier bills at 2x Opus, so it is carried at 2x Opus here too.
-        ["claude-fable-5"]    = 600,
-        ["claude-mythos-5"]   = 600,
-        ["claude-fable-5-1"]  = 600,
+        ["claude-fable-5"] = 600,
+        ["claude-mythos-5"] = 600,
+        ["claude-fable-5-1"] = 600,
         ["claude-mythos-5-1"] = 600,
         // New versions use the same rough family estimates; active parameter counts are not public.
-        ["claude-opus-5-5"]   = 300,
-        ["claude-opus-5"]     = 300,
-        ["claude-opus-4-8"]   = 300,
-        ["claude-opus-4-7"]   = 300,
-        ["claude-opus-4-6"]   = 300,
-        ["claude-opus-4-5"]   = 300,
+        ["claude-opus-5-5"] = 300,
+        ["claude-opus-5"] = 300,
+        ["claude-opus-4-8"] = 300,
+        ["claude-opus-4-7"] = 300,
+        ["claude-opus-4-6"] = 300,
+        ["claude-opus-4-5"] = 300,
         ["claude-sonnet-5-5"] = 60,
-        ["claude-sonnet-5"]   = 60,
+        ["claude-sonnet-5"] = 60,
         ["claude-sonnet-4-6"] = 60,
         ["claude-sonnet-4-5"] = 60,
-        ["claude-haiku-4-5"]  = 15,
+        ["claude-haiku-4-5"] = 15,
 
         // OpenAI, scaled off Epoch AI's GPT-4o figure by this lineup's own short-context output prices,
         // i.e. 5B active params per dollar of output. Astra's $50 puts it at 250. GPT-6 Luna's $0.50 rounds to 3.
         // Deliberately this lineup's own scale rather than the 600 the identically-priced Anthropic frontier pair
         // carries, since those are separate per-model estimates and not price-derived.
-        ["gpt-6-astra"]   = 250,
-        ["gpt-6.1-sol"]   = 50,
-        ["gpt-6-sol"]     = 50,
-        ["gpt-6-luna"]    = 3,
-        ["gpt-5.6-sol"]   = 100,
-        ["gpt-5.5"]       = 150,
+        ["gpt-6-astra"] = 250,
+        ["gpt-6.1-sol"] = 50,
+        ["gpt-6-sol"] = 50,
+        ["gpt-6-luna"] = 3,
+        ["gpt-5.6-sol"] = 100,
+        ["gpt-5.5"] = 150,
         ["gpt-5.6-terra"] = 60,
-        ["gpt-5.6-luna"]  = 6,
+        ["gpt-5.6-luna"] = 6,
 
         // Moonshot. PUBLISHED: Kimi K2 activates 32B of 1.04T (8 of 384 experts). Carried forward to the later
         // Kimi ids, which have not published an architecture. The "highspeed" tiers are the same model served
         // with less batching, which does cost more per token - not modelled, so those two read low.
-        ["k3"]                                  = 32,
-        ["kimi-k3"]                             = 32,
-        ["kimi-code/k3"]                        = 32,
-        ["kimi-k2.7-code"]                      = 32,
-        ["kimi-for-coding"]                     = 32,
-        ["kimi-code/kimi-for-coding"]           = 32,
-        ["kimi-k2.7-code-highspeed"]            = 32,
-        ["kimi-for-coding-highspeed"]           = 32,
+        ["k3"] = 32,
+        ["kimi-k3"] = 32,
+        ["kimi-code/k3"] = 32,
+        ["kimi-k2.7-code"] = 32,
+        ["kimi-for-coding"] = 32,
+        ["kimi-code/kimi-for-coding"] = 32,
+        ["kimi-k2.7-code-highspeed"] = 32,
+        ["kimi-for-coding-highspeed"] = 32,
         ["kimi-code/kimi-for-coding-highspeed"] = 32,
-
-        // xAI publishes nothing. Sized just under Opus on the strength of it being a very large MoE.
-        ["grok-4.5"]                     = 250,
-        ["grok-4-5"]                     = 250,
 
         // Zhipu GLM. PUBLISHED for the 4.5/4.6 generation: 32B active of 355B total. Carried forward to the 5.x
         // ids, which have published no architecture - so these are the same kind of estimate as the closed models
         // above, not a disclosure. Listed rather than left out because the fallback is the 300B Opus tier, which
         // would report this sparse MoE as burning roughly ten times the energy it does.
-        ["zai-org/GLM-4.7"]       = 32,
-        ["zai-org/GLM-5.2"]       = 32,
-        ["zai-org/GLM-5.2-Fast"]  = 32,
+        ["zai-org/GLM-4.7"] = 32,
+        ["zai-org/GLM-5.2"] = 32,
+        ["zai-org/GLM-5.2-Fast"] = 32,
         ["zai-org/GLM-5.3-Flash"] = 32,
     };
 

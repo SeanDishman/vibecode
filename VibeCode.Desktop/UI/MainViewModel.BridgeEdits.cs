@@ -6,8 +6,8 @@ using VibeCode.Services;
 namespace VibeCode.UI;
 
 /// <summary>
-/// The Bridge edit log: which agent changed which lines of which file. Every successful file edit made by a bridge
-/// pane (any provider, regular Bridge or Advanced Bridge orchestrator/worker) is recorded by the app, and agents read
+/// The project edit log: which agent changed which lines of which file. Successful edits from ordinary chats and
+/// Bridge panes (any provider, regular Bridge or Advanced Bridge orchestrator/worker) are recorded, and agents read
 /// the log through bridge_file_edits and the recent_edits roster field. Storage and retention: <see cref="BridgeEditLedger"/>.
 /// </summary>
 public sealed partial class MainViewModel
@@ -18,6 +18,12 @@ public sealed partial class MainViewModel
 
     private void RecordBridgeEdit(ChatViewModel pane, BridgeEditObservation edit)
     {
+        if (IsProjectChat(pane))
+        {
+            _ = BridgeEditLedger.Record(pane.Cwd, new BridgeEditAuthor(pane.BridgeAgentId, 0,
+                pane.Title, pane.Provider, pane.Model, "independent_chat", pane.BridgeHeaderTaskTitle, null), edit);
+            return;
+        }
         if (!pane.IsBridgeAgent || pane.Status == "closed" || !TryGetLiveBridge(pane, out var bridge) || bridge.Panes.Count == 0) return;
         var role = pane.IsBridgeManager ? "orchestrator" : pane.BridgeCoordinatorAgentId is not null ? "worker" : "agent";
         var runId = bridge.Panes.Select(p => p.BridgeWork).FirstOrDefault(w => w is not null)?.RunId;
@@ -59,13 +65,14 @@ public sealed partial class MainViewModel
             result["files"] = new JsonArray(matches.GroupBy(e => e.File, StringComparer.OrdinalIgnoreCase).Take(EditFileSummaryLimit)
                 .Select(file => (JsonNode?)new JsonObject
                 {
-                    ["file"] = file.Key, ["edits"] = file.Count(),
+                    ["file"] = file.Key,
+                    ["edits"] = file.Count(),
                     ["agents"] = new JsonArray(file.Select(e => EditAgentLabel(e, bridge)).Distinct()
                         .Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()),
                     ["last_edit"] = Age(now - file.First().At),
                 }).ToArray());
         result["note"] = matches.Count == 0
-            ? "No recorded edits match. The log holds file edits made by Bridge and Advanced Bridge agents in this project during the last 7 days."
+            ? "No recorded edits match. The log holds file edits made by ordinary chats and Bridge agents in this project during the last 7 days."
             : "lines = where each change landed right after that edit; later edits above it can shift them. History, never a lock: message the agent before reworking its recent lines.";
         return result;
     }

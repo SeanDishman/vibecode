@@ -34,6 +34,7 @@ public sealed class ModelChoice
     public bool SupportsEffort { get; init; }
     public bool SupportsAutoMode { get; init; }
     public bool SupportsFastMode { get; init; }
+    public bool SupportsUltrafastMode { get; init; }
 
     /// <summary>Compact model name for the composer pill. Descriptions stay secondary text in the model picker.</summary>
     public string ShortName
@@ -66,7 +67,7 @@ public sealed class EffortChoice : Observable
     public required string Label { get; init; }
     public string? Description { get; init; }
     public int Rank { get; init; }               // 0 auto .. N, where N is this model's number of effort tiers
-    public int MeterSteps { get; init; }         // per-model: Grok currently has 3; GPT catalogs can expose more
+    public int MeterSteps { get; init; }
     public string Filled => new('●', Rank);        // ● filled dots
     public string Empty => new('○', Math.Max(0, MeterSteps - Rank)); // ○ empty dots
     public bool IsSelected { get => _isSelected; set => Set(ref _isSelected, value); }
@@ -109,13 +110,11 @@ public sealed partial class ChatViewModel : Observable
     private int _extendedQueueChunkSize = 1;
     private string? _extendedQueuePauseReason;
     private DateTimeOffset _extendedQueueNextUsageCheck;
-    private SwarmLease? _activeSwarmLease;
-    private bool? _sessionSwarmsEnabled;
     private int? _sessionSwarmWorkerCap;
     private readonly PromptHistory _promptHistory = new();
     private TurnRollbackCheckpoint? _activeRollback;
     private UserItem? _undoRequestInFlight;
-    private bool RewindHoldsDispatch => _undoRequestInFlight is not null;
+    private bool RewindHoldsDispatch => _undoRequestInFlight is not null || _claudeModelRestartId is not null;
     private string? _lastLocalUserText;
     private DateTime _lastLocalUserAt;
     private readonly string _memorySessionId = AgentMemoryService.NewSessionId();
@@ -141,33 +140,35 @@ public sealed partial class ChatViewModel : Observable
     public string Provider { get; }
     public bool IsCodex => Provider == "codex";
     public bool IsKimi => Provider == "kimi";
-    public bool IsGrok => Provider == "grok";
+    public bool IsGemini => Provider == "gemini";
     public bool IsClaude => Provider == "claude";
     public bool IsGlm => Provider == Protocol.GlmPreset.ProviderId;
     public string ProviderDisplay => Provider switch
     {
         "codex" => "OpenAI Codex",
         "kimi" => "Kimi Code",
-        "grok" => "Grok",
+        "gemini" => "Gemini",
         Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.DisplayName,
         _ => "Claude Code",
     };
     public bool CanBridge => true;
     // GLM is in the no-fork set because no provider stores its conversation: VibeCode saves it (GlmTranscriptStore)
     // so the same chat can be resumed, but copying it into a second session is not implemented.
-    public bool CanFork => !IsKimi && !IsGrok && !IsGlm && SessionId is not null;
+    public bool CanFork => !IsKimi && !IsGlm && !IsGemini && SessionId is not null;
 
     /// <summary>Subtext for the Fork row in a bridge pane's ⋮ menu. The row is always shown — disabled with the
     /// reason spelled out — because a collapsed row reads as "this build has no fork", which is what it was doing
     /// on every fresh bridge (no agent has a session id until it has taken a turn).</summary>
     public string ForkReason => CanFork
         ? "Copy this conversation into a separate chat"
-        : IsKimi || IsGrok || IsGlm
+        : IsKimi || IsGlm || IsGemini
             ? $"{AgentDisplay} sessions cannot be forked"
             : "Available once this agent has had a turn";
     public string AgentDisplay => Provider switch
     {
-        "codex" => "Codex", "kimi" => "Kimi", "grok" => "Grok",
+        "codex" => "Codex",
+        "kimi" => "Kimi",
+        "gemini" => "Gemini",
         Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.DisplayName,
         _ => "Claude",
     };
@@ -187,18 +188,19 @@ public sealed partial class ChatViewModel : Observable
     public string ComposerPlaceholder => $"Message {AgentDisplay}…";
     public string ArtifactsEmptyText => $"Files {AgentDisplay} creates or edits show up here.";
     public string TodosEmptyText => $"{AgentDisplay}'s task list appears here once it starts planning.";
-    public string SignInButtonText => Provider switch
+    public bool NeedsCliInstall => CliInstallationService.Supports(Provider) && !CliInstallationService.IsReady(Provider);
+    public string SignInButtonText => NeedsCliInstall ? $"Install {CliInstallationService.DisplayName(Provider)} CLI" : Provider switch
     {
         "codex" => "Sign in to Codex",
         "kimi" => "Sign in to Kimi",
-        "grok" => "Sign in to Grok",
+        "gemini" => "Sign in with Google",
         _ => "Sign in to Claude",
     };
-    public string AuthMessage => Provider switch
+    public string AuthMessage => NeedsCliInstall ? "Set up the official CLI here, then sign in to start chatting." : Provider switch
     {
+        "gemini" => "Sign in with the Google account that has your Google AI Pro or Ultra subscription.",
         "codex" => "OpenAI Codex isn't signed in on this machine. Sign in once and every Codex chat works.",
         "kimi" => "Kimi Code isn't signed in on this machine. Sign in once and every Kimi chat works.",
-        "grok" => "Grok isn't signed in on this machine. Sign in once and every Grok chat works.",
         _ => "Claude Code isn't signed in on this machine. Sign in once and every chat works.",
     };
 
@@ -208,19 +210,16 @@ public sealed partial class ChatViewModel : Observable
     /// <summary>A one-time note prepended to the next user message (tells an already-running chat about new peers).</summary>
     public string? Prelude { get; set; }
     private string _bridgeLabel = "";
-    private bool? _lastBridgeSwarmsEnabled;
     public string BridgeLabel
     {
         get => _bridgeLabel;
         set
         {
             if (!Set(ref _bridgeLabel, value)) return;
+            RaiseChatMetadata();
             Raise(nameof(BridgeTerminalIdentity));
             Raise(nameof(BridgeTerminalLabel));
             RefreshModelPicker();
-            _lastBridgeSwarmsEnabled = IsBridgeAgent
-                ? AppSettings.Current.AgentSwarmsEnabled && AppSettings.Current.AgentSwarmsInBridge
-                : null;
             RaiseSwarmProperties();
         }
     }   // e.g. "Claude 1" / "Codex 1"
@@ -228,24 +227,22 @@ public sealed partial class ChatViewModel : Observable
     private bool _isBridgeHost;
     /// <summary>True while this chat is agent 1 of a live bridge (even one running hidden in the background),
     /// so the sidebar can show a "bridge running - click to return" cue.</summary>
-    public bool IsBridgeHost { get => _isBridgeHost; set => Set(ref _isBridgeHost, value); }
+    public bool IsBridgeHost
+    {
+        get => _isBridgeHost;
+        set { if (Set(ref _isBridgeHost, value)) RaiseChatMetadata(); }
+    }
     private bool _isAdvancedBridgeHost;
     /// <summary>The bridge this chat hosts is an Advanced Bridge (orchestrators with worker groups), so the sidebar
     /// cue can tell it apart from a regular bridge. Refreshed whenever the bridge is snapshotted.</summary>
     public bool IsAdvancedBridgeHost { get => _isAdvancedBridgeHost; set => Set(ref _isAdvancedBridgeHost, value); }
     private bool _isBridgeManager;
-    /// <summary>True when this pane is the bridge's designated MANAGER (the "brain"): the user directs the project
-    /// through it, the app routes its @@DISPATCH blocks into the other panes as work orders, and worker turn results
-    /// are relayed back to it automatically. Drives the crown drawn over the pane's status dot.</summary>
+    /// <summary>True for an Advanced Bridge orchestrator. Its workers receive durable assignments through bridge_dispatch_task.</summary>
     public bool IsBridgeManager
     {
         get => _isBridgeManager;
-        set { if (Set(ref _isBridgeManager, value)) { Raise(nameof(ManagerToolTip)); Raise(nameof(ShowManagerCrown)); } }
+        set { if (Set(ref _isBridgeManager, value)) { Raise(nameof(ShowManagerCrown)); } }
     }
-    public string ManagerToolTip => _isBridgeManager
-        ? "Bridge manager — click to step it down"
-        : $"Make this {AgentDisplay} the manager: you talk to it, and it dispatches work to the other agents";
-
     public bool ShowManagerCrown => IsBridgeManager;
 
     private string _supervisionStatus = "";
@@ -265,7 +262,7 @@ public sealed partial class ChatViewModel : Observable
 
     public bool ShowSupervisionStatus => HasSupervisionStatus;
 
-    public bool ShowWorkingText => IsWorking || HasWorkingSubagents;
+    public bool ShowWorkingText => IsWorking || HasWorkingSubagents || WaitingForBridgeRetry;
     public bool HasWorkingSubagents => _status != "closed" && ActiveSubagentCount > 0;
 
     private bool _supervisionAlert;
@@ -282,8 +279,8 @@ public sealed partial class ChatViewModel : Observable
     }
 
     /// <summary>The assistant prose of the most recent turn (every text block after the last user message),
-    /// concatenated in order. The Bridge manager loop scans this for @@DISPATCH blocks in the manager's reply and
-    /// relays a worker's tail as its report; tool output and thinking are deliberately excluded.</summary>
+    /// concatenated in order. Advanced Bridge relays a worker's tail to its orchestrator as a report;
+    /// tool output and thinking are deliberately excluded.</summary>
     internal string LastTurnReplyText()
     {
         var parts = new List<string>();
@@ -395,22 +392,7 @@ public sealed partial class ChatViewModel : Observable
     /// <summary>How many rows the roster shows — everything the chat spawned minus the ones a stopped turn killed.</summary>
     private int ListedSubagentCount => Subagents.Count(a => !a.IsAbandoned);
     public bool SupportsSwarms => SwarmPolicy.SupportsProvider(Provider);
-    public bool SwarmsAvailable => SupportsSwarms
-        && AppSettings.Current.AgentSwarmsEnabled
-        && _sessionSwarmsEnabled != false
-        && (!IsBridgeAgent || AppSettings.Current.AgentSwarmsInBridge);
-    public bool ShowSwarmControl => SupportsSwarms && (SwarmsAvailable || HasSubagents);
-
-    /// <summary>Both agent buttons show for any provider that can run child agents, in normal chats and Bridge
-    /// panes alike. The swarm one is DISABLED rather than hidden when swarms are switched off, so the capability
-    /// stays discoverable and its tooltip can say why it is unavailable instead of the control just vanishing.</summary>
-    public bool ShowAgentButtons => SupportsSwarms;
-
-    public string SwarmButtonToolTip => !SwarmsAvailable
-        ? SwarmAvailabilityText
-        : SwarmNextTurn
-            ? $"Agent swarm armed for the next message — up to {SwarmMaxWorkers} workers. Click to cancel."
-            : $"Send the next message as an agent swarm — up to {SwarmMaxWorkers} workers";
+    public bool ShowSubagentsControl => SupportsSwarms || HasSubagents;
 
     public string SubagentsButtonToolTip => ActiveSubagentCount switch
     {
@@ -428,46 +410,16 @@ public sealed partial class ChatViewModel : Observable
             return _sessionSwarmWorkerCap is { } runtime ? Math.Min(configured, runtime) : configured;
         }
     }
-    public int SwarmAvailableWorkers => SwarmBudget.AvailableWorkers;
-    private bool _swarmNextTurn;
-    /// <summary>One-shot request captured by Send/queue; ordinary prompts never fan out merely because tools exist.</summary>
-    public bool SwarmNextTurn
-    {
-        get => _swarmNextTurn;
-        set
-        {
-            var allowed = value && SwarmsAvailable;
-            if (!Set(ref _swarmNextTurn, allowed)) return;
-            Raise(nameof(SubagentButtonToolTip));
-            Raise(nameof(SwarmButtonToolTip));
-            Raise(nameof(SwarmNextTurnText));
-        }
-    }
-    public string SwarmNextTurnText
-    {
-        get
-        {
-            var grant = Math.Min(SwarmMaxWorkers, SwarmAvailableWorkers);
-            if (grant == 0) return "Will wait for shared capacity (16 app-wide)";
-            return SwarmNextTurn
-                ? $"Armed for the next message (up to {grant})"
-                : $"Use on the next message (up to {grant}; 16 app-wide)";
-        }
-    }
-    public string SwarmAvailabilityText => IsBridgeAgent && !AppSettings.Current.AgentSwarmsInBridge
-        ? "Bridge swarms are off in Settings"
-        : AppSettings.Current.AgentSwarmsEnabled
-            ? $"{AgentDisplay} chooses the smallest useful swarm, never more than {SwarmMaxWorkers}."
-            : "Agent swarms are off in Settings";
+    public string SubagentEmptyText => $"Ask {AgentDisplay} to use subagents in your message. " +
+        $"Up to {SwarmMaxWorkers} workers can help with a request. Their activity will appear here.";
     public string SubagentPanelTitle => ActiveSubagentCount > 0
         ? $"SUBAGENTS · {ActiveSubagentCount} ACTIVE"
-        : ListedSubagentCount > 0 ? $"SUBAGENTS · {ListedSubagentCount} DONE" : "AGENT SWARM";
+        : ListedSubagentCount > 0 ? $"SUBAGENTS · {ListedSubagentCount} DONE" : "SUBAGENTS";
     public string SubagentButtonToolTip => ActiveSubagentCount switch
     {
         > 1 => $"{ActiveSubagentCount} subagents working · click for details",
         1 => "1 subagent working · click for details",
-        _ when SwarmNextTurn => $"Swarm armed for next message · up to {SwarmMaxWorkers} workers",
-        _ when SwarmsAvailable => $"Use a swarm on the next message · up to {SwarmMaxWorkers} workers",
+        _ when ListedSubagentCount == 0 => "View subagent activity",
         _ => $"{ListedSubagentCount} completed subagent{(ListedSubagentCount == 1 ? "" : "s")} · click for details",
     };
 
@@ -482,34 +434,19 @@ public sealed partial class ChatViewModel : Observable
 
     public void CloseSubagentInspector() => SelectedSubagent = null;
 
-    /// <summary>Refresh live controls after Settings saves. Launch caps apply on the next session start; the
-    /// per-turn ceiling and Bridge opt-in are enforced immediately.</summary>
+    /// <summary>Lower limits reach the next turn; raising a provider's launch cap requires reconnecting.</summary>
     public void RefreshSwarmSettings()
     {
-        var bridgeEnabled = AppSettings.Current.AgentSwarmsEnabled && AppSettings.Current.AgentSwarmsInBridge;
-        if (IsBridgeAgent && _lastBridgeSwarmsEnabled is { } previous && previous != bridgeEnabled)
-        {
-            var note = "[BRIDGE SETTINGS] " + SwarmPolicy.BridgeRuntimeRule(bridgeEnabled, SwarmMaxWorkers);
-            Prelude = string.IsNullOrWhiteSpace(Prelude) ? note : Prelude + "\n" + note;
-        }
-        if (IsBridgeAgent) _lastBridgeSwarmsEnabled = bridgeEnabled;
-        if (!SwarmsAvailable) SwarmNextTurn = false;
         RaiseSwarmProperties();
-        if (_status == "idle" && HasPendingDispatch) Post(FlushQueue);
     }
 
     private void RaiseSwarmProperties()
     {
         Raise(nameof(IsBridgeAgent));
-        Raise(nameof(SwarmsAvailable));
-        Raise(nameof(ShowSwarmControl));
-        Raise(nameof(ShowAgentButtons));
-        Raise(nameof(SwarmButtonToolTip));
+        Raise(nameof(ShowSubagentsControl));
         Raise(nameof(SubagentsButtonToolTip));
         Raise(nameof(SwarmMaxWorkers));
-        Raise(nameof(SwarmAvailableWorkers));
-        Raise(nameof(SwarmNextTurnText));
-        Raise(nameof(SwarmAvailabilityText));
+        Raise(nameof(SubagentEmptyText));
         Raise(nameof(SubagentPanelTitle));
         Raise(nameof(SubagentButtonToolTip));
     }
@@ -732,6 +669,7 @@ public sealed partial class ChatViewModel : Observable
         set
         {
             if (!Set(ref _fastMode, value)) return;
+            if (value) UltrafastMode = false;
             Raise(nameof(CanToggleFastMode));
             Raise(nameof(FastModeHint));
             PushFastMode();
@@ -752,6 +690,47 @@ public sealed partial class ChatViewModel : Observable
     /// without switching models). Opus 4.6 is not in this set: the API runs <c>speed:fast</c> at standard
     /// speed and standard rates, so staying put would fake a speedup.</summary>
     public bool CanFastMode => CurrentModel?.SupportsFastMode ?? false;
+
+    private bool _ultrafastMode = AppSettings.Current.CodexUltrafastMode;
+    public bool UltrafastMode
+    {
+        get => IsCodex && _ultrafastMode;
+        set
+        {
+            value &= IsCodex;
+            if (!Set(ref _ultrafastMode, value)) return;
+            if (value) FastMode = false;
+            RaiseUltrafastProperties();
+            PushFastMode();
+        }
+    }
+    // Model names and a generic Pro label do not prove this account has the paid tier.
+    public bool ShowUltrafastMode => CanUltrafastMode;
+    public bool CanUltrafastMode => IsCodex && CurrentModel?.SupportsUltrafastMode == true;
+    public bool CanToggleUltrafastMode => CanUltrafastMode || UltrafastMode;
+    private bool EffectiveUltrafastMode => UltrafastMode && CanUltrafastMode;
+    public string UltrafastModeHint => "Ultrafast mode\n" + (CanUltrafastMode
+        ? "6× credit/API cost · 8× included usage\nApplies next turn"
+        : UltrafastMode ? "Unavailable here · click to turn off"
+        : "Requires a supported model and eligible account");
+
+    private void RaiseUltrafastProperties()
+    {
+        Raise(nameof(UltrafastMode));
+        Raise(nameof(ShowUltrafastMode));
+        Raise(nameof(CanUltrafastMode));
+        Raise(nameof(CanToggleUltrafastMode));
+        Raise(nameof(UltrafastModeHint));
+    }
+
+    public void SetUltrafastMode(bool on)
+    {
+        if (on && !CanUltrafastMode) return;
+        UltrafastMode = on;
+        AppSettings.Current.CodexUltrafastMode = on;
+        if (on) AppSettings.Current.FastMode = false;
+        AppSettings.Current.Save();
+    }
 
     /// <summary>
     /// Where Claude Code's <c>/fast</c> would land if this chat's current model cannot do fast mode.
@@ -787,13 +766,13 @@ public sealed partial class ChatViewModel : Observable
     /// <summary>Secondary line under "Fast mode": what it does, that it will switch to a fast-capable Opus
     /// (Claude Code's <c>/fast</c>), or - when it is on under a model that cannot use it - that it is doing
     /// nothing here and this row is where you switch it off.</summary>
-    public string FastModeHint => CanFastMode
+    public string FastModeHint => "Fast mode\n" + (CanFastMode
         ? IsCodex ? "Faster output · increased usage · applies next turn" : "Faster output · this chat only"
         : FastMode
             ? $"On, but unused on {CurrentModel?.Display ?? "this model"} · click to turn off"
             : FastModeTarget is { } target
                 ? $"Switches to {target.Display} · 2.5x faster output"
-                : $"Not available on {CurrentModel?.Display ?? "this model"}";
+                : $"Not available on {CurrentModel?.Display ?? "this model"}");
 
     /// <summary>Toggle fast mode for THIS chat only, and remember the choice as the seed for the next new chat -
     /// the same last-one-wins rule <see cref="SetModel"/> and <see cref="SetEffort"/> already follow. Open chats and
@@ -808,6 +787,7 @@ public sealed partial class ChatViewModel : Observable
 
         FastMode = on;                       // the setter pushes it to this chat's own running CLI
         AppSettings.Current.FastMode = on;   // seed for chats created from here on, not a channel to existing ones
+        if (IsCodex) AppSettings.Current.CodexUltrafastMode = UltrafastMode;
         AppSettings.Current.Save();
     }
 
@@ -827,7 +807,7 @@ public sealed partial class ChatViewModel : Observable
         if (_applyingBridgeConfiguration || _bridgeLaunchConfiguration is not null || !_bridgeConfigurationApplication.IsCompleted) return;
         if (_session is CodexSession codex)
         {
-            _ = codex.SetFastModeAsync(_fastMode);
+            _ = codex.SetSpeedAsync(_fastMode, UltrafastMode);
             return;
         }
         if (_session is not ClaudeSession claude) return;
@@ -844,7 +824,6 @@ public sealed partial class ChatViewModel : Observable
         set
         {
             if (IsCodex) value = CodexSession.NormalizeModelSelection(value);
-            if (IsGrok) value = Grok45Preset.NormalizeModel(value);
             if (!Set(ref _model, value)) return;
             Raise(nameof(ModelDisplay));
             Raise(nameof(BridgeConfigurationDisplay));
@@ -855,6 +834,7 @@ public sealed partial class ChatViewModel : Observable
             Raise(nameof(CtxPercentValue));
             Raise(nameof(CtxDetailText));
             Raise(nameof(CanFastMode));   // fast-mode availability is per-model
+            RaiseUltrafastProperties();
             Raise(nameof(CanToggleFastMode));
             Raise(nameof(ShowFastMode));
             Raise(nameof(FastModeHint));
@@ -885,7 +865,7 @@ public sealed partial class ChatViewModel : Observable
     /// <summary>True once completed or live turn usage exists — gates the persistent <see cref="TokensText"/> readout.</summary>
     public bool HasTokens => _totalTokens + _liveTurnUsage.Total > 0;
 
-    public bool AuthNeeded { get => _authNeeded; set => Set(ref _authNeeded, value); }
+    public bool AuthNeeded { get => _authNeeded; set { Set(ref _authNeeded, value); Raise(nameof(NeedsCliInstall)); Raise(nameof(SignInButtonText)); Raise(nameof(AuthMessage)); } }
 
     /// <summary>Opt-in FIFO for long unattended runs. Unlike the lightweight send-while-busy queue, every prompt is
     /// kept as its own entry and only the configured number are handed to one provider turn.</summary>
@@ -904,7 +884,7 @@ public sealed partial class ChatViewModel : Observable
     /// Left alone, those entries keep <see cref="QueuedItem.Extended"/> set, so they still go out one chunk per turn
     /// and a newly typed prompt refuses to fold into an extended tail — the toggle looks ignored. Demote them and
     /// fold them into a single ordinary card under the same rules as <see cref="QueuePrompt"/>: manager-injected work
-    /// orders and a differing swarm choice still queue on their own. A chunk already handed to the provider is out of
+    /// orders still queue on their own. A chunk already handed to the provider is out of
     /// reach and is left alone.</summary>
     private void CollapseExtendedQueue()
     {
@@ -915,7 +895,7 @@ public sealed partial class ChatViewModel : Observable
         {
             item.Extended = false;
             var tail = merged.Count > 0 ? merged[^1] : null;
-            if (tail is not null && tail.UseSwarm == item.UseSwarm
+            if (tail is not null
                 && !IsSystemInjectedPrompt(tail.Text) && !IsSystemInjectedPrompt(item.Text)
                 && !GoalPolicy.TryParseCommand(tail.Text, out _) && !GoalPolicy.TryParseCommand(item.Text, out _))
             {
@@ -1031,7 +1011,7 @@ public sealed partial class ChatViewModel : Observable
     /// Drives the composer's Send→Stop morph and the Esc-to-interrupt gesture. Deliberately EXCLUDES "starting"
     /// (session boot/checkpoint preparation, before anything is sent) so the action button stays a Send button while
     /// those non-interruptible steps finish.</summary>
-    public bool CanInterrupt => _status == "running" || WaitingForLimitReset;
+    public bool CanInterrupt => _status == "running" || WaitingForLimitReset || WaitingForBridgeRetry;
     /// <summary>The queue-head action can interrupt a live turn, dispatch early while the provider is starting, or
     /// retry after a failed turn (an errored pane never drains its queue on its own).</summary>
     public bool CanSendQueuedNow => HasQueued && !RewindHoldsDispatch && !_interruptRequested && !_sendAllQueuedNowRequested
@@ -1172,6 +1152,7 @@ public sealed partial class ChatViewModel : Observable
     {
         get
         {
+            if (WaitingForBridgeRetry) return BridgeRetryText;
             var t = Elapsed;
             if (_status == "starting") return "starting session…" + t;
             if (_status == "preparing") return "preparing prompt…" + t;
@@ -1184,7 +1165,7 @@ public sealed partial class ChatViewModel : Observable
     }
     /// <summary>Just the state word of <see cref="WorkingText"/> ("thinking", "working…") with no counters or
     /// elapsed time. A compact bridge header shows this and leaves the rest to its info card.</summary>
-    public string WorkingStatus => _status switch
+    public string WorkingStatus => WaitingForBridgeRetry ? BridgeRetryText : _status switch
     {
         "starting" => "starting…",
         "preparing" => "preparing…",
@@ -1196,6 +1177,10 @@ public sealed partial class ChatViewModel : Observable
     /// <summary>Persistent cumulative token readout, e.g. "1.8M read · 700k write". Unlike
     /// <see cref="WorkingText"/> it stays visible when the chat is idle, so a stopped bridge agent still shows what it
     /// burned. Read includes all input/cache tokens; write is generated output. Empty until usage arrives.</summary>
+    private bool _tokenUsageIncomplete;
+    public string TokensToolTip => _tokenUsageIncomplete
+        ? "Minimum observed tokens. Gemini has not supplied complete cached input and thinking usage for every request."
+        : "Session tokens: read includes input and cached input; write is generated output, including reported thinking tokens.";
     public string TokensText
     {
         get
@@ -1203,7 +1188,7 @@ public sealed partial class ChatViewModel : Observable
             var input = DisplayedInputTokens;
             var output = DisplayedOutputTokens;
             var total = input + output;
-            return total > 0 ? $"{FmtTokens(input)} read · {FmtTokens(output)} write" : "";
+            return total > 0 ? (_tokenUsageIncomplete ? "≥ " : "") + $"{FmtTokens(input)} read · {FmtTokens(output)} write" : "";
         }
     }
     internal double DisplayedInputTokens => _totalIn + _liveTurnUsage.TotalIn;
@@ -1243,6 +1228,7 @@ public sealed partial class ChatViewModel : Observable
     {
         get
         {
+            if (IsGemini) return "Included in plan";
             var (amount, estimated) = DisplayedCost;
             return amount > 0 ? estimated ? $"~${amount:0.00##}" : $"${amount:0.####}" : "";
         }
@@ -1251,10 +1237,8 @@ public sealed partial class ChatViewModel : Observable
     {
         get
         {
-            // Grok subscription/OAuth responses commonly omit cost. Falling through to another provider's
-            // list-price fallback made a Grok turn look like OpenAI/Claude spend; show only server-reported Grok
             // cost and keep its account limits completely separate.
-            if (IsGrok) return (_cost > 0 ? _cost : 0, false);
+            if (IsGemini) return (0, false);
             var liveCost = _liveTurnUsage.HasTokens
                 ? LiveEstimatedCost
                 : 0;
@@ -1282,8 +1266,6 @@ public sealed partial class ChatViewModel : Observable
 
     public event Action? ItemsChanged; // scroll-to-bottom signal
 
-    /// <summary>The Claude, Codex, or Grok account this chat runs under (captured at creation). Each provider receives that
-    /// account's isolated token/home, so the chat stays put even if the user switches accounts afterward.</summary>
     public string? AccountId { get; private set; }
 
     /// <summary>Display name of <see cref="AccountId"/>, shown in the chat header. Without this an already-open chat
@@ -1293,7 +1275,6 @@ public sealed partial class ChatViewModel : Observable
     {
         get
         {
-            if (IsKimi) return "Kimi login";
             if (_accountLabel is null) ResolveAccountChip();
             return _accountLabel!;
         }
@@ -1304,7 +1285,6 @@ public sealed partial class ChatViewModel : Observable
     {
         get
         {
-            if (!IsClaude && !IsCodex && !IsGrok && !IsGlm) return false;
             if (_showAccountLabel is null) ResolveAccountChip();
             return _showAccountLabel is true;
         }
@@ -1318,11 +1298,10 @@ public sealed partial class ChatViewModel : Observable
     {
         get
         {
-            if (IsKimi || string.IsNullOrWhiteSpace(AccountId)) return true;   // shared / pre-isolation rows
-            var active = IsCodex ? CodexAccountService.Instance.ActiveId
-                : IsGrok ? GrokAccountService.Instance.ActiveId
-                : IsGlm ? ApiKeyAccountService.Instance.SelectedFor(GlmPreset.ProviderId)?.Id
-                : AccountService.Instance.ActiveId;
+            if (string.IsNullOrWhiteSpace(AccountId)) return true;   // shared / pre-isolation rows
+            var active = ApiKeyAccountService.Instance.SelectedFor(Provider)?.Id ?? (IsCodex ? CodexAccountService.Instance.ActiveId
+                : IsGlm || IsKimi || IsGemini ? null
+                : AccountService.Instance.ActiveId);
             return active is null || string.Equals(AccountId, active, StringComparison.OrdinalIgnoreCase);
         }
     }
@@ -1332,23 +1311,10 @@ public sealed partial class ChatViewModel : Observable
     /// excluded: <see cref="ResolveAccountChip"/> would label them "default login", asserting an account they
     /// never had.</summary>
     public bool ShowSidebarAccountBadge =>
-        !IsKimi && !string.IsNullOrWhiteSpace(AccountId) && (ShowAccountLabel || !IsOnActiveAccount);
+        !string.IsNullOrWhiteSpace(AccountId) && (ShowAccountLabel || !IsOnActiveAccount);
 
     /// <summary>One-letter avatar for the sidebar chip - the row is far too narrow for a full account name.</summary>
     public string AccountInitial => AccountLabel is { Length: > 0 } l ? l[..1].ToUpperInvariant() : "?";
-
-    /// <summary>The authoritative xAI billing snapshot for the isolated Grok login used by this chat.</summary>
-    public GrokAccountInfo? GrokAccount
-    {
-        get
-        {
-            if (IsGrok && !_grokAccountResolved) ResolveAccountChip();
-            return _grokAccount;
-        }
-    }
-
-    /// <summary>Compact real account quota for the chat status pill (never session token counts).</summary>
-    public string GrokUsageSummary => GrokAccount?.UsageSummary ?? (IsGrok ? "usage unavailable" : "");
 
     private ApiKeyAccount? _glmAccount;
     public ApiKeyAccount? GlmAccount => _glmAccount;
@@ -1371,14 +1337,25 @@ public sealed partial class ChatViewModel : Observable
 
     private string? _accountLabel;
     private bool? _showAccountLabel;
-    private GrokAccountInfo? _grokAccount;
-    private bool _grokAccountResolved;
 
     // Both chip properties used to call AccountService.List() on EVERY binding evaluation - two full synchronous disk
     // sweeps (every account.json + credentials.json + ~/.claude.json) on the UI thread per header bind. Resolve once
     // and hold it until the account set actually changes.
     private void ResolveAccountChip()
     {
+        if (IsGemini) { _accountLabel = "Google login"; _showAccountLabel = false; return; }
+        if (ApiKeyAccountService.Instance.For(Provider).FirstOrDefault(a => a.Id == AccountId) is { } keyAccount && !IsGlm)
+        {
+            _accountLabel = keyAccount.Title;
+            _showAccountLabel = true;
+            return;
+        }
+        if (IsKimi)
+        {
+            _accountLabel = "Kimi login";
+            _showAccountLabel = ApiKeyAccountService.Instance.For(Provider).Any();
+            return;
+        }
         if (IsGlm)
         {
             _accountLabel = _glmAccount?.Title ?? "GLM account";
@@ -1388,14 +1365,6 @@ public sealed partial class ChatViewModel : Observable
         {
             var list = CodexAccountService.Instance.List();
             _accountLabel = list.FirstOrDefault(x => x.Id == AccountId)?.Label ?? "OpenAI login";
-            _showAccountLabel = list.Count > 1;
-        }
-        else if (IsGrok)
-        {
-            var list = GrokAccountService.Instance.List();
-            _grokAccount = list.FirstOrDefault(x => x.Id == AccountId);
-            _grokAccountResolved = true;
-            _accountLabel = _grokAccount?.Label ?? "Grok login";
             _showAccountLabel = list.Count > 1;
         }
         else
@@ -1412,14 +1381,15 @@ public sealed partial class ChatViewModel : Observable
     {
         _accountLabel = null;
         _showAccountLabel = null;
-        _grokAccount = null;
-        _grokAccountResolved = false;
         Raise(nameof(AccountLabel));
         Raise(nameof(ShowAccountLabel));
-        Raise(nameof(GrokAccount));
-        Raise(nameof(GrokUsageSummary));
         RaiseSidebarAccountBadge();
     });
+
+    private void OnApiKeyAccountChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ApiKeyAccountService.Accounts)) OnAccountsChanged();
+    }
 
     /// <summary>Re-evaluate the sidebar chip. Separate from <see cref="OnAccountsChanged"/> because the chip also
     /// changes when the ACTIVE account changes without the account set changing, and when a re-login re-homes this
@@ -1431,11 +1401,6 @@ public sealed partial class ChatViewModel : Observable
         Raise(nameof(AccountInitial));
     }
 
-    /// <summary>
-    /// Codex chats stay pinned to the account they were created under (same as Claude/Grok).
-    /// Previously this re-homed every chat onto the active login at spawn, which mixed workspaces when
-    /// switching accounts. Explicit re-home still goes through <c>MoveCodexChatToAccount</c>.
-    /// </summary>
     public void SyncCodexAccountWithActive()
     {
         // No-op by design: AccountId captured at construction / restore is authoritative.
@@ -1469,10 +1434,14 @@ public sealed partial class ChatViewModel : Observable
         // model catalog, account manager - and still could not actually be run.
         Provider = provider?.Trim().ToLowerInvariant() switch
         {
-            "codex" => "codex", "kimi" => "kimi", "grok" => "grok",
+            "codex" => "codex",
+            "kimi" => "kimi",
+            "gemini" => "gemini",
             Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
             _ => "claude",
         };
+        _ultrafastMode &= IsCodex;
+        if (_ultrafastMode) _fastMode = false;
         if (IsClaude || IsCodex) Commands.Add(new CommandChoice { Name = "compact", Description = "Compact conversation context" });
         if (IsGlm) _glmAccount = accountId is null ? ApiKeyAccountService.Instance.SelectedFor(GlmPreset.ProviderId)
             : ApiKeyAccountService.Instance.For(GlmPreset.ProviderId).FirstOrDefault(a => a.Id == accountId);
@@ -1480,7 +1449,7 @@ public sealed partial class ChatViewModel : Observable
         {
             "codex" => CodexSession.NormalizeModelSelection(AppSettings.Current.DefaultCodexModel),
             "kimi" => AppSettings.Current.DefaultKimiModel,
-            "grok" => AppSettings.Current.DefaultGrokModel,
+            "gemini" => AppSettings.Current.DefaultGeminiModel,
             Protocol.GlmPreset.ProviderId => GlmPreset.NormalizeModel(AppSettings.Current.DefaultGlmModel,
                 _glmAccount?.GlmBackend),
             _ => AppSettings.Current.DefaultModel,
@@ -1492,20 +1461,20 @@ public sealed partial class ChatViewModel : Observable
         {
             "codex" => AppSettings.Current.DefaultCodexEffort,
             "kimi" => AppSettings.Current.DefaultKimiEffort,
-            "grok" => AppSettings.Current.DefaultGrokEffort,
+            "gemini" => null,
             Protocol.GlmPreset.ProviderId => GlmPreset.IsZai(_glmAccount?.GlmBackend)
                 ? GlmPreset.NormalizeEffort(AppSettings.Current.DefaultGlmEffort) : null,
             _ => AppSettings.Current.DefaultEffort,
         };
         RefreshModelPicker();
-        AccountId = IsClaude
-            ? accountId ?? AccountService.Instance.ActiveId
+        AccountId = accountId ?? ApiKeyAccountService.Instance.SelectedFor(Provider)?.Id ?? (IsClaude
+            ? AccountService.Instance.ActiveId
             : IsCodex
-                ? accountId ?? CodexAccountService.Instance.ActiveId
-                : IsGrok ? accountId ?? GrokAccountService.Instance.ActiveId
-                : IsGlm ? accountId ?? _glmAccount?.Id : null;
+                ? CodexAccountService.Instance.ActiveId
+                : IsGlm ? _glmAccount?.Id : null);
         _title = OneLine(title ?? Path.GetFileName(cwd.TrimEnd('\\', '/')));
         if (resume is not null && !fork) _sessionId = resume;
+        if (_sessionId is null) _lastActivityAt = DateTimeOffset.UtcNow;
         if (_sessionId is { } existingSession)
             RestoreChatMetadata(AppSettings.Current.ChatMetadata.GetValueOrDefault(ChatMetadata.Key(Provider, existingSession)));
         Attachments.CollectionChanged += (_, _) =>
@@ -1520,8 +1489,7 @@ public sealed partial class ChatViewModel : Observable
         ModelSpeedService.Instance.Updated += OnModelSpeedsUpdated;          // singleton event: detached in Close()
         if (IsClaude) AccountService.AccountsChanged += OnAccountsChanged;   // detached in Close() so closed chats can't leak
         if (IsCodex) CodexAccountService.AccountsChanged += OnAccountsChanged;
-        if (IsGrok) GrokAccountService.AccountsChanged += OnAccountsChanged;
-        if (SupportsSwarms) SwarmBudget.CapacityChanged += OnSwarmCapacityChanged;
+        ApiKeyAccountService.Instance.PropertyChanged += OnApiKeyAccountChanged;
     }
 
     private static void OnFilterSubagents(object sender, FilterEventArgs e)
@@ -1566,10 +1534,13 @@ public sealed partial class ChatViewModel : Observable
     {
         var t = text.AsSpan().TrimStart();
         if (t.StartsWith(GoalPolicy.CheckHeader, StringComparison.Ordinal)) return true;
+        if (t.StartsWith(ClaudeModelRestartHeader, StringComparison.Ordinal)) return true;
+        if (t.StartsWith("[VIBECODE PROJECT CHATS]", StringComparison.Ordinal)) return true;
         // Join/peer notes. StripInjectedPrelude drops these before they ever reach the transcript; this stays as a
         // backstop for older saved sessions whose stored turns still have the prelude glued on front.
         if (t.StartsWith("[BRIDGE]", StringComparison.OrdinalIgnoreCase)) return true;
         if (t.StartsWith("[BRIDGE ORCHESTRATOR]", StringComparison.Ordinal)) return true;
+        if (t.StartsWith("[FROM ORCHESTRATOR ", StringComparison.Ordinal)) return true;
         // Manager kickoff / updates / worker orders (with or without the leading crown glyph).
         if (t.StartsWith("👑 [MANAGER", StringComparison.Ordinal)
             || t.StartsWith("👑 [FROM MANAGER", StringComparison.Ordinal)
@@ -1621,22 +1592,17 @@ public sealed partial class ChatViewModel : Observable
         var t = block.AsSpan().TrimStart();
         // "[BRIDGE]" peer notes, "[BRIDGE SETTINGS]", and the "[BRIDGE MODE]" rules appendix.
         return t.StartsWith("[BRIDGE", StringComparison.OrdinalIgnoreCase)
+               || t.StartsWith("[REGULAR BRIDGE]", StringComparison.Ordinal)
                || t.StartsWith("[VIBECODE CHAT TITLE]", StringComparison.Ordinal)
+               || t.StartsWith("[VIBECODE PROJECT CHATS]", StringComparison.Ordinal)
+               || t.StartsWith(ClaudeModelRestartHeader, StringComparison.Ordinal)
                || t.StartsWith("[REVIEW LEVEL:", StringComparison.Ordinal)
                || t.StartsWith("[VIBECODE SWARM REQUEST]", StringComparison.Ordinal)
+               || t.StartsWith("[VIBECODE CHILD-AGENT POLICY]", StringComparison.Ordinal)
                || t.StartsWith("[VIBECODE SECOND BRAIN", StringComparison.OrdinalIgnoreCase)
                || t.StartsWith("[VIBECODE ACTIVE GOAL]", StringComparison.Ordinal)
                || t.StartsWith(GoalPolicy.CheckHeader, StringComparison.Ordinal)
                || t.StartsWith(RewindNote, StringComparison.Ordinal);
-    }
-
-    private void OnSwarmCapacityChanged()
-    {
-        Post(() =>
-        {
-            RaiseSwarmProperties();
-            if (_status == "idle" && HasPendingDispatch) FlushQueue();
-        });
     }
 
     public void Start()
@@ -1664,7 +1630,7 @@ public sealed partial class ChatViewModel : Observable
         {
             transcript = await Task.Run(() => IsGlm
                 ? GlmTranscriptStore.LoadTranscript(GlmTranscriptStore.Directory, sessionId)
-                : SessionCatalog.LoadTranscript(Cwd, sessionId)).ConfigureAwait(false);
+                : SessionCatalog.LoadTranscript(Cwd, sessionId, maxMessages: int.MaxValue)).ConfigureAwait(false);
         }
         catch
         {
@@ -1745,7 +1711,7 @@ public sealed partial class ChatViewModel : Observable
         });
     }
 
-    private void StartCore()
+    private void StartCore(string? codexResumeSessionId = null)
     {
         _bridgeSessionInitialized = false;
         _bridgeRuntimeConfigurationTask = Task.CompletedTask;
@@ -1753,16 +1719,27 @@ public sealed partial class ChatViewModel : Observable
         RefreshPeerChatAccess?.Invoke();
         SyncCodexAccountWithActive();   // must run BEFORE HomeFor(AccountId) picks this session's CODEX_HOME
         AgentMemoryService.Instance.EnsureMcpRegistration();
-        var swarmsEnabled = SupportsSwarms && AppSettings.Current.AgentSwarmsEnabled;
-        _sessionSwarmsEnabled = swarmsEnabled;
+        var swarmsEnabled = SupportsSwarms;
         _sessionSwarmWorkerCap = swarmsEnabled
             ? SwarmPolicy.ClampMaxWorkers(AppSettings.Current.SwarmMaxWorkers)
             : null;
-        var childAgentPolicy = SupportsSwarms ? SwarmPolicy.SessionRuntimeRule(swarmsEnabled) : null;
+        var childAgentPolicy = SwarmPolicy.SessionRuntimeRule(Provider, SwarmMaxWorkers);
         var memoryPolicy = "Second Brain access can change during this session. The IDE's per-turn CURRENT ACCESS "
             + "notice and memory tool denials describe the current state and supersede earlier access notices. "
             + MemoryAgentPolicy;
-        var mcpServers = McpCatalog.Snapshot(AppSettings.Current.McpServers);
+        List<McpServerDefinition> mcpServers;
+        try
+        {
+            mcpServers = AgentStatusMcpRegistration.ForLaunch(AppSettings.Current.McpServers,
+                IsCodex, false, Provider, _model);
+        }
+        catch (FileNotFoundException ex)
+        {
+            Status = "error";
+            Items.Add(new BannerItem { Level = "error", Text = ex.Message });
+            ItemsChanged?.Invoke();
+            return;
+        }
         mcpServers.RemoveAll(server => server.Id == BridgeMcpConnection.ManagedId);
         mcpServers.Add(EnsureBridgeMcp().Registration());
         // Gating the C# capture path is not enough on its own: the memory proxy is registered for every provider,
@@ -1782,13 +1759,16 @@ public sealed partial class ChatViewModel : Observable
             {
                 "codex" => new CodexSession(new CodexSessionOptions
                 {
+                    AccountId = AccountId ?? "",
                     Cwd = Cwd,
                     HomeDirectory = CodexAccountService.Instance.HomeFor(AccountId),
-                    Resume = ResumeSessionId,
-                    ForkSession = ForkSession,
+                    Resume = codexResumeSessionId ?? ResumeSessionId,
+                    ForkSession = codexResumeSessionId is null && ForkSession,
+                    SkipHistoryReplay = codexResumeSessionId is not null,
                     Model = string.Equals(_model, "default", StringComparison.OrdinalIgnoreCase) ? null : _model,
                     Effort = _effort,
                     FastMode = _fastMode,
+                    UltrafastMode = UltrafastMode,
                     Title = _title,
                     PermissionMode = _mode,
                     AppendSystemPrompt = sessionSystemPrompt,
@@ -1796,21 +1776,19 @@ public sealed partial class ChatViewModel : Observable
                     SwarmMaxWorkers = SwarmMaxWorkers,
                     McpServers = mcpServers,
                 }),
-                "kimi" => new KimiSession(new KimiSessionOptions
+                "gemini" => new GeminiSession(new KimiSessionOptions
                 {
                     Cwd = Cwd,
                     Resume = ResumeSessionId,
-                    ForkSession = ForkSession,
-                    Model = string.Equals(_model, "default", StringComparison.OrdinalIgnoreCase) ? null : _model,
-                    Effort = _effort,
+                    Model = _model,
                     PermissionMode = _mode,
                     AppendSystemPrompt = sessionSystemPrompt,
                     McpServers = mcpServers,
                 }),
-                "grok" => new GrokSession(new GrokSessionOptions
+                "kimi" => new KimiSession(new KimiSessionOptions
                 {
+                    AccountId = AccountId ?? "",
                     Cwd = Cwd,
-                    AuthFilePath = GrokAccountService.Instance.AuthPathFor(AccountId),
                     Resume = ResumeSessionId,
                     ForkSession = ForkSession,
                     Model = string.Equals(_model, "default", StringComparison.OrdinalIgnoreCase) ? null : _model,
@@ -1822,6 +1800,7 @@ public sealed partial class ChatViewModel : Observable
                 Protocol.GlmPreset.ProviderId => CreateGlmSession(sessionSystemPrompt),
                 _ => new ClaudeSession(new ClaudeSessionOptions
                 {
+                    AccountId = AccountId ?? "",
                     Cwd = Cwd,
                     Resume = ResumeSessionId,
                     ForkSession = ForkSession,
@@ -1852,7 +1831,7 @@ public sealed partial class ChatViewModel : Observable
         catch (FileNotFoundException ex)
         {
             Status = "error";
-            if (IsKimi || IsGrok) AuthNeeded = true;
+            AuthNeeded = true;
             Items.Add(new BannerItem { Level = "error", Text = ex.Message });
             return;
         }
@@ -1906,6 +1885,7 @@ public sealed partial class ChatViewModel : Observable
                     SupportsEffort = m["supportsEffort"]?.GetValue<bool>() ?? false,
                     SupportsAutoMode = m["supportsAutoMode"]?.GetValue<bool>() ?? false,
                     SupportsFastMode = m["supportsFastMode"]?.GetValue<bool>() ?? false,
+                    SupportsUltrafastMode = m["supportsUltrafastMode"]?.GetValue<bool>() ?? false,
                 });
             }
             // Live Claude catalogs lag new IDs (Opus 5). ClaudeSession also injects, but merge here so the
@@ -1922,12 +1902,12 @@ public sealed partial class ChatViewModel : Observable
             // Kimi's access token only lives ~15 minutes; a session that just started has refreshed it on disk, so
             // this is the moment the quota read is most likely to succeed.
             if (IsKimi) KimiUsageService.Instance.Refresh();
+            if (IsGemini) GeminiUsageService.Instance.Refresh();
             if (GlmAccount is { } glmAccount) _ = GlmUsageService.Instance.RefreshAsync(glmAccount);
         });
         session.Exited += (code, stderr) => Post(() =>
         {
             if (!ReferenceEquals(_session, session)) return;
-            ReleaseSwarmLease();
             CompleteActiveRollback();
             if (Status is "closed") return;
             CommitUnfinishedUsage();
@@ -1947,7 +1927,7 @@ public sealed partial class ChatViewModel : Observable
             session.Dispose();
             if (!ReferenceEquals(_session, session)) return;
             Status = "error";
-            if (IsKimi || IsGrok) AuthNeeded = true;
+            if (ex is FileNotFoundException || IsKimi || IsGemini) AuthNeeded = true;
             Items.Add(new BannerItem { Level = "error", Text = $"Could not start {ProviderDisplay}: {ex.Message}" });
             ItemsChanged?.Invoke();
         }
@@ -1961,10 +1941,14 @@ public sealed partial class ChatViewModel : Observable
         var credentials = ApiKeyAccountService.Instance.CredentialsFor(GlmPreset.ProviderId, AccountId);
         return new GlmSession(new GlmSessionOptions
         {
-            Cwd = Cwd, Backend = _glmAccount?.GlmBackend ?? GlmPreset.Baseten,
+            Cwd = Cwd,
+            Backend = _glmAccount?.GlmBackend ?? GlmPreset.Baseten,
             ApiKeys = credentials.Select(c => c.Key).ToList(),
             ApiKeyAccountIds = credentials.Select(c => c.AccountId).ToList(),
-            Model = _model, Effort = _effort, PermissionMode = _mode, AppendSystemPrompt = systemPrompt,
+            Model = _model,
+            Effort = _effort,
+            PermissionMode = _mode,
+            AppendSystemPrompt = systemPrompt,
             BridgeMcpPipe = EnsureBridgeMcp().PipeName,
             // Without these the model forgot the whole chat every time the pane was rebuilt or VibeCode restarted.
             Resume = ForkSession ? null : ResumeSessionId,
@@ -1983,6 +1967,14 @@ public sealed partial class ChatViewModel : Observable
         if (!hasText && atts is null) return false;     // nothing to send
         if (IsCompactCommand(text)) return StartManualCompaction(text, atts);
         if (!ValidateGoalCommand(text)) return false;
+        // Re-arm when new user input is accepted, not when an older queued prompt finally runs after Stop.
+        if (!_sendingAutomaticContinuation && !IsSystemInjectedPrompt(text)
+            && BridgeWork is { } work)
+        {
+            work.IdlePlanRemindersPaused = false;
+            work.IdlePlanReminderSignatures.Clear();
+        }
+        CancelBridgeErrorRecovery();
         CancelLimitRecovery();
         // A failed turn leaves a live session in "error", and FlushQueue only drains an idle pane. Anything queued
         // before the failure (a Bridge coordination notice the shared terminal hides, a prompt typed mid-turn) then
@@ -1993,9 +1985,6 @@ public sealed partial class ChatViewModel : Observable
         // Up recall the text immediately after Send clears the composer and avoids a duplicate when FlushQueue runs.
         if (hasText) _promptHistory.Record(text);
 
-        var useSwarm = SwarmNextTurn && SwarmsAvailable;
-        if (SwarmNextTurn) SwarmNextTurn = false; // one shot: capture now, including while the prompt is queued
-
         // Extended mode deliberately routes even an idle prompt through the FIFO. That makes the first request and
         // every later request follow the same retry bookkeeping, so a usage-limit failure cannot consume the head and
         // leave only the requests behind it to resume. App-injected Bridge/manager traffic keeps the lightweight queue.
@@ -2003,7 +1992,7 @@ public sealed partial class ChatViewModel : Observable
             && !GoalPolicy.TryParseCommand(text, out _);
         if (extended)
         {
-            QueuePrompt(text, atts, useSwarm, waitingForCapacity: false, extended: true);
+            QueuePrompt(text, atts, extended: true);
             if (!IsWorking && !ExtendedQueuePaused) Post(FlushQueue);
             MessageSent?.Invoke();
             return true;
@@ -2013,34 +2002,30 @@ public sealed partial class ChatViewModel : Observable
         // finishes - same feel as the Claude Code CLI. Multiple queued messages fire one per turn, in order.
         if (IsWorking || HasPendingDispatch || RewindHoldsDispatch || _steerSubmitting || _steerQueueHold)
         {
-            // Only claim swarm capacity when the head really is waiting for it; peer notices and steering also hold it.
-            QueuePrompt(text, atts, useSwarm, waitingForCapacity: !IsWorking && !RewindHoldsDispatch
-                && _sendQueue.Any(item => item.WaitingForSwarmCapacity), extended: false);
-            if (!IsWorking) Post(FlushQueue); // preserve FIFO behind a capacity-waiting swarm
+            QueuePrompt(text, atts, extended: false);
+            if (!IsWorking) Post(FlushQueue);
             MessageSent?.Invoke();
             return true;
         }
-        if (SendNow(text, atts, useSwarm) is null)
-            QueuePrompt(text, atts, useSwarm, waitingForCapacity: true, extended: false);
+        if (SendNow(text, atts) is null)
+            QueuePrompt(text, atts, extended: false);
         MessageSent?.Invoke();
         return true;
     }
 
     public bool HasQueued => _sendQueue.Count > 0;
 
-    private void QueuePrompt(string text, IReadOnlyList<Attachment>? atts, bool useSwarm, bool waitingForCapacity,
-        bool extended)
+    private void QueuePrompt(string text, IReadOnlyList<Attachment>? atts, bool extended)
     {
         // Fold a second prompt into the one already pending instead of stacking another card. Only the queue head
         // owns "Send prompt now", so every card below it was unreachable except through its own X.
-        // Two prompts must still queue separately: the one-shot swarm choice is captured per prompt, and
-        // manager-injected work orders are recognised by their text prefix (see PurgeManagerInjectedQueue), so
-        // blending one with a user prompt would make the pair purge — or survive — as a unit.
+        // App-injected work orders are recognised by their text prefix, so
+        // blending one with a user prompt would change how the combined request is handled.
         if (!extended && _sendQueue.Count > 0 && !IsSystemInjectedPrompt(text)
             && !GoalPolicy.TryParseCommand(text, out _))
         {
             var tail = _sendQueue.Last();
-            if (!tail.Extended && tail.UseSwarm == useSwarm && !IsSystemInjectedPrompt(tail.Text)
+            if (!tail.Extended && !IsSystemInjectedPrompt(tail.Text)
                 && !GoalPolicy.TryParseCommand(tail.Text, out _) && Items.Contains(tail))
             {
                 tail.Text = string.IsNullOrWhiteSpace(tail.Text) ? text : $"{tail.Text}\n\n{text}";
@@ -2057,9 +2042,7 @@ public sealed partial class ChatViewModel : Observable
             Text = text,
             Owner = this,
             Attachments = atts,
-            UseSwarm = useSwarm,
             Extended = extended,
-            WaitingForSwarmCapacity = waitingForCapacity,
             IsQueueHead = _sendQueue.Count == 0,
         };
         _sendQueue.Enqueue(q);
@@ -2134,20 +2117,13 @@ public sealed partial class ChatViewModel : Observable
         MaybeScheduleGoalCheck();
     }
 
-    /// <summary>Actually dispatch a message to the CLI. Null means an explicit swarm is waiting for app capacity.</summary>
-    private UserItem? SendNow(string text, IReadOnlyList<Attachment>? atts, bool useSwarm = false, bool goalCheck = false)
+    /// <summary>Actually dispatch a message to the CLI. Null means rewind is holding dispatch.</summary>
+    private UserItem? SendNow(string text, IReadOnlyList<Attachment>? atts, bool goalCheck = false)
     {
         if (RewindHoldsDispatch) return null;
+        CancelBridgeErrorRecovery();
         CancelLimitRecovery();
-        useSwarm = useSwarm && SwarmsAvailable;
         var wasStarting = _status == "starting";
-        SwarmLease? swarmLease = null;
-        if (useSwarm)
-        {
-            swarmLease = SwarmBudget.TryAcquire(SwarmMaxWorkers);
-            if (swarmLease is null) return null;
-            _activeSwarmLease = swarmLease;
-        }
         var session = _session!;
         var goalTurn = BeginGoalTurn(text, goalCheck);
         var hasText = !string.IsNullOrWhiteSpace(text);
@@ -2181,17 +2157,19 @@ public sealed partial class ChatViewModel : Observable
         ClearTurnRateLimit();
         AuthNeeded = false;
         Status = "preparing";
+        if (!goalCheck && !_sendingAutomaticContinuation && !IsPeerNotificationTurn && !IsSystemInjectedPrompt(text))
+            ProjectChatTurnStarting?.Invoke();
         ItemsChanged?.Invoke();
 
         // A safe undo baseline reads and hashes the eligible project tree. On a cold first prompt that can take a few
         // hundred milliseconds, so doing it here used to freeze WPF for both ordinary chats and every Bridge pane.
         // Keep the provider turn ordered behind the snapshot, but let the dispatcher paint and accept input meanwhile.
-        _ = PrepareCheckpointAndSendAsync(session, userItem, text, atts, hasText, swarmLease, goalTurn);
+        _ = PrepareCheckpointAndSendAsync(session, userItem, text, atts, hasText, goalTurn);
         return userItem;
     }
 
     private async Task PrepareCheckpointAndSendAsync(ICodingSession session, UserItem userItem, string text,
-        IReadOnlyList<Attachment>? atts, bool hasText, SwarmLease? swarmLease, GoalTurn? goalTurn)
+        IReadOnlyList<Attachment>? atts, bool hasText, GoalTurn? goalTurn)
     {
         var memoryPrompt = MemoryPrompt(text, atts);
         var memoryTask = AgentMemoryService.Instance.PrepareTurnAsync(
@@ -2208,7 +2186,6 @@ public sealed partial class ChatViewModel : Observable
         }
         catch (Exception ex)
         {
-            ReleaseSwarmLease(swarmLease);
             if (!ReferenceEquals(_session, session) || Status == "closed") return;
             CaptureMemoryDispatchFailure(userItem, ex.Message);
             if (ReferenceEquals(_activeExtendedDispatch?.UserItem, userItem))
@@ -2230,12 +2207,30 @@ public sealed partial class ChatViewModel : Observable
         try { recalledMemory = await memoryTask; }
         catch { /* a second-brain failure never blocks the provider */ }
 
+        try
+        {
+            // MCP definitions are launch overrides. A mode switch must reconnect this same thread before the
+            // next prompt, after preparation, so toggles during a running turn never kill that turn's tools.
+            if (ReferenceEquals(_session, session) && _status == "preparing")
+            {
+                await _bridgeConfigurationApplication;
+            }
+        }
+        catch (Exception ex)
+        {
+            checkpoint.AbandonBeforeDispatch();
+            CaptureMemoryDispatchFailure(userItem, ex.Message);
+            Status = "error";
+            Items.Add(new BannerItem { Level = "error", Text = "Could not apply the chat configuration: " + ex.Message });
+            ItemsChanged?.Invoke();
+            return;
+        }
+
         // The pane can close, reconnect, or lose its provider while the background snapshot is running. Never send a
         // prompt into that stale session, and tear down the unused watcher without doing a second workspace scan.
         if (!ReferenceEquals(_session, session) || session.HasExited || _status != "preparing")
         {
             checkpoint.AbandonBeforeDispatch();
-            ReleaseSwarmLease(swarmLease);
             if (ReferenceEquals(_activeExtendedDispatch?.UserItem, userItem))
             {
                 RequeueActiveExtendedDispatch();
@@ -2250,7 +2245,7 @@ public sealed partial class ChatViewModel : Observable
         RefreshUndoStack();
         Status = "running";
 
-        // Bridge notices and the one-shot swarm contract ride on the wire but aren't shown as the user's text.
+        // App policies ride on the wire but aren't shown as the user's text.
         RefreshPeerChatAccess?.Invoke();
         var wireParts = new List<string>(5);
         // Put the delimited block first so resumed transcripts can strip it as one app-owned prelude.
@@ -2258,10 +2253,9 @@ public sealed partial class ChatViewModel : Observable
         wireParts.Add("[VIBECODE SECOND BRAIN - CURRENT ACCESS]\n" + MemoryAgentPolicy
             + "\n[END VIBECODE SECOND BRAIN]");
         if (Prelude is { Length: > 0 } pre) wireParts.Add(pre);
-        if (swarmLease is not null)
-            wireParts.Add(SwarmPolicy.BuildTurnDirective(Provider, swarmLease.GrantedWorkers, IsBridgeAgent));
-        if (IsCodex)
-            {}
+        if (ProjectChatContext?.Invoke() is { Length: > 0 } projectChats) wireParts.Add(projectChats);
+        // Refresh this on every turn so old resumed transcripts cannot reinstate the retired marker/button gate.
+        wireParts.Add(SwarmPolicy.SessionRuntimeRule(Provider, SwarmMaxWorkers));
         // Resolve the user's current review choice at dispatch, after any old join
         // briefs. Queued assignments and subsequent goals cannot freeze a prior level.
         if (IsBridgeAgent)
@@ -2294,7 +2288,6 @@ public sealed partial class ChatViewModel : Observable
         }
         catch (Exception ex)
         {
-            ReleaseSwarmLease();
             CompleteActiveRollback();
             CaptureMemoryDispatchFailure(userItem, ex.Message);
             if (ReferenceEquals(_activeExtendedDispatch?.UserItem, userItem))
@@ -2356,12 +2349,7 @@ public sealed partial class ChatViewModel : Observable
                 .Where(part => !string.IsNullOrWhiteSpace(part)));
             var allAttachments = batch.SelectMany(item => item.Attachments ?? Array.Empty<Attachment>()).ToList();
             IReadOnlyList<Attachment>? attachments = allAttachments.Count == 0 ? null : allAttachments;
-            var useSwarm = batch.Any(item => item.UseSwarm);
-            if (SendNow(text, attachments, useSwarm) is null)
-            {
-                foreach (var item in batch) item.WaitingForSwarmCapacity = true;
-                return;
-            }
+            if (SendNow(text, attachments) is null) return;
 
             foreach (var item in batch)
             {
@@ -2381,11 +2369,7 @@ public sealed partial class ChatViewModel : Observable
             return;
         }
 
-        if (SendNow(q.Text, q.Attachments, q.UseSwarm) is null)
-        {
-            q.WaitingForSwarmCapacity = true;
-            return;
-        }
+        if (SendNow(q.Text, q.Attachments) is null) return;
         _sendQueue.Dequeue();
         q.IsQueueHead = false;
         if (_sendQueue.TryPeek(out var next)) next.IsQueueHead = true;
@@ -2401,20 +2385,14 @@ public sealed partial class ChatViewModel : Observable
         var text = ExtendedQueueChunkText(batch);
         var allAttachments = batch.SelectMany(item => item.Attachments ?? Array.Empty<Attachment>()).ToList();
         IReadOnlyList<Attachment>? attachments = allAttachments.Count == 0 ? null : allAttachments;
-        var useSwarm = batch.Any(item => item.UseSwarm);
-        var userItem = SendNow(text, attachments, useSwarm);
-        if (userItem is null)
-        {
-            foreach (var item in batch) item.WaitingForSwarmCapacity = true;
-            return;
-        }
+        var userItem = SendNow(text, attachments);
+        if (userItem is null) return;
 
         foreach (var item in batch)
         {
             var removed = _sendQueue.Dequeue();
             if (!ReferenceEquals(removed, item))
                 throw new InvalidOperationException("Extended queue FIFO changed while a chunk was dispatching.");
-            item.WaitingForSwarmCapacity = false;
             item.IsQueueHead = false;
             Items.Remove(item);
         }
@@ -2476,6 +2454,7 @@ public sealed partial class ChatViewModel : Observable
     /// replaces any automatic limit retry and returns the pane to idle, whose setter posts FlushQueue.</summary>
     private void RetryQueueAfterError()
     {
+        CancelBridgeErrorRecovery();
         CancelLimitRecovery();
         Status = "idle";
     }
@@ -2515,6 +2494,7 @@ public sealed partial class ChatViewModel : Observable
     public void ResumeExtendedQueue()
     {
         if (!ExtendedQueuePaused) return;
+        CancelBridgeErrorRecovery();
         CancelLimitRecovery();
         _extendedQueuePauseReason = null;
         RefreshQueueState();
@@ -2533,7 +2513,6 @@ public sealed partial class ChatViewModel : Observable
         foreach (var item in dispatch.Items)
         {
             item.RetryCount++;
-            item.WaitingForSwarmCapacity = false;
             _sendQueue.Enqueue(item);
             if (!Items.Contains(item)) Items.Add(item);
         }
@@ -2550,62 +2529,6 @@ public sealed partial class ChatViewModel : Observable
     internal static bool IsUsageLimitResult(JsonNode result)
     {
         return UsageLimitRecovery.IsLimitError(result);
-    }
-
-    /// <summary>Drop every still-queued app-injected manager work order / manager update so a stepped-down crown
-    /// cannot keep firing into workers (or the former manager) after the user turns management off.</summary>
-    public int PurgeManagerInjectedQueue()
-    {
-        if (_sendQueue.Count == 0) return 0;
-        var drop = _sendQueue.Where(q => IsManagerInjectedPrompt(q.Text)).ToList();
-        if (drop.Count == 0) return 0;
-        var kept = _sendQueue.Where(q => !IsManagerInjectedPrompt(q.Text)).ToList();
-        _sendQueue.Clear();
-        foreach (var q in drop)
-        {
-            q.IsQueueHead = false;
-            Items.Remove(q);
-        }
-        foreach (var q in kept) _sendQueue.Enqueue(q);
-        if (_sendQueue.TryPeek(out var head)) head.IsQueueHead = true;
-        if (_sendQueue.Count == 0) _sendAllQueuedNowRequested = false;
-        RefreshQueueState();
-        return drop.Count;
-    }
-
-    /// <summary>True for prompts the bridge manager loop stuffed into a pane (work orders + manager updates +
-    /// manager kickoff). Used to purge the queue when the crown is removed.</summary>
-    public static bool IsManagerInjectedPrompt(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        var t = text.AsSpan().TrimStart();
-        if (t.StartsWith("👑 [FROM MANAGER", StringComparison.Ordinal)) return true;
-        if (t.StartsWith("👑 [MANAGER", StringComparison.Ordinal)) return true; // kickoff + MANAGER UPDATE
-        if (t.StartsWith("[FROM MANAGER", StringComparison.OrdinalIgnoreCase)) return true;
-        if (t.StartsWith("[MANAGER", StringComparison.OrdinalIgnoreCase)) return true;
-        if (t.StartsWith("[BRIDGE ORCHESTRATOR]", StringComparison.Ordinal)) return true;
-        return false;
-    }
-
-    /// <summary>Drop manager-loop notes that were staged on <see cref="Prelude"/> so the next human/agent send does
-    /// not still ride a "fold this worker into the plan" order after the crown is gone.</summary>
-    public void ClearManagerPreludes()
-    {
-        if (string.IsNullOrEmpty(Prelude)) return;
-        var kept = Prelude.Split('\n')
-            .Where(line =>
-            {
-                var s = line.TrimStart();
-                if (s.StartsWith("👑 [FROM MANAGER", StringComparison.Ordinal)) return false;
-                if (s.StartsWith("👑 [MANAGER", StringComparison.Ordinal)) return false;
-                if (s.Contains("was just made this bridge's MANAGER", StringComparison.OrdinalIgnoreCase)) return false;
-                if (s.Contains("just JOINED the bridge and is idle", StringComparison.OrdinalIgnoreCase)) return false;
-                if (s.Contains("Fold it into the plan and put it to work", StringComparison.OrdinalIgnoreCase)) return false;
-                if (s.Contains("@@DISPATCH", StringComparison.OrdinalIgnoreCase)) return false;
-                return true;
-            });
-        var next = string.Join("\n", kept).Trim();
-        Prelude = string.IsNullOrEmpty(next) ? null : next;
     }
 
     /// <summary>Make the rewind arrow a complete lifecycle action, and a real "go back to here": if this exact prompt
@@ -2694,6 +2617,7 @@ public sealed partial class ChatViewModel : Observable
     /// once that the workspace moved, instead of stacking the same paragraph onto the prelude N times.</summary>
     private TurnRollbackResult UndoOnePrompt(UserItem item, bool appendRewindNote)
     {
+        CancelBridgeErrorRecovery();
         if (!Items.Contains(item) || item.RollbackCheckpoint is not { } checkpoint)
             return new(false, 0, "This prompt does not have a local file checkpoint.");
 
@@ -2777,6 +2701,11 @@ public sealed partial class ChatViewModel : Observable
             case CompactToolGroupItem group:
                 foreach (var tool in group.Tools) ForgetItem(tool);
                 break;
+            case SubagentItem agent:
+                foreach (var child in agent.Transcript) ForgetItem(child);
+                Subagents.Remove(agent);
+                if (ReferenceEquals(SelectedSubagent, agent)) SelectedSubagent = null;
+                break;
             case PermItem perm:
                 if (_pendingPerms.Remove(perm.RequestId)) perm.State = "cancelled";
                 break;
@@ -2797,20 +2726,6 @@ public sealed partial class ChatViewModel : Observable
             try { checkpoint.Complete(); }
             finally { Post(RefreshUndoStack); }
         });
-    }
-
-    private void ReleaseSwarmLease()
-    {
-        var lease = Interlocked.Exchange(ref _activeSwarmLease, null);
-        lease?.Dispose();
-    }
-
-    /// <summary>Release only the lease owned by a particular preparing send; a reconnected pane may own a newer one.</summary>
-    private void ReleaseSwarmLease(SwarmLease? expected)
-    {
-        if (expected is null) return;
-        var released = Interlocked.CompareExchange(ref _activeSwarmLease, null, expected);
-        if (ReferenceEquals(released, expected)) expected.Dispose();
     }
 
     /// <summary>Tell each checkpointed prompt how many still-pending prompts sit after it. That count is what turns
@@ -2910,7 +2825,6 @@ public sealed partial class ChatViewModel : Observable
             o.IsSelected = string.Equals(o.Value, level, StringComparison.OrdinalIgnoreCase);
         if (IsCodex) AppSettings.Current.DefaultCodexEffort = level;
         else if (IsKimi) AppSettings.Current.DefaultKimiEffort = level;
-        else if (IsGrok) AppSettings.Current.DefaultGrokEffort = level;
         else if (IsGlm) AppSettings.Current.DefaultGlmEffort = level;
         else AppSettings.Current.DefaultEffort = level;
         AppSettings.Current.Save();
@@ -2979,6 +2893,7 @@ public sealed partial class ChatViewModel : Observable
         Raise(nameof(EffortFilled));
         Raise(nameof(EffortEmpty));
         Raise(nameof(CanFastMode));   // model list just (re)built - refresh fast-mode availability
+        RaiseUltrafastProperties();
         Raise(nameof(CanToggleFastMode));
         Raise(nameof(ShowFastMode));
         Raise(nameof(FastModeHint));
@@ -2986,7 +2901,13 @@ public sealed partial class ChatViewModel : Observable
 
     private static int EffortSortRank(string lvl) => lvl.ToLowerInvariant() switch
     {
-        "low" => 1, "medium" => 2, "high" => 3, "xhigh" => 4, "max" => 5, "ultracode" => 6, _ => 99,
+        "low" => 1,
+        "medium" => 2,
+        "high" => 3,
+        "xhigh" => 4,
+        "max" => 5,
+        "ultracode" => 6,
+        _ => 99,
     };
     private static string EffortLabel(string lvl) => lvl.ToLowerInvariant() switch
     {
@@ -3007,6 +2928,17 @@ public sealed partial class ChatViewModel : Observable
 
     public void Interrupt()
     {
+        if (BridgeWork is { } work) work.IdlePlanRemindersPaused = true;
+        if (WaitingForBridgeRetry)
+        {
+            CancelBridgeErrorRecovery();
+            PauseGoal();
+            BridgeTaskState = "failed";
+            Items.Add(new BannerItem { Level = "info", Text = "Automatic retry cancelled. Send a message to resume." });
+            Raise(nameof(Status)); // The failed task now needs an explicit retry instead of retaining its live claim.
+            ItemsChanged?.Invoke();
+            return;
+        }
         if (WaitingForLimitReset) { CancelLimitRecovery(); PauseGoal(); return; }
         if (!CanInterrupt || _session is null || _session.HasExited) return;
         PauseGoal();
@@ -3067,11 +2999,14 @@ public sealed partial class ChatViewModel : Observable
         var catalog = Models.Count > 0
             ? (IReadOnlyList<ModelChoice>)Models.ToList()
             : ProviderModelCatalog.For(ownProvider);
+        if (IsCodex)
+            catalog = catalog.Where(model => !CodexSession.IsRetiredModel(model.Value)).ToList();
 
         PickerModels.Clear();
         foreach (var model in catalog)
             PickerModels.Add(new ModelPickerChoice { Model = model, CanApply = true });
         // Look the rows' live tok/s + latency up in the background; rows fill in through OnModelSpeedsUpdated.
+        RaiseUltrafastProperties();
         ModelSpeedService.Instance.Prefetch(catalog);
     }
 
@@ -3097,10 +3032,11 @@ public sealed partial class ChatViewModel : Observable
         // and listed it as a custom model in the picker from then on. SetPickerModel already refuses a foreign
         // row, but this is the method every other caller reaches for, so the rule belongs here too.
         if (!ProviderModelCatalog.ModelBelongsTo(model, Provider)) return;
+        CancelBridgeErrorRecovery();
         Model = string.IsNullOrEmpty(model) ? null : model;
         if (IsCodex) AppSettings.Current.DefaultCodexModel = _model;
+        else if (IsGemini) AppSettings.Current.DefaultGeminiModel = _model;
         else if (IsKimi) AppSettings.Current.DefaultKimiModel = _model;
-        else if (IsGrok) AppSettings.Current.DefaultGrokModel = _model;
         else if (IsGlm) AppSettings.Current.DefaultGlmModel = _model;
         else AppSettings.Current.DefaultModel = _model;
         AppSettings.Current.Save();
@@ -3119,6 +3055,7 @@ public sealed partial class ChatViewModel : Observable
 
     public void Close()
     {
+        CancelBridgeErrorRecovery();
         AppSettings.Changed -= OnSecondBrainSettingsChanged;
         AppSettings.Changed -= OnLimitRecoverySettingsChanged;
         CancelLimitRecovery();
@@ -3126,6 +3063,7 @@ public sealed partial class ChatViewModel : Observable
         _secondBrainMcp = null;
         CancelGoalCheck();
         _bridgeMcp?.Dispose();
+        _claudeModelRestartId = null;
         _bridgeMcp = null;
         ClearPeerChatAccess();
         ClearPeerMailbox();
@@ -3146,13 +3084,11 @@ public sealed partial class ChatViewModel : Observable
         // A chat torn down mid-turn would otherwise leave its half-finished turn on the wall until it went stale.
         LiveTurnTelemetry.Instance.Clear(this);
         _tokenRateTimer?.Stop();
-        if (SupportsSwarms) SwarmBudget.CapacityChanged -= OnSwarmCapacityChanged;
         ModelSpeedService.Instance.Updated -= OnModelSpeedsUpdated;
         if (IsClaude) AccountService.AccountsChanged -= OnAccountsChanged;   // static event: without this every closed chat is pinned
         if (IsCodex) CodexAccountService.AccountsChanged -= OnAccountsChanged;
-        if (IsGrok) GrokAccountService.AccountsChanged -= OnAccountsChanged;
+        ApiKeyAccountService.Instance.PropertyChanged -= OnApiKeyAccountChanged;
         _session?.Dispose();
-        ReleaseSwarmLease(); // release only after the provider process tree has stopped
     }
 
     private static async Task FinishMemorySessionAsync(AgentMemoryChatContext context, string? turnId,
@@ -3169,22 +3105,23 @@ public sealed partial class ChatViewModel : Observable
     public void RetryAfterSignIn()
     {
         if (!AuthNeeded) return;
+        CancelBridgeErrorRecovery();
         CancelLimitRecovery();
-        ReleaseSwarmLease();
         CompleteActiveRollback();
         // Both branches move this chat onto a different account id, so the cached chip has to be dropped - otherwise
         // a pane that just re-signed-in keeps naming (and badging) the login it no longer runs under.
-        if (IsCodex || IsGrok)
+        if (IsCodex)
         {
-            AccountId = IsCodex ? CodexAccountService.Instance.ActiveId : GrokAccountService.Instance.ActiveId;
+            AccountId = CodexAccountService.Instance.ActiveId;
+            if (IsCodex)
+            {
+                Models.Clear();
+                RefreshModelPicker();
+            }
             _accountLabel = null;
             _showAccountLabel = null;
-            _grokAccount = null;
-            _grokAccountResolved = false;
             Raise(nameof(AccountLabel));
             Raise(nameof(ShowAccountLabel));
-            Raise(nameof(GrokAccount));
-            Raise(nameof(GrokUsageSummary));
             RaiseSidebarAccountBadge();
         }
         _session?.Dispose();
@@ -3445,6 +3382,7 @@ public sealed partial class ChatViewModel : Observable
         {
             case "system": ApplySystem(m, subagentThreadId); break;
             case "assistant":
+                if (m["is_replay"]?.GetValue<bool>() != true) RecordAssistantActivity();
                 if (IsClaude)
                 {
                     var rootThread = subagentThreadId is null && NodeString(m["parent_tool_use_id"]) is null;
@@ -3458,18 +3396,18 @@ public sealed partial class ChatViewModel : Observable
             case "stream_event": ApplyStreamEvent(m); break;
             case "rate_limit_event": NoteClaudeRateLimit(m); break;
             case "tool_progress":
-            {
-                if (m["tool_use_id"]?.GetValue<string>() is { } id && _toolById.TryGetValue(id, out var t))
-                    t.Elapsed = DoubleOrZero(m["elapsed_time_seconds"]);
-                break;
-            }
+                {
+                    if (m["tool_use_id"]?.GetValue<string>() is { } id && _toolById.TryGetValue(id, out var t))
+                        t.Elapsed = DoubleOrZero(m["elapsed_time_seconds"]);
+                    break;
+                }
             case "tool_use_summary":
-            {
-                var ids = m["preceding_tool_use_ids"] as JsonArray;
-                if (ids?.LastOrDefault()?.GetValue<string>() is { } lastId && _toolById.TryGetValue(lastId, out var t))
-                    t.SummaryOverride = m["summary"]?.GetValue<string>();
-                break;
-            }
+                {
+                    var ids = m["preceding_tool_use_ids"] as JsonArray;
+                    if (ids?.LastOrDefault()?.GetValue<string>() is { } lastId && _toolById.TryGetValue(lastId, out var t))
+                        t.SummaryOverride = m["summary"]?.GetValue<string>();
+                    break;
+                }
             // Only a ROOT result ends the turn. A result scoped to a live Agent tool_use is a subagent finishing;
             // treating it as terminal would seal this prompt's rollback checkpoint while the main agent is still
             // editing, so its later edits go untracked and undo reports "no file changes were recorded". The id must
@@ -3489,47 +3427,80 @@ public sealed partial class ChatViewModel : Observable
     {
         switch (m["subtype"]?.GetValue<string>())
         {
-            case "codex_usage_checkpoint":
-            {
-                if (!IsCodex) break;
-                var usage = UsageOf(m["usage"]);
-                if (usage.HasTokens)
+            case "model_refusal_fallback":
+                if (IsClaude && subagentThreadId is null && m["parent_tool_use_id"] is null
+                    && (SessionId is null || NodeString(m["session_id"]) is null
+                        || NodeString(m["session_id"]) == SessionId)
+                    && NodeString(m["direction"]) is "retry" or "sticky")
                 {
-                    TrackTokenUsage(usage);
-                    var model = NodeString(m["model"]);
-                    TotalIn += usage.TotalIn;
-                    TotalOut += usage.Output;
-                    TotalTokens += usage.Total;
-                    var cost = UsagePricing.Estimate(model, m["usage"], _costTierForTurn);
-                    _estCost += cost;
-                    LogTurnUsage(usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, cost, reported: false, model: model);
-                }
-                ResetLiveUsage();
-                Raise(nameof(CostText));
-                break;
-            }
-            case "codex_reserve_activated":
-            {
-                if (!IsCodex || NodeString(m["model"]) != CodexReserveFallback.ModelId) break;
-                if (!Models.Any(model => model.Value == CodexReserveFallback.ModelId))
-                    Models.Add(new ModelChoice
+                    var originalModel = ClaudeModelCatalog.CanonicalId(NodeString(m["original_model"]));
+                    var currentModel = ClaudeModelCatalog.CanonicalId(Model);
+                    if (NodeString(m["fallback_model"]) is { Length: > 0 } fallbackModel
+                        && (currentModel == originalModel || currentModel is "" or "default" or "opus"
+                            && originalModel == ClaudeModelCatalog.Opus))
                     {
-                        Provider = "codex", Value = CodexReserveFallback.ModelId, ResolvedModel = CodexReserveFallback.ModelId,
-                        Display = "GPT Reserve", Description = "Fallback using this account's separate GPT Reserve allowance.",
-                        EffortLevels = (m["supportedEffortLevels"] as JsonArray)?.Select(NodeString).OfType<string>().ToList() ?? [],
-                        SupportsEffort = true, SupportsAutoMode = true,
-                    });
-                // This is a per-chat recovery, not a change to the user's default model for future chats.
-                Model = CodexReserveFallback.ModelId;
-                _costModelForTurn = CodexReserveFallback.ModelId;
-                _costTierForTurn = "standard";
-                Effort = NodeString(m["effort"]);
-                _appliedEffort = _effort;
-                RebuildEffortOptions();
-                RefreshModelPicker();
-                InsertBeforeQueued(new BannerItem { Level = "info", Text = NodeString(m["message"]) ?? "Switched to GPT Reserve." });
+                        Model = fallbackModel;
+                        RebuildEffortOptions();
+                    }
+                }
                 break;
-            }
+            case "claude_model_restore":
+                ApplyClaudeModelRecovery(m);
+                break;
+            case "codex_usage_checkpoint":
+                {
+                    if (!IsCodex) break;
+                    var usage = UsageOf(m["usage"]);
+                    if (usage.HasTokens)
+                    {
+                        TrackTokenUsage(usage);
+                        var model = NodeString(m["model"]);
+                        TotalIn += usage.TotalIn;
+                        TotalOut += usage.Output;
+                        TotalTokens += usage.Total;
+                        var cost = UsagePricing.Estimate(model, m["usage"], _costTierForTurn);
+                        _estCost += cost;
+                        LogTurnUsage(usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, cost, reported: false, model: model);
+                    }
+                    ResetLiveUsage();
+                    Raise(nameof(CostText));
+                    break;
+                }
+            case "codex_credits_available":
+                if (IsCodex)
+                    InsertBeforeQueued(new BannerItem
+                    {
+                        Level = "info",
+                        Text = NodeString(m["message"])
+                        ?? "Retrying with your available Codex credits."
+                    });
+                break;
+            case "codex_reserve_activated":
+                {
+                    if (!IsCodex || NodeString(m["model"]) != CodexReserveFallback.ModelId) break;
+                    if (!Models.Any(model => model.Value == CodexReserveFallback.ModelId))
+                        Models.Add(new ModelChoice
+                        {
+                            Provider = "codex",
+                            Value = CodexReserveFallback.ModelId,
+                            ResolvedModel = CodexReserveFallback.ModelId,
+                            Display = "GPT Reserve",
+                            Description = "Fallback using this account's separate GPT Reserve allowance.",
+                            EffortLevels = (m["supportedEffortLevels"] as JsonArray)?.Select(NodeString).OfType<string>().ToList() ?? [],
+                            SupportsEffort = true,
+                            SupportsAutoMode = true,
+                        });
+                    // This is a per-chat recovery, not a change to the user's default model for future chats.
+                    Model = CodexReserveFallback.ModelId;
+                    _costModelForTurn = CodexReserveFallback.ModelId;
+                    _costTierForTurn = "standard";
+                    Effort = NodeString(m["effort"]);
+                    _appliedEffort = _effort;
+                    RebuildEffortOptions();
+                    RefreshModelPicker();
+                    InsertBeforeQueued(new BannerItem { Level = "info", Text = NodeString(m["message"]) ?? "Switched to GPT Reserve." });
+                    break;
+                }
             case "init":
                 SessionId = m["session_id"]?.GetValue<string>();
                 if (_bridgeLaunchConfiguration is null)
@@ -3577,65 +3548,65 @@ public sealed partial class ChatViewModel : Observable
                 Items.Add(new BannerItem { Level = "warn", Text = $"{m["tool_name"]} auto-denied - {m["message"] ?? m["decision_reason"] ?? "permission rule"}" });
                 break;
             case "task_started":
-            {
-                // A Workflow's tool input is its own source code, so without this the card is titled with several
-                // KB of JavaScript until the first progress event lands. The CLI names the run up front - use it.
-                if (m["tool_use_id"]?.GetValue<string>() is { } startId
-                    && _toolById.TryGetValue(startId, out var started)
-                    && m["task_type"]?.GetValue<string>() == "local_workflow")
                 {
-                    started.TaskId = m["task_id"]?.GetValue<string>();
-                    var run = started.Workflow ??= new WorkflowRun();
-                    run.Name = m["workflow_name"]?.GetValue<string>() ?? run.Name;
-                    run.Description = m["description"]?.GetValue<string>() ?? run.Description;
-                    if (run.Title is { Length: > 0 } title && title != "Workflow") started.SummaryOverride = title;
-                }
-                break;
-            }
-            case "task_progress":
-            {
-                if (m["tool_use_id"]?.GetValue<string>() is { } id && _toolById.TryGetValue(id, out var t))
-                {
-                    var usage = m["usage"];
-                    var tokens = DoubleOrZero(usage?["total_tokens"]);
-                    var uses = DoubleOrZero(usage?["tool_uses"]);
-                    var last = m["last_tool_name"]?.GetValue<string>();
-                    // A multi-agent Workflow reports its whole phase/agent tree here. It used to be thrown away,
-                    // leaving a token counter as the only sign of what a fleet of agents was doing.
-                    // NOTE: the array rides on only SOME progress events, so a bare one must not clear the tree.
-                    if (m["workflow_progress"] is JsonArray progress && progress.Count > 0)
+                    // A Workflow's tool input is its own source code, so without this the card is titled with several
+                    // KB of JavaScript until the first progress event lands. The CLI names the run up front - use it.
+                    if (m["tool_use_id"]?.GetValue<string>() is { } startId
+                        && _toolById.TryGetValue(startId, out var started)
+                        && m["task_type"]?.GetValue<string>() == "local_workflow")
                     {
-                        t.TaskId ??= m["task_id"]?.GetValue<string>();
-                        var run = t.Workflow ??= new WorkflowRun();
-                        run.Apply(progress);
-                        if (m["summary"]?.GetValue<string>() is { Length: > 0 } summary) run.Description = summary;
-                        if (run.Title is { Length: > 0 } title && title != "Workflow") t.SummaryOverride = title;
-                        SyncWorkflowSubagents(t);
+                        started.TaskId = m["task_id"]?.GetValue<string>();
+                        var run = started.Workflow ??= new WorkflowRun();
+                        run.Name = m["workflow_name"]?.GetValue<string>() ?? run.Name;
+                        run.Description = m["description"]?.GetValue<string>() ?? run.Description;
+                        if (run.Title is { Length: > 0 } title && title != "Workflow") started.SummaryOverride = title;
                     }
-                    // The tree already says how far along the run is; the raw counters would only repeat it worse.
-                    t.ProgressText = t.Workflow is { AgentCount: > 0 } live
-                        ? live.Headline
-                        : $"{tokens / 1000:0.0}k tokens · {uses:0} tool uses{(last is null ? "" : $" · → {last}")}";
+                    break;
                 }
-                break;
-            }
-            case "task_updated":
-            {
-                // Nothing else marks the last agent finished: the run ends without a final progress snapshot, so
-                // the tree would keep a spinner turning on an agent that stopped minutes ago.
-                if (m["patch"]?["status"]?.GetValue<string>() is "completed" or "failed"
-                    && m["task_id"]?.GetValue<string>() is { } endedId)
-                    foreach (var tool in _toolById.Values)
-                        if (tool.Workflow is { Finished: false } finishing && tool.TaskId == endedId)
+            case "task_progress":
+                {
+                    if (m["tool_use_id"]?.GetValue<string>() is { } id && _toolById.TryGetValue(id, out var t))
+                    {
+                        var usage = m["usage"];
+                        var tokens = DoubleOrZero(usage?["total_tokens"]);
+                        var uses = DoubleOrZero(usage?["tool_uses"]);
+                        var last = m["last_tool_name"]?.GetValue<string>();
+                        // A multi-agent Workflow reports its whole phase/agent tree here. It used to be thrown away,
+                        // leaving a token counter as the only sign of what a fleet of agents was doing.
+                        // NOTE: the array rides on only SOME progress events, so a bare one must not clear the tree.
+                        if (m["workflow_progress"] is JsonArray progress && progress.Count > 0)
                         {
-                            finishing.Complete();
-                            tool.ProgressText = finishing.Headline;
-                            // Same reason the tree needs Complete(): no final snapshot arrives, so without this the
-                            // roster keeps counting agents as active long after the run ended.
-                            SyncWorkflowSubagents(tool);
+                            t.TaskId ??= m["task_id"]?.GetValue<string>();
+                            var run = t.Workflow ??= new WorkflowRun();
+                            run.Apply(progress);
+                            if (m["summary"]?.GetValue<string>() is { Length: > 0 } summary) run.Description = summary;
+                            if (run.Title is { Length: > 0 } title && title != "Workflow") t.SummaryOverride = title;
+                            SyncWorkflowSubagents(t);
                         }
-                break;
-            }
+                        // The tree already says how far along the run is; the raw counters would only repeat it worse.
+                        t.ProgressText = t.Workflow is { AgentCount: > 0 } live
+                            ? live.Headline
+                            : $"{tokens / 1000:0.0}k tokens · {uses:0} tool uses{(last is null ? "" : $" · → {last}")}";
+                    }
+                    break;
+                }
+            case "task_updated":
+                {
+                    // Nothing else marks the last agent finished: the run ends without a final progress snapshot, so
+                    // the tree would keep a spinner turning on an agent that stopped minutes ago.
+                    if (m["patch"]?["status"]?.GetValue<string>() is "completed" or "failed"
+                        && m["task_id"]?.GetValue<string>() is { } endedId)
+                        foreach (var tool in _toolById.Values)
+                            if (tool.Workflow is { Finished: false } finishing && tool.TaskId == endedId)
+                            {
+                                finishing.Complete();
+                                tool.ProgressText = finishing.Headline;
+                                // Same reason the tree needs Complete(): no final snapshot arrives, so without this the
+                                // roster keeps counting agents as active long after the run ended.
+                                SyncWorkflowSubagents(tool);
+                            }
+                    break;
+                }
             case "thinking_tokens":
                 ThinkingTokens = DoubleOrZero(m["estimated_tokens"]);
                 break;
@@ -3652,22 +3623,22 @@ public sealed partial class ChatViewModel : Observable
                 if (m["todos"] is JsonArray todos) ReplaceTodos(todos);
                 break;
             case "api_retry":
-            {
-                // The CLI emits this while backing off after an API error/overload. Field names vary
-                // by build (retryAttempt/maxRetries/retryInMs vs attempt/max_retries/retry_delay_ms).
-                // Read defensively - never throw mid-turn if a field is a string or missing.
-                int attempt = NumOrZero(m["retryAttempt"]); if (attempt == 0) attempt = NumOrZero(m["attempt"]);
-                int max = NumOrZero(m["maxRetries"]); if (max == 0) max = NumOrZero(m["max_retries"]);
-                int status = NumOrZero(m["status"]);
-                var note = "retrying" + (attempt > 0 ? max > 0 ? $" {attempt}/{max}" : $" (attempt {attempt})" : "");
-                if (status == 429) note += " · rate limited";
-                else if (status >= 500) note += " · overloaded";
-                else if (status > 0) note += $" · HTTP {status}";
-                _retryNote = note;
-                Raise(nameof(WorkingText));
-                Raise(nameof(WorkingStatus));
-                break;
-            }
+                {
+                    // The CLI emits this while backing off after an API error/overload. Field names vary
+                    // by build (retryAttempt/maxRetries/retryInMs vs attempt/max_retries/retry_delay_ms).
+                    // Read defensively - never throw mid-turn if a field is a string or missing.
+                    int attempt = NumOrZero(m["retryAttempt"]); if (attempt == 0) attempt = NumOrZero(m["attempt"]);
+                    int max = NumOrZero(m["maxRetries"]); if (max == 0) max = NumOrZero(m["max_retries"]);
+                    int status = NumOrZero(m["status"]);
+                    var note = "retrying" + (attempt > 0 ? max > 0 ? $" {attempt}/{max}" : $" (attempt {attempt})" : "");
+                    if (status == 429) note += " · rate limited";
+                    else if (status >= 500) note += " · overloaded";
+                    else if (status > 0) note += $" · HTTP {status}";
+                    _retryNote = note;
+                    Raise(nameof(WorkingText));
+                    Raise(nameof(WorkingStatus));
+                    break;
+                }
         }
     }
 
@@ -3699,8 +3670,7 @@ public sealed partial class ChatViewModel : Observable
                 }
                 else
                 {
-                    agent = new SubagentItem { ThreadId = threadId };
-                    Subagents.Add(agent);
+                    agent = EnsureSubagent(threadId);
                 }
                 byId[threadId] = agent;
             }
@@ -3716,12 +3686,14 @@ public sealed partial class ChatViewModel : Observable
             agent.Task = node["task"]?.GetValue<string>() ?? agent.Task;
             agent.Activity = node["activity"]?.GetValue<string>() ?? agent.Activity;
             agent.Status = node["status"]?.GetValue<string>() ?? agent.Status;
+            agent.ApplyReportedResult(NodeString(node["report"]));
         }
         // This snapshot is authoritative for the provider's OWN rows. Workflow agents are announced on a different
         // channel and never appear in it, so treating their absence as "gone" would delete them the instant any
         // ordinary subagent event arrived.
         foreach (var stale in Subagents.Where(a => !a.FromWorkflow && !seen.Contains(a.ThreadId)).ToList())
         {
+            if (IsCodex && stale.IsActive) { stale.Status = "notFound"; stale.Activity = "No longer available"; }
             Subagents.Remove(stale);
             if (ReferenceEquals(SelectedSubagent, stale)) SelectedSubagent = null;
         }
@@ -3772,46 +3744,46 @@ public sealed partial class ChatViewModel : Observable
         if (tool.Workflow is not { } run) return;
         var added = false;
         foreach (var phase in run.Phases)
-        foreach (var agent in phase.Agents)
-        {
-            var threadId = $"workflow:{tool.Id}:{phase.Index}:{agent.Index}";
-            var row = Subagents.FirstOrDefault(a =>
-                string.Equals(a.ThreadId, threadId, StringComparison.Ordinal));
-            if (row is null)
+            foreach (var agent in phase.Agents)
             {
-                row = new SubagentItem { ThreadId = threadId, FromWorkflow = true };
-                Subagents.Add(row);
-                added = true;
-            }
-            if (agent.Label is { Length: > 0 } label) row.Label = label;
-            if (agent.PromptPreview is { Length: > 0 } prompt) row.Task = prompt;
-            // The run names its own agents, and that name is what its transcript file on disk is called. It is the
-            // ONLY sound link between this row and that file: agents do not start in the order the script lists
-            // them (a six-agent parallel() on this machine started in the order 3,1,4,2,6,5), so pairing the Nth row
-            // with the Nth agent in the journal put every transcript under someone else's label.
-            if (agent.AgentId is { Length: > 0 } agentId) row.WorkflowAgentId = agentId;
-            // The phase is what tells one of a dozen agents apart at a glance; the stats say how far it has got.
-            row.Activity = string.Join(" · ", new[] { phase.Title, agent.Stats }.Where(s => s.Length > 0));
-            var reported = agent.State switch
-            {
-                "done" => "completed",
-                "error" => "errored",
-                _ => "running",
-            };
-            // Never walk a finished agent back to running. A workflow agent runs exactly once, so a snapshot that
-            // still shows it in flight is simply older news than the journal that already saw it return — and
-            // letting it win is what kept the header badge counting agents that had stopped.
-            // An ABANDONED row is the exception, and deliberately so: it was settled because the turn that launched
-            // the run was stopped, which is an inference. Only a live run emits progress, so a fresh snapshot saying
-            // this agent is running is direct evidence the inference was wrong — and it wins.
-            if (reported != "running" || row.IsActive || row.IsAbandoned) row.Status = reported;
+                var threadId = $"workflow:{tool.Id}:{phase.Index}:{agent.Index}";
+                var row = Subagents.FirstOrDefault(a =>
+                    string.Equals(a.ThreadId, threadId, StringComparison.Ordinal));
+                if (row is null)
+                {
+                    row = new SubagentItem { ThreadId = threadId, FromWorkflow = true };
+                    Subagents.Add(row);
+                    added = true;
+                }
+                if (agent.Label is { Length: > 0 } label) row.Label = label;
+                if (agent.PromptPreview is { Length: > 0 } prompt) row.Task = prompt;
+                // The run names its own agents, and that name is what its transcript file on disk is called. It is the
+                // ONLY sound link between this row and that file: agents do not start in the order the script lists
+                // them (a six-agent parallel() on this machine started in the order 3,1,4,2,6,5), so pairing the Nth row
+                // with the Nth agent in the journal put every transcript under someone else's label.
+                if (agent.AgentId is { Length: > 0 } agentId) row.WorkflowAgentId = agentId;
+                // The phase is what tells one of a dozen agents apart at a glance; the stats say how far it has got.
+                row.Activity = string.Join(" · ", new[] { phase.Title, agent.Stats }.Where(s => s.Length > 0));
+                var reported = agent.State switch
+                {
+                    "done" => "completed",
+                    "error" => "errored",
+                    _ => "running",
+                };
+                // Never walk a finished agent back to running. A workflow agent runs exactly once, so a snapshot that
+                // still shows it in flight is simply older news than the journal that already saw it return — and
+                // letting it win is what kept the header badge counting agents that had stopped.
+                // An ABANDONED row is the exception, and deliberately so: it was settled because the turn that launched
+                // the run was stopped, which is an inference. Only a live run emits progress, so a fresh snapshot saying
+                // this agent is running is direct evidence the inference was wrong — and it wins.
+                if (reported != "running" || row.IsActive || row.IsAbandoned) row.Status = reported;
 
-            // Fallback only. With a transcript directory the row shows the agent's real conversation instead, and
-            // the return value arrives at the end of it where it belongs.
-            if (!_workflowStores.ContainsKey(tool.Id)
-                && agent.ResultPreview is { Length: > 0 } result && row.Transcript.Count == 0)
-                row.Transcript.Add(new TextItem { Text = result });
-        }
+                // Fallback only. With a transcript directory the row shows the agent's real conversation instead, and
+                // the return value arrives at the end of it where it belongs.
+                if (!_workflowStores.ContainsKey(tool.Id)
+                    && agent.ResultPreview is { Length: > 0 } result && row.Transcript.Count == 0)
+                    row.Transcript.Add(new TextItem { Text = result });
+            }
         // Settles anything the journal says has finished, whether or not the user ever opens the inspector — the
         // badge depends on it.
         PumpWorkflowTranscripts();
@@ -3960,15 +3932,13 @@ public sealed partial class ChatViewModel : Observable
         if (existing is not null) return existing;
         var created = new SubagentItem { ThreadId = threadId };
         Subagents.Add(created);
+        // Codex's native collaboration items do not produce an Agent tool card. Put the same lightweight row
+        // in the conversation so workers are visible without discovering the header's swarm popup first.
+        if (IsCodex) InsertBeforeQueued(created);
         RaiseSubagentRosterProperties();
         return created;
     }
 
-    /// <summary>
-    /// Connect a Claude Agent/Task or Grok <c>spawn_subagent</c> tool card to the Subagents roster + inspector.
-    /// Grok uses the task tool name <c>spawn_subagent</c> (not Claude's Agent/Task); without this mapping the
-    /// workers still run but never appear in the Subagents menu.
-    /// </summary>
     private void AttachAgentToolTranscript(ToolItem tool)
     {
         if (!ToolItem.IsSubagentSpawnTool(tool.Name)) return;
@@ -4046,7 +4016,6 @@ public sealed partial class ChatViewModel : Observable
         if (settled) RaiseSubagentRosterProperties();
     }
 
-    /// <summary>Keep roster status in sync when a spawn tool settles (Grok spawn_subagent completes as a normal tool_result).</summary>
     private void SyncSubagentStatusFromTool(SubagentItem agent, ToolItem tool)
     {
         agent.Status = tool.Status switch
@@ -4063,52 +4032,7 @@ public sealed partial class ChatViewModel : Observable
             "done" => "Finished",
             _ => agent.Activity,
         };
-        // Grok often returns a subagent id in the spawn result text — promote ThreadId when we can parse one.
-        if (tool.Status == "done" && !string.IsNullOrWhiteSpace(tool.Result)
-            && TryParseGrokSubagentId(tool.Result, out var realId)
-            && !string.Equals(agent.ThreadId, realId, StringComparison.Ordinal))
-        {
-            agent.ThreadId = realId!;
-        }
         RaiseSubagentRosterProperties();
-    }
-
-    /// <summary>Best-effort extract of a Grok spawn_subagent / task-tool id from tool result text.</summary>
-    private static bool TryParseGrokSubagentId(string result, out string? id)
-    {
-        id = null;
-        if (string.IsNullOrWhiteSpace(result)) return false;
-        // JSON: {"subagent_id":"..."} / {"id":"..."} / {"task_id":"..."}
-        try
-        {
-            if (JsonNode.Parse(result) is JsonObject obj)
-            {
-                foreach (var key in new[] { "subagent_id", "subagentId", "task_id", "taskId", "id", "thread_id", "threadId" })
-                {
-                    var v = obj[key]?.GetValue<string>();
-                    if (!string.IsNullOrWhiteSpace(v) && v!.Length >= 4) { id = v.Trim(); return true; }
-                }
-            }
-        }
-        catch { /* plain text below */ }
-
-        // Plain text: "subagent_id: abc" / "Subagent ID: abc" / "task_id=abc"
-        foreach (var pattern in new[]
-                 {
-                     @"subagent[_\s-]?id\s*[:=]\s*([A-Za-z0-9_\-./]+)",
-                     @"task[_\s-]?id\s*[:=]\s*([A-Za-z0-9_\-./]+)",
-                     @"thread[_\s-]?id\s*[:=]\s*([A-Za-z0-9_\-./]+)",
-                 })
-        {
-            var m = System.Text.RegularExpressions.Regex.Match(result, pattern,
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (m.Success && m.Groups[1].Value.Length >= 4)
-            {
-                id = m.Groups[1].Value.Trim();
-                return true;
-            }
-        }
-        return false;
     }
 
     private void RaiseSubagentRosterProperties()
@@ -4118,7 +4042,7 @@ public sealed partial class ChatViewModel : Observable
         Raise(nameof(HasWorkingSubagents));
         Raise(nameof(ShowWorkingText));
         Raise(nameof(ChatListIsWorking));
-        Raise(nameof(ShowSwarmControl));
+        Raise(nameof(ShowSubagentsControl));
         Raise(nameof(SubagentPanelTitle));
         Raise(nameof(SubagentButtonToolTip));
         Raise(nameof(SubagentsButtonToolTip));
@@ -4132,18 +4056,25 @@ public sealed partial class ChatViewModel : Observable
         // The last observed snapshot was already preserved on close/exit. A delayed terminal envelope cannot
         // record it again; a new dispatch resets the guard in BeginTurnPricing.
         if (Status == "closed" || _unfinishedUsageRecorded) return;
+        if (IsGemini && m["usage_is_incomplete"]?.GetValue<bool>() == true)
+        {
+            _tokenUsageIncomplete = true;
+            Raise(nameof(TokensText)); Raise(nameof(TokensToolTip));
+        }
         if (GlmAccount is { } glmAccount) _ = GlmUsageService.Instance.RefreshAsync(glmAccount);
         // Claude labels an intentional stop between tool-use messages as error_during_execution. Classify the
         // terminal envelope once here: this path is shared by normal chats and every Bridge pane, so an expected stop
         // becomes idle without an error banner or a false "agent hit an error and stopped" Bridge announcement.
-        var interruptedByUser = _interruptRequested;
+        var recoveryInterrupted = m["vibecode_model_recovery_interrupted"]?.GetValue<bool>() == true;
+        var restartingOnOpus = recoveryInterrupted && _claudeModelRestartId is not null;
+        var interruptedByUser = _interruptRequested || recoveryInterrupted;
         var disposition = TurnResultClassifier.Classify(Provider, m, interruptedByUser);
         _interruptRequested = false;
         var isError = disposition == TurnResultDisposition.Failed;
         var usageLimited = isError && (IsUsageLimitResult(m) || _turnRateLimited);
         var compactCommand = FinishManualCompaction(m, isError, interruptedByUser);
         TrackLimitRecovery(m, usageLimited, compactCommand);
-        ReleaseSwarmLease();
+        TrackBridgeErrorRecovery(m, isError && !usageLimited && !interruptedByUser, compactCommand);
         CompleteActiveRollback();
         ThinkingTokens = 0;
         _retryNote = null;
@@ -4152,7 +4083,7 @@ public sealed partial class ChatViewModel : Observable
         // any failed chunk is restored to the FIFO head before the queue is paused, so no request disappears. Quota
         // failures can resume automatically; other provider failures wait for an explicit retry.
         var failedExtendedChunk = isError && _activeExtendedDispatch is not null;
-        if (_activeExtendedDispatch is not null)
+        if (_activeExtendedDispatch is not null && !restartingOnOpus)
         {
             if (isError) RequeueActiveExtendedDispatch();
             else _activeExtendedDispatch = null;
@@ -4172,19 +4103,19 @@ public sealed partial class ChatViewModel : Observable
             _ = AgentMemoryService.Instance.CaptureCompletedTurnAsync(
                 memoryContext, memoryTurnId, memoryPrompt, assistantResponse, memoryStatus, promoteMemory);
         }
-
         // Before Status flips: its setter recomputes WorkingText, which is where "N subagents working…" is read from.
-        if (compactCommand is null) FinishGoalTurn(interruptedByUser || isError);
+        if (compactCommand is null && !restartingOnOpus) FinishGoalTurn(interruptedByUser || isError);
         SettleAbandonedSubagents(turnStopped: interruptedByUser || isError);
-        if (!IsPeerNotificationTurn && compactCommand is null)
-            BridgeTaskState = WaitingForLimitReset ? "waiting" : isError ? "failed" : interruptedByUser ? "interrupted" :
+        if (!IsPeerNotificationTurn && compactCommand is null && !restartingOnOpus)
+            BridgeTaskState = WaitingForLimitReset || WaitingForBridgeRetry ? "waiting" : isError ? "failed" : interruptedByUser ? "interrupted" :
                 IsBridgeManager && BridgeCoordinatesOnly && !BridgeReviewComplete ? "waiting" : "completed";
-        Status = isError ? "error" : "idle";
-        TurnCompleted?.Invoke();
+        Status = restartingOnOpus ? "running" : isError ? "error" : "idle";
+        if (!restartingOnOpus) TurnCompleted?.Invoke();
         IsPeerNotificationTurn = false;
-        NotificationService.NotifyTurnFinished(this, isError, interruptedByUser);
+        if (!restartingOnOpus && !WaitingForBridgeRetry) NotificationService.NotifyTurnFinished(this, isError, interruptedByUser);
         if (IsClaude) UsageService.Instance.Refresh();
         if (IsKimi) KimiUsageService.Instance.Refresh();
+        if (IsGemini) GeminiUsageService.Instance.Refresh();
         // total_cost_usd is the session running total, so a provider-billed turn's own cost is the delta.
         var costBefore = _cost;
         Cost = DoubleOrNull(m["total_cost_usd"]) ?? _cost;
@@ -4238,15 +4169,21 @@ public sealed partial class ChatViewModel : Observable
                 TotalOut = _totalOut + output;
                 TotalTokens = _totalTokens + tin + output;
                 // Price this turn at its own model (handles mid-session model switches) and accumulate.
-                // Grok reports real per-call spend, so it is billed from that instead of the list-price estimate.
+
                 var reportedCost = UsagePricing.Number(m["total_cost_usd"]);
-                var reported = reportedCost is > 0 || (IsGrok && reportedCost is not null);
+                var reported = reportedCost is > 0 || ((IsGemini) && reportedCost is not null);
                 var turnCost = reported
                     ? Math.Max(0, _cost - costBefore)
-                    : IsGrok ? 0 : CompletedEstimate(tu);
-                if (!IsGrok) _estCost += turnCost;
+                    : IsGemini ? 0 : CompletedEstimate(tu);
+                _estCost += turnCost;
                 Raise(nameof(CostText));
-                LogTurnUsage(input, cacheWrite, cacheRead, output, turnCost, reported: reported, model: UsageModel);
+                if (IsGemini && m["modelUsage"] is JsonObject geminiModels && geminiModels.Count > 0)
+                {
+                    foreach (var (actualModel, values) in geminiModels)
+                        LogTurnUsage(DoubleOrZero(values?["inputTokens"]), 0, DoubleOrZero(values?["cacheReadInputTokens"]),
+                            DoubleOrZero(values?["outputTokens"]), 0, reported: true, model: actualModel);
+                }
+                else LogTurnUsage(input, cacheWrite, cacheRead, output, turnCost, reported: reported, model: UsageModel);
             }
         }
         else if (!committedKimiSnapshot)
@@ -4264,7 +4201,9 @@ public sealed partial class ChatViewModel : Observable
             if (authText.Contains("not logged in") || authText.Contains("not signed in")
                 || authText.Contains("sign in") || authText.Contains("unauthor") || authText.Contains("401"))
                 AuthNeeded = true;
-            var queueNote = WaitingForLimitReset
+            var queueNote = WaitingForBridgeRetry
+                ? " This advanced-bridge agent will continue automatically in 1 minute. Press Stop to cancel the retry."
+                : WaitingForLimitReset
                 ? " VibeCode will continue when this account's allowance returns. Turn off Continue after limit resets in General settings to cancel automatic recovery."
                 : ExtendedQueuePausedForUsage
                     ? " The active chunk was kept at the front of the extended queue; use Resume queue when allowance returns."
@@ -4307,13 +4246,13 @@ public sealed partial class ChatViewModel : Observable
         double cost = 0;
         var pricedAny = false;
         if (byModel is not null)
-        foreach (var (model, node) in byModel)
-        {
-            var usage = UsageOf(node);
-            if (!usage.HasTokens) continue;
-            cost += ModelPricing.TurnCost(model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output);
-            pricedAny = true;
-        }
+            foreach (var (model, node) in byModel)
+            {
+                var usage = UsageOf(node);
+                if (!usage.HasTokens) continue;
+                cost += ModelPricing.TurnCost(model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output);
+                pricedAny = true;
+            }
         return pricedAny
             ? cost
             : ModelPricing.TurnCost(fallbackModel, fallback.Input, fallback.CacheWrite, fallback.CacheRead, fallback.Output);
@@ -4419,7 +4358,6 @@ public sealed partial class ChatViewModel : Observable
                 // A Workflow returns the moment it is launched, and its result is the only place the path to its
                 // subagents' transcripts is ever given to us.
                 if (!tool.IsError) NoteWorkflowTranscriptDir(tool);
-                // Grok spawn_subagent (and Claude Agent/Task) finish as ordinary tool_results — settle the roster row.
                 if (ToolItem.IsSubagentSpawnTool(tool.Name))
                 {
                     var agent = Subagents.FirstOrDefault(a =>
@@ -4477,7 +4415,7 @@ public sealed partial class ChatViewModel : Observable
         }
         if (live && text.Contains("Not logged in", StringComparison.OrdinalIgnoreCase)) AuthNeeded = true;
         // Local live echoes returned above because Send already recorded them. Any remaining top-level user message is
-        // restored history (or came from another client), so include it for resumed Claude, Codex, Kimi, and Grok chats too.
+        // restored history (or came from another client), so include it for resumed Claude, Codex, Kimi, and Gemini chats too.
         if (parent is null && subagentThreadId is null) _promptHistory.Record(shown);
         AppendToContainer(Container(parent, subagentThreadId), new UserItem
         {
@@ -4509,54 +4447,56 @@ public sealed partial class ChatViewModel : Observable
             switch (bt)
             {
                 case "text":
-                {
-                    var text = block["text"]?.GetValue<string>() ?? "";
-                    if (live && text.Contains("Not logged in", StringComparison.OrdinalIgnoreCase)) AuthNeeded = true;
-                    if (TakeStreamed<TextItem>(streamed) is { } ti) { ti.Text = text; ti.Streaming = false; RefreshOrbQuiet(); }
-                    else if (!string.IsNullOrWhiteSpace(text)) container.Add(new TextItem { Text = text });
-                    break;
-                }
-                case "thinking" or "redacted_thinking":
-                {
-                    // Prefer the finished block's thinking text when present. When display is "omitted" (or the
-                    // harness redacts), the final block has an empty thinking field + signature only — do NOT
-                    // overwrite deltas we already streamed, or every "Thought process" card goes blank.
-                    var text = block["thinking"]?.GetValue<string>();
-                    if (TakeStreamed<ThinkingItem>(streamed) is { } th)
                     {
-                        if (!string.IsNullOrEmpty(text)) th.Text = text;
-                        else if (bt == "redacted_thinking" && string.IsNullOrEmpty(th.Text))
-                            th.Text = "(redacted)";
-                        th.Streaming = false;
+                        var text = block["text"]?.GetValue<string>() ?? "";
+                        if (!string.IsNullOrWhiteSpace(subagentThreadId))
+                            EnsureSubagent(subagentThreadId!).ReconcileReportedResult(text);
+                        if (live && text.Contains("Not logged in", StringComparison.OrdinalIgnoreCase)) AuthNeeded = true;
+                        if (TakeStreamed<TextItem>(streamed) is { } ti) { ti.Text = text; ti.Streaming = false; RefreshOrbQuiet(); }
+                        else if (!string.IsNullOrWhiteSpace(text)) container.Add(new TextItem { Text = text });
+                        break;
                     }
-                    else if (!string.IsNullOrEmpty(text)) AddDisplayItem(container, new ThinkingItem { Text = text });
-                    else if (bt == "redacted_thinking") AddDisplayItem(container, new ThinkingItem { Text = "(redacted)" });
-                    // else: signature-only / restored transcript with no plaintext — skip blank cards.
-                    break;
-                }
+                case "thinking" or "redacted_thinking":
+                    {
+                        // Prefer the finished block's thinking text when present. When display is "omitted" (or the
+                        // harness redacts), the final block has an empty thinking field + signature only — do NOT
+                        // overwrite deltas we already streamed, or every "Thought process" card goes blank.
+                        var text = block["thinking"]?.GetValue<string>();
+                        if (TakeStreamed<ThinkingItem>(streamed) is { } th)
+                        {
+                            if (!string.IsNullOrEmpty(text)) th.Text = text;
+                            else if (bt == "redacted_thinking" && string.IsNullOrEmpty(th.Text))
+                                th.Text = "(redacted)";
+                            th.Streaming = false;
+                        }
+                        else if (!string.IsNullOrEmpty(text)) AddDisplayItem(container, new ThinkingItem { Text = text });
+                        else if (bt == "redacted_thinking") AddDisplayItem(container, new ThinkingItem { Text = "(redacted)" });
+                        // else: signature-only / restored transcript with no plaintext — skip blank cards.
+                        break;
+                    }
                 case "tool_use" or "server_tool_use" or "mcp_tool_use":
-                {
-                    var id = block["id"]?.GetValue<string>();
-                    var match = streamed?.OfType<ToolItem>().FirstOrDefault(t => id is null || t.Id == id);
-                    if (match is not null) streamed!.Remove(match);
-                    RegisterTool(container, block, match);
-                    break;
-                }
+                    {
+                        var id = block["id"]?.GetValue<string>();
+                        var match = streamed?.OfType<ToolItem>().FirstOrDefault(t => id is null || t.Id == id);
+                        if (match is not null) streamed!.Remove(match);
+                        RegisterTool(container, block, match);
+                        break;
+                    }
                 // Server-tool results (web search/fetch) come back in the assistant turn alongside the
                 // server_tool_use block; without this the tool card would spin forever.
                 case "web_search_tool_result" or "web_fetch_tool_result":
-                {
-                    if (block["tool_use_id"]?.GetValue<string>() is { } sid && _toolById.TryGetValue(sid, out var st))
                     {
-                        var (summary, err) = SummarizeServerTool(bt, block["content"]);
-                        st.Result = summary;
-                        st.IsError = err;
-                        st.Status = err ? "error" : "done";
-                        // Same policy as the tool_result path above: a failure colours the card, it does not
-                        // open it. One rule for every tool beats a table of which failures are worth unrolling.
+                        if (block["tool_use_id"]?.GetValue<string>() is { } sid && _toolById.TryGetValue(sid, out var st))
+                        {
+                            var (summary, err) = SummarizeServerTool(bt, block["content"]);
+                            st.Result = summary;
+                            st.IsError = err;
+                            st.Status = err ? "error" : "done";
+                            // Same policy as the tool_result path above: a failure colours the card, it does not
+                            // open it. One rule for every tool beats a table of which failures are worth unrolling.
+                        }
+                        break;
                     }
-                    break;
-                }
             }
         }
         // Only the main thread's requests describe THIS chat's context. A subagent runs its own, far smaller
@@ -5338,72 +5278,73 @@ public sealed partial class ChatViewModel : Observable
                 if (_retryNote is not null) { _retryNote = null; Raise(nameof(WorkingText)); Raise(nameof(WorkingStatus)); }
                 break;
             case "content_block_start":
-            {
-                if (!_streams.TryGetValue(key, out var st)) _streams[key] = st = new List<ItemVm?>();
-                var index = ev["index"]?.GetValue<int>() ?? st.Count;
-                while (st.Count <= index) st.Add(null);
-                var cb = ev["content_block"] as JsonObject;
-                var cbType = cb?["type"]?.GetValue<string>();
-                ItemVm? item = cbType switch
                 {
-                    "text" => new TextItem { Text = cb?["text"]?.GetValue<string>() ?? "", Streaming = true },
-                    // Seed any initial thinking text from content_block_start (mirrors text blocks). Empty is
-                    // normal at start; thinking_delta then fills it when display is summarized.
-                    "thinking" or "redacted_thinking" => new ThinkingItem
+                    if (!_streams.TryGetValue(key, out var st)) _streams[key] = st = new List<ItemVm?>();
+                    var index = ev["index"]?.GetValue<int>() ?? st.Count;
+                    while (st.Count <= index) st.Add(null);
+                    var cb = ev["content_block"] as JsonObject;
+                    var cbType = cb?["type"]?.GetValue<string>();
+                    ItemVm? item = cbType switch
                     {
-                        Text = cb?["thinking"]?.GetValue<string>() ?? "",
-                        Streaming = true,
-                    },
-                    "tool_use" or "server_tool_use" or "mcp_tool_use" => new ToolItem
-                    {
-                        Id = cb?["id"]?.GetValue<string>() ?? Guid.NewGuid().ToString(),
-                        Name = cb?["name"]?.GetValue<string>() ?? "?",
-                    },
-                    _ => null,
-                };
-                if (item is ToolItem tool) _toolById[tool.Id] = tool;
-                if (item is not null) AddDisplayItem(Container(parent, subagentThreadId), item);
-                st[index] = item;
-                break;
-            }
+                        "text" => new TextItem { Text = cb?["text"]?.GetValue<string>() ?? "", Streaming = true },
+                        // Seed any initial thinking text from content_block_start (mirrors text blocks). Empty is
+                        // normal at start; thinking_delta then fills it when display is summarized.
+                        "thinking" or "redacted_thinking" => new ThinkingItem
+                        {
+                            Text = cb?["thinking"]?.GetValue<string>() ?? "",
+                            Streaming = true,
+                        },
+                        "tool_use" or "server_tool_use" or "mcp_tool_use" => new ToolItem
+                        {
+                            Id = cb?["id"]?.GetValue<string>() ?? Guid.NewGuid().ToString(),
+                            Name = cb?["name"]?.GetValue<string>() ?? "?",
+                        },
+                        _ => null,
+                    };
+                    if (item is ToolItem tool) _toolById[tool.Id] = tool;
+                    if (item is not null) AddDisplayItem(Container(parent, subagentThreadId), item);
+                    st[index] = item;
+                    break;
+                }
             case "content_block_delta":
-            {
-                if (!_streams.TryGetValue(key, out var st)) break;
-                var index = ev["index"]?.GetValue<int>() ?? 0;
-                if (index >= st.Count) break;
-                var delta = ev["delta"] as JsonObject;
-                switch (delta?["type"]?.GetValue<string>())
                 {
-                    case "text_delta" when st[index] is TextItem ti:
+                    if (!_streams.TryGetValue(key, out var st)) break;
+                    var index = ev["index"]?.GetValue<int>() ?? 0;
+                    if (index >= st.Count) break;
+                    var delta = ev["delta"] as JsonObject;
+                    switch (delta?["type"]?.GetValue<string>())
                     {
-                        var chunk = delta["text"]?.GetValue<string>() ?? "";
-                        ti.Append(chunk);
-                        if (m["is_replay"]?.GetValue<bool>() != true) EstimateLiveOutput(key, chunk);
-                        break;
+                        case "text_delta" when st[index] is TextItem ti:
+                            {
+                                var chunk = delta["text"]?.GetValue<string>() ?? "";
+                                if (chunk.Length > 0 && m["is_replay"]?.GetValue<bool>() != true) RecordAssistantActivity();
+                                ti.Append(chunk);
+                                if (m["is_replay"]?.GetValue<bool>() != true) EstimateLiveOutput(key, chunk);
+                                break;
+                            }
+                        case "thinking_delta" when st[index] is ThinkingItem th:
+                            {
+                                // Omitted-display streams often send thinking:"" with estimated_tokens only — skip no-ops.
+                                var chunk = delta["thinking"]?.GetValue<string>();
+                                if (!string.IsNullOrEmpty(chunk)) th.Append(chunk);
+                                // Thinking is billed as output, so it counts toward the estimate exactly like text does.
+                                if (m["is_replay"]?.GetValue<bool>() != true) EstimateLiveOutput(key, chunk);
+                                break;
+                            }
                     }
-                    case "thinking_delta" when st[index] is ThinkingItem th:
-                    {
-                        // Omitted-display streams often send thinking:"" with estimated_tokens only — skip no-ops.
-                        var chunk = delta["thinking"]?.GetValue<string>();
-                        if (!string.IsNullOrEmpty(chunk)) th.Append(chunk);
-                        // Thinking is billed as output, so it counts toward the estimate exactly like text does.
-                        if (m["is_replay"]?.GetValue<bool>() != true) EstimateLiveOutput(key, chunk);
-                        break;
-                    }
+                    break;
                 }
-                break;
-            }
             case "content_block_stop":
-            {
-                if (!_streams.TryGetValue(key, out var st)) break;
-                var index = ev["index"]?.GetValue<int>() ?? 0;
-                if (index < st.Count)
                 {
-                    if (st[index] is TextItem ti) { ti.Streaming = false; RefreshOrbQuiet(); }
-                    if (st[index] is ThinkingItem th) th.Streaming = false;
+                    if (!_streams.TryGetValue(key, out var st)) break;
+                    var index = ev["index"]?.GetValue<int>() ?? 0;
+                    if (index < st.Count)
+                    {
+                        if (st[index] is TextItem ti) { ti.Streaming = false; RefreshOrbQuiet(); }
+                        if (st[index] is ThinkingItem th) th.Streaming = false;
+                    }
+                    break;
                 }
-                break;
-            }
         }
     }
 

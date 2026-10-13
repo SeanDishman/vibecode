@@ -150,6 +150,30 @@ public partial class CodeViewerWindow
         return true;
     }
 
+    /// <summary>The app is ending without being able to draw (its render thread failed), so no editor can ask about
+    /// unsaved work. Copy each unsaved buffer into the data folder instead and return where they went.</summary>
+    internal static IReadOnlyList<string> PreserveUnsavedEdits()
+    {
+        var kept = new List<string>();
+        var editors = Application.Current?.Windows.OfType<CodeViewerWindow>().ToArray() ?? [];
+        for (var index = 0; index < editors.Length; index++)
+        {
+            var editor = editors[index];
+            try
+            {
+                if (!editor.HasUnsavedChanges) continue;
+                var folder = Path.Combine(AppSettings.Dir, "recovered-edits");
+                Directory.CreateDirectory(folder);
+                var name = Path.GetFileName(editor._editPath);
+                var copy = Path.Combine(folder, $"{DateTime.Now:yyyyMMdd-HHmmss}-{index + 1}-{(string.IsNullOrEmpty(name) ? "unsaved.txt" : name)}");
+                File.WriteAllText(copy, editor.Editor.Text);
+                kept.Add($"{copy}  (was {editor._editPath})");
+            }
+            catch { /* best effort: a copy that cannot be written loses no more than the failure itself would */ }
+        }
+        return kept;
+    }
+
     private void ShowEditorError(string title, Exception error)
     {
         FootMode.Text = title + ": " + error.Message;

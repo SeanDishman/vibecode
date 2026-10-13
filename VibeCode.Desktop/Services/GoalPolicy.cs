@@ -30,15 +30,21 @@ public static class GoalPolicy
     public static string TurnContext(ChatGoal goal) =>
         "[VIBECODE ACTIVE GOAL]\n"
         + "The user set this goal for this chat (JSON string): " + JsonSerializer.Serialize(goal.Text)
-        + "\nWork toward it while respecting the user's latest instructions. The IDE will ask whether "
-        + "it is finished after a normal turn ends. Do not treat a turn ending as proof that the goal is complete."
+        + "\nWork toward it while respecting the user's latest instructions. Report the goal's status "
+        + "in this turn when it is finished or needs user input; do not wait for a separate goal check. "
+        + "Do not treat a turn ending as proof that the goal is complete."
+        + StatusInstructions(goal)
         + "\n[/VIBECODE ACTIVE GOAL]";
 
     public static string BuildCheck(ChatGoal goal) => CheckGoalPrefix + JsonSerializer.Serialize(goal.Text)
         + "\nDid you finish this user's goal?"
         + "\nReview the actual work and verification before answering. If the goal is unfinished, "
         + "continue doing the remaining work now; another normal stop will trigger this check again. "
-        + "If the goal is fully achieved, briefly report the result and end with this exact standalone line:\n"
+        + StatusInstructions(goal);
+
+    private static string StatusInstructions(ChatGoal goal) =>
+        "\nIf the goal is fully achieved, briefly report the result and end with this exact standalone line "
+        + "(plain text, without Markdown formatting):\n"
         + CompleteMarker(goal)
         + "\nIf you cannot continue without a user answer, approval, credentials, or an external change, "
         + "explain what is needed and end with this exact standalone line instead:\n" + WaitingMarker(goal)
@@ -55,9 +61,35 @@ public static class GoalPolicy
         return !string.IsNullOrWhiteSpace(goal);
     }
 
-    public static bool EndsWithMarker(string reply, string marker)
+    public static bool EndsWithMarker(string reply, string marker) => TrailingMarkerStart(reply, marker) >= 0;
+
+    public static string StripTrailingMarker(string reply, string marker) =>
+        TrailingMarkerStart(reply, marker) is var start && start >= 0 ? reply[..start].TrimEnd() : reply;
+
+    private static int TrailingMarkerStart(string reply, string marker)
     {
-        var lines = reply.TrimEnd().Split('\n');
-        return lines.Length > 0 && lines[^1].Trim() == marker;
+        var text = reply.AsSpan().TrimEnd();
+        var lastLine = text.LastIndexOf('\n') + 1;
+        if (IsMarkerLine(text[lastLine..], marker)) return lastLine;
+
+        // Models sometimes format the protocol as code. Only accept a terminal, single-line fenced block;
+        // a marker quoted earlier in an explanation must not settle the goal.
+        if (!text[lastLine..].Trim().SequenceEqual("```")) return -1;
+        text = text[..lastLine].TrimEnd();
+        var markerLine = text.LastIndexOf('\n') + 1;
+        if (!IsMarkerLine(text[markerLine..], marker)) return -1;
+        text = text[..markerLine].TrimEnd();
+        var fenceLine = text.LastIndexOf('\n') + 1;
+        var fence = text[fenceLine..].Trim();
+        return fence.SequenceEqual("```") || fence.SequenceEqual("```text") || fence.SequenceEqual("```plaintext")
+            ? fenceLine : -1;
+    }
+
+    private static bool IsMarkerLine(ReadOnlySpan<char> line, string marker)
+    {
+        line = line.Trim();
+        while (line.Length >= 2 && (line[0] is '`' or '*' or '_') && line[^1] == line[0])
+            line = line[1..^1].Trim();
+        return line.SequenceEqual(marker);
     }
 }

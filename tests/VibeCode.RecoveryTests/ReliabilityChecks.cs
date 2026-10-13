@@ -128,7 +128,7 @@ internal static partial class Program
         Check("native compaction failure releases working state and reports the error", !failed.IsWorking && !failed.WaitingForLimitReset
             && failed.Items.OfType<BannerItem>().Any(b => b.Text.Contains("Native compaction request failed")));
         failed.Close();
-        foreach (var provider in new[] { "kimi", "grok", "glm" })
+        foreach (var provider in new[] { "kimi", "glm" })
         {
             var (chat, _) = NewChat("unsupported-compact-" + provider, provider);
             Field(chat, "_session", new NonCompactSession());
@@ -160,10 +160,13 @@ internal static partial class Program
         {
             Check("Codex recovery reads allowance through its own session", method == "account/rateLimits/read");
             var used = ++reads == 1 ? 25 : 100;
-            return Task.FromResult<JsonNode?>(new JsonObject { ["result"] = new JsonObject
+            return Task.FromResult<JsonNode?>(new JsonObject
             {
-                ["rateLimits"] = new JsonObject { ["limitId"] = "codex", ["primary"] = new JsonObject { ["usedPercent"] = used } },
-            } });
+                ["result"] = new JsonObject
+                {
+                    ["rateLimits"] = new JsonObject { ["limitId"] = "codex", ["primary"] = new JsonObject { ["usedPercent"] = used } },
+                }
+            });
         }));
         var first = (Task<UsageRecoverySnapshot>)Call(codex, "ReadRecoveryUsageAsync")!;
         Pump(() => first.IsCompleted);
@@ -188,17 +191,30 @@ internal static partial class Program
             Check("GLM recovery queries only the quota monitor", request.Method == HttpMethod.Get && request.RequestUri!.ToString() == GlmUsageService.QuotaUrl);
             if (requests.Count == 3) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             var percent = key == "coding-fixture-key-one" ? 100 : 20;
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(new JsonObject
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                ["success"] = true, ["code"] = 200, ["data"] = new JsonObject { ["limits"] = new JsonArray(
+                Content = new StringContent(new JsonObject
+                {
+                    ["success"] = true,
+                    ["code"] = 200,
+                    ["data"] = new JsonObject
+                    {
+                        ["limits"] = new JsonArray(
                     new JsonObject { ["type"] = "CREDIT_LIMIT", ["unit"] = 3, ["number"] = 5, ["percentage"] = percent },
-                    new JsonObject { ["type"] = "TIME_LIMIT", ["percentage"] = 100 }) },
-            }.ToJsonString()) };
+                    new JsonObject { ["type"] = "TIME_LIMIT", ["percentage"] = 100 })
+                    },
+                }.ToJsonString())
+            };
         }));
         var service = GlmUsageService.Instance;
         var originalHttp = ReadField<HttpClient>(service, "_http"); Field(service, "_http", http);
-        using var session = new GlmSession(new GlmSessionOptions { Cwd = Root, Backend = GlmPreset.ZaiCodingPlan,
-            ApiKeys = ["coding-fixture-key-one", "coding-fixture-key-two"], ApiKeyAccountIds = [first.Id, rotated.Id] });
+        using var session = new GlmSession(new GlmSessionOptions
+        {
+            Cwd = Root,
+            Backend = GlmPreset.ZaiCodingPlan,
+            ApiKeys = ["coding-fixture-key-one", "coding-fixture-key-two"],
+            ApiKeyAccountIds = [first.Id, rotated.Id]
+        });
         UsageRecoverySnapshot Read(string? account = null)
         {
             var method = typeof(UsageLimitRecovery).GetMethod("ProbeAsync", Flags)!;

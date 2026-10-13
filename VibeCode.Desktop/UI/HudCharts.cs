@@ -254,13 +254,7 @@ public sealed class HourlyThroughput : FrameworkElement
                 ? 1
                 : HudMotion.Lerp(_from.GetValueOrDefault(hour.Hour), total, morph) / total;
 
-            if (Plot == ThroughputPlot.Line)
-            {
-                // The area itself is already drawn; all this loop still owns here is the x-axis labelling below.
-            }
-            // An hour with nothing in it still gets a tick on the baseline, so idle time is visible as idle
-            // rather than as a gap the eye reads straight through.
-            else if (total <= 0)
+            if (!(Plot == ThroughputPlot.Line)) if (total <= 0)
             {
                 dc.DrawRectangle(ink.Axis, null, new Rect(left, plot.Bottom - 2, barWidth, 2));
             }

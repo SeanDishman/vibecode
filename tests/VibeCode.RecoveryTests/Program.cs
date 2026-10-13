@@ -22,7 +22,7 @@ internal static partial class Program
     private static int Checks;
 
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
         Root = Path.Combine(Environment.CurrentDirectory, "artifacts", "compact-recovery", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Root);
@@ -34,13 +34,29 @@ internal static partial class Program
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         AppSettings.Current.AgentMemoryEnabled = false;
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.McpServers.Clear();
         Field(UsageService.Instance, "_lastFetch", DateTime.UtcNow);
         try
         {
+            if (args.Contains("--swarm-controls"))
+            {
+                SwarmControlsChecks();
+                AppSettings.Current.ContinueAfterLimitResets = true;
+                SettingsCheck();
+                SubagentOrbChecks();
+                Console.WriteLine($"PASS: {Checks} swarm controls and subagent activity checks. Artifacts: {Root}");
+                return 0;
+            }
+            if (args.Contains("--bridge-retry-timer"))
+            {
+                BridgeErrorRetryTimerChecks();
+                Console.WriteLine($"PASS: {Checks} real one-minute bridge retry checks. Artifacts: {Root}");
+                return 0;
+            }
             PolicyChecks();
+            SwarmControlsChecks();
+            BridgeErrorRecoveryChecks();
+            CodexCreditChecks();
             NativeCompactionChecks();
             ChatChecks();
             ClaudeLimitQueueChecks();
@@ -138,33 +154,33 @@ internal static partial class Program
     private static void ChatChecks()
     {
         AppSettings.Current.ContinueAfterLimitResets = true;
-        foreach (var provider in new[] { "claude", "codex", "kimi", "grok", "glm" })
-        foreach (var role in new[] { "chat", "bridge", "advanced-worker", "advanced-orchestrator" })
-        {
-            var (chat, session) = NewChat(provider + "-" + role, provider);
-            if (role != "chat") chat.BridgeLabel = "Worker 2";
-            if (role.StartsWith("advanced-"))
+        foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
+            foreach (var role in new[] { "chat", "bridge", "advanced-worker", "advanced-orchestrator" })
             {
-                Field(chat, "_bridgeSessionInitialized", true);
-                Call(chat, "ApplyBridgeConfiguration", new BridgeAgentConfiguration(provider, null, null));
+                var (chat, session) = NewChat(provider + "-" + role, provider);
+                if (role != "chat") chat.BridgeLabel = "Worker 2";
+                if (role.StartsWith("advanced-"))
+                {
+                    Field(chat, "_bridgeSessionInitialized", true);
+                    Call(chat, "ApplyBridgeConfiguration", new BridgeAgentConfiguration(provider, null, null));
+                }
+                if (role == "advanced-orchestrator")
+                {
+                    chat.IsBridgeManager = true;
+                    Property(chat, "BridgeCoordinatesOnly", true);
+                }
+                SetProbe(chat, () => Task.FromResult(new UsageRecoverySnapshot(false, DateTimeOffset.Now.AddHours(1))));
+                End(chat, Error("You've reached your usage limit"));
+                Check(provider + " " + role + " schedules recovery", chat.WaitingForLimitReset);
+                CheckRecovery(chat);
+                Check(provider + " " + role + " stays parked while exhausted", session.Sent.Count == 0);
+                Field(chat, "_limitRecoveryEarliestResume", DateTimeOffset.MinValue);
+                SetProbe(chat, () => Task.FromResult(new UsageRecoverySnapshot(true)));
+                CheckRecovery(chat);
+                Pump(() => session.Sent.Count == 1);
+                CheckRecovery(chat);
+                Check(provider + " " + role + " continues once with existing context", session.Sent.Count == 1 && session.Sent[0].Contains("Continue the interrupted task"));
             }
-            if (role == "advanced-orchestrator")
-            {
-                chat.IsBridgeManager = true;
-                Property(chat, "BridgeCoordinatesOnly", true);
-            }
-            SetProbe(chat, () => Task.FromResult(new UsageRecoverySnapshot(false, DateTimeOffset.Now.AddHours(1))));
-            End(chat, Error("You've reached your usage limit"));
-            Check(provider + " " + role + " schedules recovery", chat.WaitingForLimitReset);
-            CheckRecovery(chat);
-            Check(provider + " " + role + " stays parked while exhausted", session.Sent.Count == 0);
-            Field(chat, "_limitRecoveryEarliestResume", DateTimeOffset.MinValue);
-            SetProbe(chat, () => Task.FromResult(new UsageRecoverySnapshot(true)));
-            CheckRecovery(chat);
-            Pump(() => session.Sent.Count == 1);
-            CheckRecovery(chat);
-            Check(provider + " " + role + " continues once with existing context", session.Sent.Count == 1 && session.Sent[0].Contains("Continue the interrupted task"));
-        }
 
         var (disabled, ds) = NewChat("disabled");
         AppSettings.Current.ContinueAfterLimitResets = false;
@@ -302,6 +318,7 @@ internal static partial class Program
             bitmap.Render(panel);
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using var output = File.Create(Path.Combine(Root, "settings-general.png")); encoder.Save(output);
+            SwarmSettingsControls(window);
         }
         finally { window.Close(); }
     }

@@ -138,7 +138,7 @@ public sealed partial class ChatViewModel
             CancelLimitRecovery(resetAttempts: false);
             if (compact is not null) StartManualCompaction(compact, null, recovering: true);
             else if (ExtendedQueuePausedForUsage) ResumeExtendedQueue();
-            else SendNow("Continue the interrupted task from where you stopped after the usage limit. Keep completed work and do not repeat actions that already succeeded.", null);
+            else SendAutomaticContinuation("Continue the interrupted task from where you stopped after the usage limit. Keep completed work and do not repeat actions that already succeeded.");
             _limitRecoveryAttempts = attempts;
             return;
         }

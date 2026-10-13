@@ -25,6 +25,7 @@ public static class RadarTiles
     private const string RadarLayer = "conus_bref_qcd";
 
     public static string CapabilitiesUrl => $"{Wms}?service=WMS&version=1.3.0&request=GetCapabilities";
+    internal static bool IsRadar(string url) => url.StartsWith(Wms, StringComparison.Ordinal);
 
     // Esri tile services address tiles as /{z}/{row}/{col} - note row (y) comes before column (x).
     public static string Basemap(int z, int x, int y) =>
@@ -62,10 +63,17 @@ public sealed class RadarMap : FrameworkElement
 
     private static readonly HttpClient Http = CreateHttp();
     private static readonly ConcurrentDictionary<string, ImageSource> Cache = new();
-    private static readonly ConcurrentDictionary<string, byte> Pending = new();
-    private static readonly ConcurrentDictionary<string, int> Failures = new();
-    // Higher concurrency fills the first viewport / zoom step faster without hammering NOAA/Esri.
-    private static readonly SemaphoreSlim Gate = new(10);
+    private readonly ConcurrentDictionary<string, CancellationToken> Pending = new();
+    private readonly ConcurrentDictionary<string, int> Failures = new();
+    // Visible weather must not wait behind speculative basemap/label downloads.
+    private static readonly SemaphoreSlim MapGate = new(6);
+    private static readonly SemaphoreSlim RadarGate = new(4);
+    private CancellationTokenSource _loads = new();
+    private CancellationTokenSource _radarLoads = new();
+    private (int Level, int X0, int X1, int Y0, int Y1, string? Time, bool Visible)? _radarView;
+    private bool _unloaded;
+    internal Func<string, CancellationToken, Task<byte[]>>? TileFetcherFixture { get; set; }
+    public event EventHandler? RadarLoadStateChanged;
 
     private static HttpClient CreateHttp()
     {
@@ -91,7 +99,14 @@ public sealed class RadarMap : FrameworkElement
         Cursor = Cursors.SizeAll;
         // Fant scales parent-tile fallbacks more cleanly than nearest/linear when zooming hard.
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.Fant);
-        Loaded += (_, _) => QueuePrefetch();
+        Loaded += (_, _) =>
+        {
+            _unloaded = false;
+            if (_loads.IsCancellationRequested) { _loads.Dispose(); _loads = new(); _radarView = null; }
+            QueuePrefetch();
+            InvalidateVisual();
+        };
+        Unloaded += (_, _) => { _unloaded = true; _loads.Cancel(); _radarLoads.Cancel(); };
     }
 
     // ---- dependency properties ----
@@ -260,26 +275,38 @@ public sealed class RadarMap : FrameworkElement
     private ImageSource? RequestTile(string url)
     {
         if (TryGetCached(url, out var img)) return img;
+        if (_unloaded) return null;
         if (Failures.TryGetValue(url, out var fails) && fails >= 3) return null;
-        if (Pending.TryAdd(url, 0)) _ = FetchAsync(url);
+        var radar = RadarTiles.IsRadar(url);
+        if (radar) EnsureRadarView();
+        var token = radar ? _radarLoads.Token : _loads.Token;
+        if (Pending.TryGetValue(url, out var old) && old.IsCancellationRequested)
+            Pending.TryRemove(new KeyValuePair<string, CancellationToken>(url, old));
+        if (Pending.TryAdd(url, token)) _ = FetchAsync(url, radar, token);
         return null;
     }
 
-    private async Task FetchAsync(string url)
+    private async Task FetchAsync(string url, bool radar, CancellationToken token)
     {
-        await Gate.WaitAsync();
+        var gate = radar ? RadarGate : MapGate;
+        var entered = false;
         try
         {
-            var bytes = await Http.GetByteArrayAsync(url);
+            await gate.WaitAsync(token).ConfigureAwait(false);
+            entered = true;
+            var bytes = await (TileFetcherFixture?.Invoke(url, token) ?? Http.GetByteArrayAsync(url, token)).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            using var stream = new MemoryStream(bytes);
             var bmp = new BitmapImage();
             bmp.BeginInit();
             bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.StreamSource = new MemoryStream(bytes);
+            bmp.StreamSource = stream;
             bmp.EndInit();
             bmp.Freeze();   // required: the decode happens off the UI thread
             Cache[url] = bmp;
             Failures.TryRemove(url, out _);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch
         {
             // A tile can 404 simply because the mosaic has no coverage there; give up after a few tries so a
@@ -288,10 +315,72 @@ public sealed class RadarMap : FrameworkElement
         }
         finally
         {
-            Gate.Release();
-            Pending.TryRemove(url, out _);
-            await Dispatcher.InvokeAsync(InvalidateVisual, System.Windows.Threading.DispatcherPriority.Background);
+            if (entered) gate.Release();
+            Pending.TryRemove(new KeyValuePair<string, CancellationToken>(url, token));
+            if (!token.IsCancellationRequested && !Dispatcher.HasShutdownStarted)
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (_unloaded) return;
+                    InvalidateVisual();
+                    if (radar) RadarLoadStateChanged?.Invoke(this, EventArgs.Empty);
+                }, System.Windows.Threading.DispatcherPriority.Background);
         }
+    }
+
+    private (int Level, int X0, int X1, int Y0, int Y1) VisibleTiles()
+    {
+        var (level, scale) = TileLevel();
+        var cx = LonToX(CenterLon, level); var cy = LatToY(CenterLat, level);
+        return (level, (int)Math.Floor((cx - ActualWidth / 2 / scale) / RadarTiles.TileSize),
+            (int)Math.Floor((cx + ActualWidth / 2 / scale) / RadarTiles.TileSize),
+            Math.Max(0, (int)Math.Floor((cy - ActualHeight / 2 / scale) / RadarTiles.TileSize)),
+            Math.Min((1 << level) - 1, (int)Math.Floor((cy + ActualHeight / 2 / scale) / RadarTiles.TileSize)));
+    }
+
+    private void EnsureRadarView()
+    {
+        var view = VisibleTiles();
+        var key = (view.Level, view.X0, view.X1, view.Y0, view.Y1, FrameTime, ShowRadar);
+        if (_radarView == key) return;
+        _radarLoads.Cancel(); _radarLoads.Dispose();
+        _radarLoads = CancellationTokenSource.CreateLinkedTokenSource(_loads.Token);
+        _radarView = key;
+        RadarLoadStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private IEnumerable<string> VisibleRadarUrls(string? time)
+    {
+        if (ActualWidth < 2 || ActualHeight < 2) yield break;
+        var view = VisibleTiles(); var count = 1 << view.Level;
+        var cells = new List<(int X, int Y)>();
+        for (var y = view.Y0; y <= view.Y1; y++)
+            for (var x = view.X0; x <= view.X1; x++) cells.Add((x, y));
+        foreach (var cell in cells.OrderBy(c => Math.Abs(c.X - (view.X0 + view.X1) / 2.0) + Math.Abs(c.Y - (view.Y0 + view.Y1) / 2.0)))
+            yield return RadarTiles.Radar(view.Level, ((cell.X % count) + count) % count, cell.Y, time);
+    }
+
+    public bool IsRadarFrameReady => ActualWidth >= 2 && ActualHeight >= 2 && VisibleRadarUrls(FrameTime).All(Cache.ContainsKey);
+    public bool HasRadarFrameFailures => RadarFrameFailed(FrameTime);
+    public bool RadarFrameFailed(string? time) => VisibleRadarUrls(time).Any(url => Failures.TryGetValue(url, out var count) && count >= 3);
+
+    /// <summary>Only warm visible tiles. Playback keeps the current frame until the next one is complete.</summary>
+    public bool PrepareRadarFrame(string? time)
+    {
+        if (_unloaded || !ShowRadar || ActualWidth < 2 || ActualHeight < 2) return false;
+        EnsureRadarView();
+        var ready = true;
+        foreach (var url in VisibleRadarUrls(time)) ready &= RequestTile(url) is not null;
+        return ready;
+    }
+
+    public void RefreshRadar()
+    {
+        foreach (var url in Failures.Keys.Where(RadarTiles.IsRadar)) Failures.TryRemove(url, out _);
+        // Timestamped images are immutable; the unqualified latest image must be revalidated on refresh.
+        foreach (var url in Cache.Keys.Where(url => RadarTiles.IsRadar(url) && !url.Contains("&time="))) Cache.TryRemove(url, out _);
+        _radarView = null;
+        EnsureRadarView();
+        InvalidateVisual();
     }
 
     private enum TileDrawKind { Missing, Parent, Exact }
@@ -442,7 +531,7 @@ public sealed class RadarMap : FrameworkElement
 
     private void QueuePrefetch()
     {
-        if (_prefetchQueued || ActualWidth < 2 || ActualHeight < 2) return;
+        if (_unloaded || _prefetchQueued || ActualWidth < 2 || ActualHeight < 2) return;
         _prefetchQueued = true;
         Dispatcher.BeginInvoke(() =>
         {
@@ -452,12 +541,13 @@ public sealed class RadarMap : FrameworkElement
     }
 
     /// <summary>
-    /// Warm basemap / labels / radar for the current view, a 1-tile pad, coarser parents, and one zoom step in/out.
+    /// Warm the static basemap / labels for the current view, a 1-tile pad, parents, and one zoom step in/out.
+    /// Dynamic NOAA radar is requested only for visible cells; speculative WMS maps delay useful weather.
     /// Parents first so fallback has something to stretch during the next wheel flick.
     /// </summary>
     private void PrefetchAroundView()
     {
-        if (ActualWidth < 2 || ActualHeight < 2) return;
+        if (_unloaded || ActualWidth < 2 || ActualHeight < 2) return;
 
         var (level, scale) = TileLevel();
         var cx = LonToX(CenterLon, level);
@@ -494,7 +584,6 @@ public sealed class RadarMap : FrameworkElement
             var zy1 = y1 >> shift;
             Want(RadarTiles.Basemap, z, zx0, zx1, zy0, zy1);
             if (ShowLabels) Want(RadarTiles.Labels, z, zx0, zx1, zy0, zy1);
-            if (ShowRadar) Want((zz, x, y) => RadarTiles.Radar(zz, x, y, FrameTime), z, zx0, zx1, zy0, zy1);
         }
 
         // One step deeper (centre of the view only) so the next zoom-in already has a head start.
@@ -509,7 +598,6 @@ public sealed class RadarMap : FrameworkElement
             var zy1 = midY * 2 + 2;
             Want(RadarTiles.Basemap, z, zx0, zx1, zy0, zy1);
             if (ShowLabels) Want(RadarTiles.Labels, z, zx0, zx1, zy0, zy1);
-            if (ShowRadar) Want((zz, x, y) => RadarTiles.Radar(zz, x, y, FrameTime), z, zx0, zx1, zy0, zy1);
         }
     }
 
@@ -541,7 +629,10 @@ public sealed class RadarMap : FrameworkElement
 
         int basemapTotal = 0, basemapExact = 0;
 
-        void Pass(Func<int, int, int, string> url, double opacity, bool scoreBasemap)
+        EnsureRadarView();
+        if (ShowRadar) PrepareRadarFrame(FrameTime);
+
+        void Pass(Func<int, int, int, string> url, double opacity, bool scoreBasemap, bool radar = false)
         {
             if (opacity <= 0) return;
             if (opacity < 1) dc.PushOpacity(opacity);
@@ -550,7 +641,7 @@ public sealed class RadarMap : FrameworkElement
                 if (ty < 0 || ty >= count) continue;
                 for (var tx = x0; tx <= x1; tx++)
                 {
-                    var kind = DrawTile(dc, url, level, tx, ty, cx, cy, scale, tilePx, requestParents: true);
+                    var kind = DrawTile(dc, url, level, tx, ty, cx, cy, scale, tilePx, requestParents: !radar);
                     if (!scoreBasemap) continue;
                     basemapTotal++;
                     if (kind == TileDrawKind.Exact) basemapExact++;
@@ -561,7 +652,7 @@ public sealed class RadarMap : FrameworkElement
 
         Pass(RadarTiles.Basemap, 1.0, scoreBasemap: true);
         if (ShowRadar)
-            Pass((z, x, y) => RadarTiles.Radar(z, x, y, FrameTime), Math.Clamp(RadarOpacity, 0, 1), false);
+            Pass((z, x, y) => RadarTiles.Radar(z, x, y, FrameTime), Math.Clamp(RadarOpacity, 0, 1), false, radar: true);
         DrawSpcOutlook(dc);
         if (ShowLabels) Pass(RadarTiles.Labels, 0.9, false);
 
@@ -605,13 +696,13 @@ public sealed class RadarMap : FrameworkElement
             {
                 var geometry = new StreamGeometry { FillRule = FillRule.EvenOdd };
                 using (var context = geometry.Open())
-                foreach (var ring in polygon.Rings)
-                {
-                    if (ring.Count < 3) continue;
-                    context.BeginFigure(LatLonToScreen(ring[0].Lat, ring[0].Lon), isFilled: true, isClosed: true);
-                    context.PolyLineTo(ring.Skip(1).Select(point => LatLonToScreen(point.Lat, point.Lon)).ToList(),
-                        isStroked: true, isSmoothJoin: true);
-                }
+                    foreach (var ring in polygon.Rings)
+                    {
+                        if (ring.Count < 3) continue;
+                        context.BeginFigure(LatLonToScreen(ring[0].Lat, ring[0].Lon), isFilled: true, isClosed: true);
+                        context.PolyLineTo(ring.Skip(1).Select(point => LatLonToScreen(point.Lat, point.Lon)).ToList(),
+                            isStroked: true, isSmoothJoin: true);
+                    }
                 geometry.Freeze();
                 dc.DrawGeometry(fill, pen, geometry);
             }

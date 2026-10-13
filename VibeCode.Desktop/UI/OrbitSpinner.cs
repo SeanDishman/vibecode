@@ -80,9 +80,17 @@ public sealed partial class OrbitSpinner : FrameworkElement
         // Purely decorative, and it sits inside a transcript people select text in: never take the mouse.
         IsHitTestVisible = false;
         SetResourceReference(PreferredStyleProperty, ThinkingOrbStyles.ResourceKey);
-        Loaded += (_, _) => Sync();
+        Loaded += (_, _) =>
+        {
+            SystemParameters.StaticPropertyChanged += OnSystemMotionChanged;
+            Sync();
+        };
         IsVisibleChanged += (_, _) => Sync();
-        Unloaded += (_, _) => StopClock();
+        Unloaded += (_, _) =>
+        {
+            SystemParameters.StaticPropertyChanged -= OnSystemMotionChanged;
+            StopClock();
+        };
     }
 
     /// <summary>Ink for the mark. Bind it to a theme brush (<c>{DynamicResource Accent}</c>) rather than a
@@ -112,10 +120,19 @@ public sealed partial class OrbitSpinner : FrameworkElement
     private static void OnClockChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) =>
         ((OrbitSpinner)d).Sync(restart: true);
 
+    private void OnSystemMotionChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(SystemParameters.ClientAreaAnimation)) return;
+        if (Dispatcher.CheckAccess()) Sync();
+        else Dispatcher.BeginInvoke(new Action(() => Sync()));
+    }
+
     /// <summary>Start or stop the one clock to match "should be spinning and is actually on screen".</summary>
     private void Sync(bool restart = false)
     {
-        var run = Spin && IsLoaded && IsVisible && Period > TimeSpan.Zero;
+        var motionAllowed = EffectiveStyle is not (ThinkingOrbStyle.Helix or ThinkingOrbStyle.Knot)
+            || SystemParameters.ClientAreaAnimation;
+        var run = Spin && IsLoaded && IsVisible && Period > TimeSpan.Zero && motionAllowed;
         if (run == _running && !restart) return;
         _running = run;
 
@@ -325,37 +342,6 @@ public sealed partial class OrbitSpinner : FrameworkElement
         (byte)Math.Round(from.R + (to.R - from.R) * t),
         (byte)Math.Round(from.G + (to.G - from.G) * t),
         (byte)Math.Round(from.B + (to.B - from.B) * t));
-
-    /// <summary>
-    /// The accent turned round the colour wheel by <paramref name="degrees"/>, keeping its lightness and
-    /// saturation. Neighbouring hues are what make a glow look like light rather than paint, and taking them
-    /// from the accent keeps a custom accent - or the CLI theme's green - in a family of its own.
-    /// </summary>
-    private static Color HueShift(Color colour, double degrees)
-    {
-        double r = colour.R / 255.0, g = colour.G / 255.0, b = colour.B / 255.0;
-        double max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
-        var light = (max + min) / 2;
-        if (max - min < 1e-6) return colour; // a grey has no hue to turn
-        var delta = max - min;
-        var sat = light > 0.5 ? delta / (2 - max - min) : delta / (max + min);
-        var hue = max == r ? (g - b) / delta + (g < b ? 6 : 0) : max == g ? (b - r) / delta + 2 : (r - g) / delta + 4;
-        hue = ((hue * 60 + degrees) % 360 + 360) % 360 / 360;
-
-        static double Channel(double p, double q, double t)
-        {
-            t = (t % 1 + 1) % 1;
-            if (t < 1 / 6.0) return p + (q - p) * 6 * t;
-            if (t < 1 / 2.0) return q;
-            if (t < 2 / 3.0) return p + (q - p) * (2 / 3.0 - t) * 6;
-            return p;
-        }
-
-        var hi = light < 0.5 ? light * (1 + sat) : light + sat - light * sat;
-        var lo = 2 * light - hi;
-        return Color.FromRgb((byte)Math.Round(Channel(lo, hi, hue + 1 / 3.0) * 255),
-            (byte)Math.Round(Channel(lo, hi, hue) * 255), (byte)Math.Round(Channel(lo, hi, hue - 1 / 3.0) * 255));
-    }
 
     /// <summary>WCAG relative luminance, which is what "how bright does this ink read" actually means.</summary>
     private static double Luminance(Color c) =>

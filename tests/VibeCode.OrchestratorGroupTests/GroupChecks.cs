@@ -49,7 +49,8 @@ internal static partial class Program
         catch (ArgumentException) { Check(label, true); }
     }
 
-    static (MainViewModel Vm, ChatViewModel Host) FreshGroups(bool secondary, string orchestratorProvider, string workerProvider, int[] allocation, bool dispatchWork = true)
+    static (MainViewModel Vm, ChatViewModel Host) FreshGroups(bool secondary, string orchestratorProvider, string workerProvider, int[] allocation, bool dispatchWork = true,
+        Action<MainViewModel, ChatViewModel, VibeCode.MainWindow>? centralStarted = null)
     {
         AppSettings.Current.BridgeOrchestratorCount = 1;
         AppSettings.Current.BridgeOrchestratorWorkerCounts = null;
@@ -90,6 +91,7 @@ internal static partial class Program
             panes.Count == allocation.Length + allocation.Sum() && panes.Where(p => !p.IsBridgeManager).All(p => managers.Any(m => m.BridgeAgentId == p.BridgeCoordinatorAgentId)));
         Check(label + " central planner starts before either permanent assignment", managers.All(m => !m.Items.OfType<UserItem>().Any()) &&
             Tool(managers[0], "bridge_list_tasks")["central_orchestrator"]?["state"]?.ToString() == "planning");
+        centralStarted?.Invoke(vm, managers[0], shell);
         Pump(() => panes.All(p => p.Status == "idle" && p.SessionId is not null) && managers.All(p => UserRequests(p).Any()));
         Check(label + " one selected terminal across all groups", panes.All(p => p.BridgeSingleTerminal) && panes.Count(p => p.BridgeTerminalSelected) == 1);
         for (var index = 0; index < managers.Length; index++)
@@ -109,9 +111,9 @@ internal static partial class Program
         var worker0 = panes.First(p => p.BridgeCoordinatorAgentId == managers[0].BridgeAgentId);
         RejectTool(label + " pre-agreement dispatch blocked", () => Dispatch(managers[0], worker0));
         RejectTool(label + " managers cannot replace central scope", () => Tool(managers[0], "bridge_agree_scope", new()
-            { ["plan_version"] = listing["plan_version"]!.DeepClone(), ["scope"] = "Take all groups' work" }));
+        { ["plan_version"] = listing["plan_version"]!.DeepClone(), ["scope"] = "Take all groups' work" }));
         RejectTool(label + " empty central worker plans do not unlock dispatch", () => Tool(managers[0], "bridge_set_plan", new()
-            { ["plan_version"] = listing["plan_version"]!.DeepClone(), ["steps"] = new JsonArray() }));
+        { ["plan_version"] = listing["plan_version"]!.DeepClone(), ["steps"] = new JsonArray() }));
         for (var index = 0; index < managers.Length; index++)
         {
             var manager = managers[index];
@@ -256,8 +258,12 @@ internal static partial class Program
             .Single(tool => tool.Name == name).Invoke(args ?? new());
     static object? Property(object obj, string name) => obj.GetType().GetProperty(name, F)!.GetValue(obj);
     static void Dispatch(ChatViewModel manager, ChatViewModel worker) => Tool(manager, "bridge_dispatch_task", new()
-        { ["recipient"] = worker.BridgeAgentId, ["task_id"] = "central-" + worker.BridgeAgentId,
-          ["task_name"] = "Verify owned area", ["message"] = "Verify your owned area and report evidence for the shared goal." });
+    {
+        ["recipient"] = worker.BridgeAgentId,
+        ["task_id"] = "central-" + worker.BridgeAgentId,
+        ["task_name"] = "Verify owned area",
+        ["message"] = "Verify your owned area and report evidence for the shared goal."
+    });
     static void RejectTool(string label, Action action)
     {
         try { action(); Check(label, false); } catch (StatusValidationException) { Check(label, true); }

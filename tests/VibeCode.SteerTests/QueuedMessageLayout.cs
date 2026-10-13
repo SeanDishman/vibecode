@@ -48,7 +48,8 @@ internal static class QueuedMessageLayout
             {
                 var host = new StackPanel
                 {
-                    Width = width, Background = (Brush)resources["Bg0"],
+                    Width = width,
+                    Background = (Brush)resources["Bg0"],
                     DataContext = new ComposerFixture(),
                 };
                 host.SetValue(TextBlock.FontFamilyProperty, resources["Ui"]);
@@ -83,7 +84,7 @@ internal static class QueuedMessageLayout
                 Save(host, Path.Combine(output, $"sent-message-{theme.ToLowerInvariant()}-{width}.png"), width == 240 ? 2 : 1);
 
                 var steer = actions.Single(b => b.Content is "Steer");
-                foreach (var state in new[] { Queued(codex: false), Queued(codex: true, extended: true), Queued(codex: true, swarm: true), Queued(codex: true, head: false) })
+                foreach (var state in new[] { Queued(codex: false), Queued(codex: true, extended: true), Queued(codex: true, head: false) })
                 {
                     card.DataContext = state;
                     Layout(host);
@@ -98,13 +99,17 @@ internal static class QueuedMessageLayout
         Console.WriteLine($"PASS: {_checks} message layout checks; actions live under sent messages, with clean chat and Bridge composers in both themes");
     }
 
-    private static object Queued(bool codex, bool extended = false, bool swarm = false, bool head = true, bool active = true) => new
+    private static object Queued(bool codex, bool extended = false, bool head = true, bool active = true) => new
     {
-        // Steer is offered by SupportsSteer (Codex, Claude, GLM, Grok); "codex: false" stands for a provider that only
+
         // queues, such as Kimi, whose ACP adapter refuses a prompt while a turn runs.
         Owner = new { IsCodex = codex, SupportsSteer = codex, CanSteer = active, CanSendQueuedNow = true },
-        IsQueueHead = head, Extended = extended, UseSwarm = swarm, HasText = true, IsGoalCommand = false,
-        Text = "Focus on the failing tests first.", QueueStatusText = "Queued · sends when the agent finishes",
+        IsQueueHead = head,
+        Extended = extended,
+        HasText = true,
+        IsGoalCommand = false,
+        Text = "Focus on the failing tests first.",
+        QueueStatusText = "Queued · sends when the agent finishes",
         QueueActionText = codex ? "Send message now" : "Send prompt now",
         QueueActionToolTip = "Stop the active turn if needed, then send all queued prompts together",
     };

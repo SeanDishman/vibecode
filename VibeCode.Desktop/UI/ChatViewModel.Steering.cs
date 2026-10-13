@@ -10,7 +10,7 @@ public sealed partial class ChatViewModel
 
     /// <summary>Providers whose running turn can take a message without being interrupted (see
     /// <see cref="ISteerableSession"/>). Kimi's ACP adapter rejects any prompt while a turn runs, so it only queues.</summary>
-    public bool SupportsSteer => IsCodex || IsClaude || IsGlm || IsGrok;
+    public bool SupportsSteer => IsCodex || IsClaude || IsGlm;
 
     /// <summary>A running root turn can accept guidance without starting another turn.</summary>
     public bool CanSteer => HasSteerableTurn && !_steerSubmitting && !_steerQueueHold;
@@ -21,7 +21,7 @@ public sealed partial class ChatViewModel
     /// <summary>Move a queued follow-up into the active turn, restoring its FIFO position if the provider rejects it.</summary>
     public async Task<bool> SteerQueuedAsync(QueuedItem queued)
     {
-        if (!CanSteer || queued.Extended || queued.UseSwarm
+        if (!CanSteer || queued.Extended
             || GoalPolicy.TryParseCommand(queued.Text, out _)
             || !_sendQueue.TryPeek(out var head) || !ReferenceEquals(head, queued)) return false;
         _steerQueueHold = true;
@@ -87,7 +87,10 @@ public sealed partial class ChatViewModel
         Raise(nameof(CanSendQueuedNow));
         try
         {
-            await session.SteerAsync(BuildContent(text, hasText, atts));
+            // A user can request workers mid-turn, including after lowering the limit in Settings.
+            var policy = SwarmPolicy.SessionRuntimeRule(Provider, SwarmMaxWorkers);
+            var wireText = string.IsNullOrWhiteSpace(policy) ? text : policy + "\n\n" + text;
+            await session.SteerAsync(BuildContent(wireText, !string.IsNullOrWhiteSpace(wireText), atts));
         }
         catch (Exception ex)
         {

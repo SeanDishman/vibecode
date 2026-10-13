@@ -12,8 +12,6 @@ internal static partial class Program
             throw new InvalidOperationException("Live test requires signed-in CODEX_HOME.");
         var settings = AppSettings.Current;
         settings.SecondBrainEnabled = false;
-        settings.AgentSwarmsEnabled = false;
-
         settings.DefaultProvider = "codex";
         settings.DefaultCodexModel = null;
         settings.McpServers.Clear();
@@ -66,7 +64,7 @@ internal static partial class Program
             && plan.Actions[0].Kind == "configure_mcp" && plan.Actions[0].Target == "docs");
         Check("live MCP setup uses the supplied URL and provider selection", settings.McpServers.Single().Url == "https://example.com/mcp"
             && settings.McpServers.Single().UseCodex && !settings.McpServers.Single().UseClaude
-            && !settings.McpServers.Single().UseKimi && !settings.McpServers.Single().UseGrok);
+            && !settings.McpServers.Single().UseKimi);
         var identity = settings.McpServers.Single().Id;
         Run("Disable the docs MCP server.", plan => plan.Actions.Count == 1 && plan.Actions[0].Kind == "configure_mcp");
         Check("live disable preserves the existing MCP endpoint", !settings.McpServers.Single().Enabled
@@ -90,7 +88,8 @@ internal static partial class Program
 
         void SaveReport() => File.WriteAllText(reportPath, JsonSerializer.Serialize(new
         {
-            selection, planning = "Real authenticated Jarvis model",
+            selection,
+            planning = "Real authenticated Jarvis model",
             execution = "Real isolated settings/MCP/chat hosts; Windows app/browser launches simulated at the OS boundary",
             scenarios = report,
         }, new JsonSerializerOptions { WriteIndented = true }));

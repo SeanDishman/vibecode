@@ -19,7 +19,7 @@ public sealed partial class ChatViewModel
     internal bool AcceptsPeerNotifications => _status is not ("closed" or "error") && _session is { HasExited: false }
         && PeerMailbox?.Store.Available != false;
 
-    /// <summary>Separate control queue: never calls Send/Interrupt, folds user text, consumes SwarmNextTurn,
+    /// <summary>Separate control queue: never calls Send/Interrupt, folds user text,
     /// or changes extended-queue pause/send-now flags. One notification can cover multiple arrivals.</summary>
     internal void QueuePeerNotification(BridgeMailboxStore.Message message, PeerMessageLimits limits,
         Action<int> onDispatch)

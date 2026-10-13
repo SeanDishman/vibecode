@@ -17,7 +17,7 @@ internal static partial class Program
             return chat;
         }
 
-        var providerNames = new[] { "claude", "codex", "kimi", "grok", "glm" };
+        var providerNames = new[] { "claude", "codex", "kimi", "glm" };
         foreach (var provider in providerNames)
         {
             var chat = Chat(provider);
@@ -25,7 +25,6 @@ internal static partial class Program
             var registration = (McpServerDefinition)Call(endpoint, "Registration")!;
             var name = provider switch
             {
-                "grok" => registration.RuntimeName + "__chat_set_title",
                 "glm" => "chat_set_title",
                 _ => "mcp__" + registration.RuntimeName + "__chat_set_title",
             };
@@ -35,8 +34,7 @@ internal static partial class Program
             Check(provider + ": first request dispatches", chat.Send("Repair login validation."));
             PumpUntil(() => Session(chat).Sent.Count == 1);
             var prompt = Session(chat).Sent[0];
-            Check(provider + ": first-turn instructions name the actual tool", prompt.Contains(name) && prompt.Contains("FIRST tool call")
-                && (provider != "grok" || prompt.Contains("search_tool") && prompt.Contains("use_tool") && !prompt.Contains("mcp__" + registration.RuntimeName)));
+            Check(provider + ": first-turn instructions name the actual tool", prompt.Contains(name) && prompt.Contains("FIRST tool call"));
             FinishWork(chat, "Login request received.");
 
             foreach (var mode in new[] { "default", "plan", "acceptEdits", "auto", "bypassPermissions" })
@@ -49,17 +47,16 @@ internal static partial class Program
                     && Session(chat).PermissionResponses.Last()["behavior"]!.ToString() == "allow" && !chat.Items.OfType<PermItem>().Any());
             }
 
-            if (provider is "kimi" or "grok")
+            if (provider is "kimi")
             {
                 foreach (var kind in new[] { "other", "edit", "execute" })
                     Check(provider + ": ACP retains exact identity with kind=" + kind,
                         (string)typeof(KimiSession).GetMethod("NormalizeToolName", Flags)!.Invoke(null, [name, kind, new JsonObject()])! == name);
-                var servers = provider == "kimi" ? McpCatalog.BuildKimiAcpServers([registration]) : McpCatalog.BuildGrokAcpServers([registration]);
+                var servers = McpCatalog.BuildKimiAcpServers([registration]);
                 Check(provider + ": ACP registers the naming server", servers.OfType<JsonObject>().Any(s => s["name"]!.ToString() == registration.RuntimeName));
             }
             if (provider == "codex")
                 Check("Codex launch preapproves chat_set_title", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides.Any(c => c.Contains("\"chat_set_title\" = { approval_mode = \"approve\" }")));
-            if (provider == "grok") VerifyGrokNamingPermission(chat, name);
             if (provider == "glm") VerifyGlmNamingAdapter(endpoint);
 
             var named = BridgeMcpClient.InvokeAsync((string)Property(endpoint, "PipeName")!, "chat_set_title", new() { ["title"] = "Repair login validation" });
@@ -93,34 +90,13 @@ internal static partial class Program
         }
     }
 
-    private static void VerifyGrokNamingPermission(ChatViewModel chat, string name)
-    {
-        chat.SetMode("plan");
-        var inline = new JsonObject { ["tool_name"] = name, ["tool_input"] = new JsonObject { ["title"] = "Repair login validation" } };
-        var before = Session(chat).PermissionResponses.Count;
-        Call(chat, "OnPermissionRequested", new PermissionRequest { RequestId = "grok-inline", ToolName = "use_tool", Input = inline });
-        Check("Grok's inline use_tool naming call is preapproved", Session(chat).PermissionResponses.Count == before + 1
-            && Session(chat).PermissionResponses.Last()["behavior"]!.ToString() == "allow");
-        foreach (var input in new[]
-        {
-            new JsonObject { ["tool_name"] = "untrusted__chat_set_title", ["tool_input"] = new JsonObject { ["title"] = "Other tool" } },
-            new JsonObject { ["tool_name"] = name, ["tool_input_file"] = "unknown.json" },
-            new JsonObject { ["tool_name"] = name, ["tool_input"] = new JsonObject { ["title"] = "Hidden target" }, ["file"] = "invocation.json" },
-        })
-        {
-            before = Session(chat).PermissionResponses.Count;
-            var cards = chat.Items.OfType<PermItem>().Count();
-            Call(chat, "OnPermissionRequested", new PermissionRequest { RequestId = Guid.NewGuid().ToString(), ToolName = "use_tool", Input = input });
-            Check("Grok does not grant other tools or file-backed invocations naming permission", Session(chat).PermissionResponses.Count == before
-                && chat.Items.OfType<PermItem>().Count() == cards + 1);
-        }
-    }
-
     private static void VerifyGlmNamingAdapter(object endpoint)
     {
         using var glm = new GlmSession(new GlmSessionOptions
         {
-            Cwd = Environment.CurrentDirectory, ApiKeys = ["offline-fixture"], PermissionMode = "plan",
+            Cwd = Environment.CurrentDirectory,
+            ApiKeys = ["offline-fixture"],
+            PermissionMode = "plan",
             BridgeMcpPipe = (string)Property(endpoint, "PipeName")!,
         });
         var schema = (JsonArray)Call(glm, "ToolSchema")!;

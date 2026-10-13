@@ -24,8 +24,6 @@ internal static class Program
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Path.Combine(root, "codex"));
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         AppSettings.Current.AgentMemoryEnabled = false;
-        AppSettings.Current.AgentSwarmsEnabled = false;
-
         AppSettings.Current.NotifyOnTurnEnd = AppSettings.Current.NotifyOnAwaitingInput = false;
         ChatViewModel? chat = null;
         Window? window = null;
@@ -36,9 +34,18 @@ internal static class Program
                 .CreateDelegate(typeof(Action<string>), chat);
             var list = new ListBox { ItemsSource = chat.Files, DataContext = chat };
             list.SetBinding(ListBox.SelectedItemProperty, new Binding(nameof(ChatViewModel.SelectedFile))
-                { Mode = BindingMode.TwoWay });
-            window = new Window { Content = list, Width = 400, Height = 240, Left = -32000, Top = -32000,
-                ShowInTaskbar = false, ShowActivated = false, WindowStyle = WindowStyle.None };
+            { Mode = BindingMode.TwoWay });
+            window = new Window
+            {
+                Content = list,
+                Width = 400,
+                Height = 240,
+                Left = -32000,
+                Top = -32000,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                WindowStyle = WindowStyle.None
+            };
             window.Show();
             Pump();
 

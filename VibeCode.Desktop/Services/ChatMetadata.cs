@@ -7,6 +7,8 @@ public sealed record ChatMetadata
     public string? Title { get; init; }
     public bool IsTitleManual { get; init; }
     public bool HasGeneratedTitle { get; init; }
+    public DateTimeOffset? LastActivityAt { get; init; }
+    public DateTimeOffset? LastAssistantAt { get; init; }
 
     public static string Key(string provider, string sessionId) => provider + ":" + sessionId;
 
@@ -20,8 +22,19 @@ public sealed record ChatMetadata
             var previous = baseline?.GetValueOrDefault(key);
             if (baseline is not null && current == previous) continue;
             if (current is null) merged.Remove(key);
-            else merged[key] = current;
+            else
+            {
+                var other = theirs?.GetValueOrDefault(key);
+                merged[key] = current with
+                {
+                    LastActivityAt = Latest(current.LastActivityAt, other?.LastActivityAt),
+                    LastAssistantAt = Latest(current.LastAssistantAt, other?.LastAssistantAt),
+                };
+            }
         }
         return merged;
     }
+
+    private static DateTimeOffset? Latest(DateTimeOffset? mine, DateTimeOffset? theirs) =>
+        mine is null || theirs > mine ? theirs : mine;
 }

@@ -28,7 +28,9 @@ internal static class Program
             Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", directory);
             return AppSettings.Current.ThinkingOrbStyle == expected ? 0 : 1;
         }
-        OutputDirectory = Path.GetFullPath(Path.Combine("artifacts", "agent1-thinking-orbs", "verification"));
+        var outputIndex = Array.IndexOf(args, "--output");
+        OutputDirectory = Path.GetFullPath(outputIndex >= 0 && outputIndex + 1 < args.Length
+            ? args[outputIndex + 1] : Path.Combine("artifacts", "agent1-thinking-orbs", "verification"));
         var dataDirectory = Path.Combine(OutputDirectory, "data-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dataDirectory);
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", dataDirectory);
@@ -39,6 +41,15 @@ internal static class Program
         typeof(App).GetMethod("InitializeThinkingOrbs", StaticHidden)!.Invoke(null, null);
         try
         {
+            if (args.Contains("--preview-only"))
+            {
+                foreach (var theme in new[] { "Dark", "Cli" })
+                {
+                    Theme(theme);
+                    OrbPreview.RenderStyleSheet(theme);
+                }
+                return 0;
+            }
             if (args.Contains("--review-only"))
             {
                 MotionReview.Run();
@@ -49,7 +60,7 @@ internal static class Program
             Rendering();
             PickerAndLifecycle();
             ReloadInFreshProcess(dataDirectory);
-            if (args.Contains("--review")) MotionReview.Run();
+            if (args.Contains("--review")) { MotionReview.Run(); ReplacementReview.Run(); }
             Console.WriteLine($"PASS: {_checks} thinking-orb checks ({ThinkingOrbStyles.All.Count} distinct loops, live selection, restart persistence, keyboard selection, search, and hidden/unloaded clocks)");
             Console.WriteLine($"Previews: {OutputDirectory}");
             return 0;
@@ -86,6 +97,15 @@ internal static class Program
         }
         Check(ThinkingOrbStyles.Resolve("atom").Style == ThinkingOrbStyle.Atom
             && ThinkingOrbStyles.Resolve("gyroscope").Style == ThinkingOrbStyle.Gyroscope, "kept IDs survive the redesign");
+        Check(ThinkingOrbStyles.All.Select(style => style.Id).SequenceEqual(new[] { "globe", "gyroscope", "atom", "morph", "helix", "knot" }),
+            "only Spark and Nebula are replaced in the picker");
+        foreach (var (oldId, replacement) in new[] { ("nebula", "helix"), ("spark", "knot"), (" SPARK ", "knot") })
+        {
+            var saved = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(new { ThinkingOrbStyle = oldId }))!;
+            Check(saved.ThinkingOrbStyle == replacement, $"saved {oldId} migrates to {replacement}");
+            Check(JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(saved))!.ThinkingOrbStyle == replacement,
+                "the migrated preference survives saving and loading");
+        }
     }
 
     private static void Rendering()
@@ -166,7 +186,7 @@ internal static class Program
         Drain();
         Check(selected.IsKeyboardFocusWithin && selected.IsSelected, "keyboard focus and selected option are exposed");
         var search = (TextBox)window.FindName("SettingsSearchBox");
-        foreach (var term in new[] { "thinking orb", "spinner", "gyroscope" })
+        foreach (var term in new[] { "thinking orb", "spinner", "gyroscope", "helix", "knot" })
         {
             search.Text = term;
             Drain();
@@ -201,16 +221,16 @@ internal static class Program
         Check(!existing.HasAnimatedProperties, "unloaded/recycled chat orb releases its animation");
 
         // Settings saves can arrive off the UI thread; preference updates must marshal safely.
-        Task.Run(() => { settings.ThinkingOrbStyle = "nebula"; Check(settings.TrySave() is null, "worker-thread preference save succeeds"); })
+        Task.Run(() => { settings.ThinkingOrbStyle = "helix"; Check(settings.TrySave() is null, "worker-thread preference save succeeds"); })
             .GetAwaiter().GetResult();
         Drain();
-        Check(new OrbitSpinner().EffectiveStyle == ThinkingOrbStyle.Nebula, "worker-thread saves refresh the UI resource");
+        Check(new OrbitSpinner().EffectiveStyle == ThinkingOrbStyle.Helix, "worker-thread saves refresh the UI resource");
         window.Close();
         liveWindow.Close();
         var reopened = new SettingsWindow { ShowActivated = false };
         reopened.Show();
         Drain();
-        Check(((ThinkingOrbOption)((ListBox)reopened.FindName("ThinkingOrbPicker")).SelectedItem).Id == "nebula", "reopened Appearance retains the selection");
+        Check(((ThinkingOrbOption)((ListBox)reopened.FindName("ThinkingOrbPicker")).SelectedItem).Id == "helix", "reopened Appearance retains the selection");
         reopened.Close();
     }
 
@@ -220,7 +240,7 @@ internal static class Program
         start.ArgumentList.Add(typeof(Program).Assembly.Location);
         start.ArgumentList.Add("--check-saved");
         start.ArgumentList.Add(dataDirectory);
-        start.ArgumentList.Add("nebula");
+        start.ArgumentList.Add("helix");
         using var child = Process.Start(start)!;
         if (!child.WaitForExit(30000)) throw new InvalidOperationException("Preference reload timed out.");
         Check(child.ExitCode == 0, "a fresh process restores the saved preference");

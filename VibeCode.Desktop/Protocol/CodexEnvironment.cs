@@ -117,10 +117,11 @@ public static class CodexEnvironment
     /// <summary>Create an app-server process that is branded and isolated for VibeCode.</summary>
     public static ProcessStartInfo CreateAppServerStartInfo(string? workingDirectory = null, string? homeDirectory = null,
         bool? swarmsEnabled = null, int swarmMaxWorkers = SwarmPolicy.DefaultMaxWorkers,
-        IReadOnlyList<McpServerDefinition>? mcpServers = null)
+        IReadOnlyList<McpServerDefinition>? mcpServers = null, string? accountId = null)
     {
         var targetHome = string.IsNullOrWhiteSpace(homeDirectory) ? HomeDirectory : Path.GetFullPath(homeDirectory);
         Prepare(targetHome);
+        AgentStatusReporting.RegisterHome(targetHome);
         var psi = new ProcessStartInfo
         {
             FileName = CodexSession.ResolveCliPath(),
@@ -144,7 +145,7 @@ public static class CodexEnvironment
         // Only set when the selected ChatGPT account is an API-key account. The Codex CLI treats a present
         // OPENAI_API_KEY as outranking an OAuth session, so setting it unconditionally would silently move
         // a subscription user onto per-token billing.
-        VibeCode.Services.ApiKeyAccountService.Instance.ApplyTo(psi, "codex");
+        VibeCode.Services.ApiKeyAccountService.Instance.ApplyTo(psi, "codex", accountId);
         psi.ArgumentList.Add("app-server");
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("cli_auth_credentials_store=\"file\"");

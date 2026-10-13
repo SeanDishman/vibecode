@@ -19,11 +19,13 @@ public sealed partial class MainViewModel
         SaveSession();
     }
 
-    private static bool ChatRemovalBlocked(ChatViewModel chat)
+    private static bool ChatRemovalBlocked(ChatViewModel chat, bool deleting = false)
     {
-        if (!chat.IsLocked) return false;
-        const string message = "This chat is locked. Right-click it and choose Unlock chat before closing or deleting it.";
-        if (chat.Items.LastOrDefault() is not BannerItem { Text: message })
+        if (deleting ? chat.CanDeleteChat : chat.CanCloseChat) return false;
+        var message = chat.CanCloseChat
+            ? "This chat is locked. Right-click it and choose Unlock chat before deleting it."
+            : "This chat is locked. Right-click it and choose Unlock chat before closing or deleting it.";
+        if (chat.Items.LastOrDefault() is not BannerItem notice || notice.Text != message)
             chat.Items.Add(new BannerItem { Level = "info", Text = message });
         return true;
     }

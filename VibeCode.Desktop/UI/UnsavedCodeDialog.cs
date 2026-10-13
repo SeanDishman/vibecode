@@ -31,13 +31,17 @@ internal sealed class UnsavedCodeDialog : Window
         var body = new StackPanel { Margin = new Thickness(22) };
         body.Children.Add(new TextBlock
         {
-            Text = "Save changes before closing?", FontSize = 17, FontWeight = FontWeights.SemiBold,
+            Text = "Save changes before closing?",
+            FontSize = 17,
+            FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 10),
         });
         body.Children.Add(new TextBlock
         {
             Text = $"{fileName} has unsaved changes. Cancel keeps the editor open.",
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 22), FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 22),
+            FontSize = 13,
         });
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var discard = AddButton(buttons, "DiscardChanges", "Don't save", UnsavedCodeChoice.Discard);
@@ -56,7 +60,10 @@ internal sealed class UnsavedCodeDialog : Window
     {
         var button = new Button
         {
-            Name = name, Content = label, MinWidth = 78, Padding = new Thickness(12, 7, 12, 7),
+            Name = name,
+            Content = label,
+            MinWidth = 78,
+            Padding = new Thickness(12, 7, 12, 7),
             Margin = new Thickness(6, 0, 0, 0),
         };
         button.SetResourceReference(StyleProperty, "GhostButton");

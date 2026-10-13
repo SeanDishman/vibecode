@@ -99,12 +99,9 @@ public partial class SettingsWindow : Window
             AgentMessageDividersToggle.IsChecked = s.ShowAgentMessageDividers;
             NotifyTurnEndToggle.IsChecked = s.NotifyOnTurnEnd;
             NotifyAwaitingInputToggle.IsChecked = s.NotifyOnAwaitingInput;
-            SwarmsEnabledToggle.IsChecked = s.AgentSwarmsEnabled;
-            BridgeSwarmsToggle.IsChecked = s.AgentSwarmsInBridge;
             SwarmMaxSlider.Value = SwarmPolicy.ClampMaxWorkers(s.SwarmMaxWorkers);
             DualMonitorBridgeToggle.IsChecked = s.DualMonitorBridge;
             DualMonitorDoubleSessionsToggle.IsChecked = s.DualMonitorDoubleSessions;
-            BridgeRealtimeSharingToggle.IsChecked = s.BridgeRealtimeSharing;
             BridgePeerMessagingToggle.IsChecked = s.BridgePeerMessaging;
             BridgeAgentLimitSlider.Value = s.BridgeAgentLimit;
             SupervisionEnabledToggle.IsChecked = s.AgentSupervisionEnabled;
@@ -467,13 +464,6 @@ public partial class SettingsWindow : Window
         if (!_ready) return;
         AppSettings.Current.DualMonitorDoubleSessions = DualMonitorDoubleSessionsToggle.IsChecked == true;
         AppSettings.Current.Save();
-    }
-
-    private void OnBridgeRealtimeSharingChanged(object sender, RoutedEventArgs e)
-    {
-        if (!_ready) return;
-        AppSettings.Current.BridgeRealtimeSharing = BridgeRealtimeSharingToggle.IsChecked == true;
-        AppSettings.Current.Save();   // fires Changed -> the main window re-briefs any live bridge panes
     }
 
     private void OnBridgePeerMessagingChanged(object sender, RoutedEventArgs e)
@@ -846,7 +836,7 @@ public partial class SettingsWindow : Window
     {
         if ((sender as FrameworkElement)?.DataContext is not McpServerDefinition existing) return;
         if (MessageBox.Show(this,
-                $"Remove the VibeCode MCP definition '{existing.Name}'?\n\nThis does not alter MCP servers configured directly in Claude, Codex, Kimi, or Grok.",
+                $"Remove the VibeCode MCP definition '{existing.Name}'?\n\nThis does not alter MCP servers configured directly in Claude, Codex, Kimi, Gemini, or GLM.",
                 "Remove MCP server", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         AppSettings.Current.McpServers.RemoveAll(server =>
             string.Equals(server.Id, existing.Id, StringComparison.OrdinalIgnoreCase));
@@ -869,20 +859,6 @@ public partial class SettingsWindow : Window
     }
 
     // ---------- agent swarms ----------
-
-    private void OnSwarmsEnabledChanged(object sender, RoutedEventArgs e)
-    {
-        if (!_ready) return;
-        AppSettings.Current.AgentSwarmsEnabled = SwarmsEnabledToggle.IsChecked == true;
-        AppSettings.Current.Save();
-    }
-
-    private void OnBridgeSwarmsChanged(object sender, RoutedEventArgs e)
-    {
-        if (!_ready) return;
-        AppSettings.Current.AgentSwarmsInBridge = BridgeSwarmsToggle.IsChecked == true;
-        AppSettings.Current.Save();
-    }
 
     private void OnSwarmMaxChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -948,8 +924,7 @@ public partial class SettingsWindow : Window
     private void OnGroqSpeechEnabledChanged(object sender, RoutedEventArgs e)
     {
         if (!_ready) return;
-        // The switch's TwoWay binding already saved AppSettings. Nothing else to start or stop: SpeechService reads
-        // the flag at the moment it transcribes, so the next mic click simply lands on the other backend.
+        // The TwoWay binding saves AppSettings; SpeechService also switches any pending recording to that provider.
         GroqSpeechStatus();
     }
 

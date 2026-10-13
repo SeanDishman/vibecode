@@ -30,7 +30,7 @@ public static class BridgeOrchestratorPolicy
         bridge_file_edits(agent=<worker>) lists exactly which files and lines a worker changed; use it to target a review or to spot two lanes editing the same lines.
         At review level none, skip optional final inspection, audits and reviewer assignments. Complete the required work and user-requested checks, then record scope completion without claiming a review passed.
         Delegate implementation fixes to your own workers. A delegated review counts toward your review budget; respect that worker's selected review level too.
-        For an allowed independent review, use an existing worker. Do not spawn additional reviewers without the user's chosen worker count.
+        For an allowed independent review, use an existing worker. Create native child reviewers only if the user explicitly requests them, within the configured child-worker limit and review budget.
         Record concrete defects with bridge_review_scope(verdict=changes_requested, summary), then dispatch corrections to your workers.
         Record bridge_review_scope(verdict=approved, summary) after the required work and checks pass, completing only the reviews enabled by the user's chosen level. Cite actual evidence and disclose unverified limitations and skipped reviews.
         With multiple orchestrators, each completes its own configured review or records completion with review disabled. Do not claim the entire product is finished until all_scopes_reviewed is true.
@@ -44,6 +44,6 @@ public static class BridgeOrchestratorPolicy
         Use bridge_list_tasks after recovery. Interrupted assignments retain their IDs, instructions and dependencies but never automatically replay.
         Inspect existing work for side effects, then use bridge_retry_task for a deliberate retry. Do not duplicate the assignment under a new ID.
         Answer the user's questions while workers run. Stop assigning when the objective and final verification are complete.
-        Do not create native subagents: the user selected this bridge's worker count. An idle worker is fine when no independent work remains.
+        Use the configured Bridge workers for this team's assignments. If the user explicitly asks you to create native subagents, follow that request within the current child-worker limit; no special marker, button, or enable setting is required. An idle worker is fine when no independent work remains.
         """;
 }

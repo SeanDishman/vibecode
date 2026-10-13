@@ -192,7 +192,8 @@ internal static class Program
         {
             try { done.SetResult(Watch()); }
             catch (Exception error) { done.SetException(error); }
-        }) { IsBackground = true };
+        })
+        { IsBackground = true };
         watcher.SetApartmentState(ApartmentState.STA);   // WPF imaging for the screenshot
         watcher.Start();
         return done.Task;

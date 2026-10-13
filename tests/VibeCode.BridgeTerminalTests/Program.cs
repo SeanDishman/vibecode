@@ -29,7 +29,7 @@ internal static partial class Program
     {
         if (args.Contains("app-server")) return RunProviderFixture();
         var recoveryChild = args.Contains("--crash-seed") || args.Contains("--crash-resume");
-        var live = args.Contains("--live-simulations");
+        var live = args.Contains("--live-simulations") || args.Contains("--jarvis-knowledge-live");
         var taskTitles = args.Contains("--task-title-only") || args.Contains("--task-title");
         var editLog = args.Contains("--edit-log-only") || args.Contains("--edit-log");
         _root = Path.Combine(Environment.CurrentDirectory, "artifacts", taskTitles ? "agent6-bridge-header" : editLog ? "agent6-edit-log" : "shared-agent-panel", live ? "live-simulations" : "verification");
@@ -40,6 +40,8 @@ internal static partial class Program
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", Path.Combine(_root, recoveryChild ? "data" : "settings-" + Guid.NewGuid().ToString("N")));
         if (live) Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Environment.GetEnvironmentVariable("CODEX_HOME"));
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
+        if (args.Contains("--bridge-accounts-only"))
+            IsolateBridgeAccountStores();
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         AppSettings.Current.AgentMemoryEnabled = false;
@@ -48,6 +50,93 @@ internal static partial class Program
         AppSettings.Current.BridgeAgentLimit = 9;
         try
         {
+            if (args.Contains("--cli-setup-only"))
+            {
+                VerifyCliSetup();
+                Console.WriteLine($"PASS: {_checks} CLI setup UI and missing prerequisite checks.");
+                return 0;
+            }
+            if (args.Contains("--gemini-only"))
+            {
+                VerifyGeminiUi();
+                Console.WriteLine($"PASS: {_checks} Gemini provider, account, usage, Bridge and theme checks.");
+                return 0;
+            }
+            if (args.Contains("--ultrafast-only"))
+            {
+                VerifyUltrafast();
+                Console.WriteLine($"PASS: {_checks} Ultrafast capability, request, persistence, pricing and UI checks. Local fixtures only. Evidence: {_root}");
+                return 0;
+            }
+            if (args.Contains("--bridge-accounts-only"))
+            {
+                VerifyBridgeAccounts();
+                Console.WriteLine($"PASS: {_checks} bridge account selection, launch isolation and rendering checks. Local fixtures only.");
+                return 0;
+            }
+            if (args.Contains("--idle-plan-only"))
+            {
+                VerifyIdleBridgePlans();
+                Console.WriteLine($"PASS: {_checks} idle Advanced Bridge plan checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--speech-switch-only"))
+            {
+                VerifySpeechProviderSwitch();
+                Console.WriteLine($"PASS: {_checks} pending speech provider switch checks. No microphone, model download or live API calls.");
+                return 0;
+            }
+            if (args.Contains("--speech-focus-only"))
+            {
+                VerifySpeechComposerFocus();
+                Console.WriteLine($"PASS: {_checks} speech composer focus and Enter checks. Synthetic audio and local provider fixtures only.");
+                return 0;
+            }
+            if (args.Contains("--mcp-coordination-only"))
+            {
+                VerifyMcpCoordination();
+                Console.WriteLine($"PASS: {_checks} MCP coordination and legacy board retirement checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--manager-removal-only"))
+            {
+                VerifyLegacyManagerRemoval();
+                VerifyTaskDependenciesAndRecovery();
+                VerifyOneShotOrchestrators();
+                VerifyLayoutRestoration();
+                Console.WriteLine($"PASS: {_checks} legacy manager removal, Advanced Bridge workflow and restoration checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--codex-subagents-only"))
+            {
+                VerifyCodexSubagents();
+                Console.WriteLine($"PASS: {_checks} Codex subagent lifecycle and UI checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--chat-confirmation-only"))
+            {
+                VerifyChatConfirmations();
+                Console.WriteLine($"PASS: {_checks} themed chat confirmation checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--chat-lock-only"))
+            {
+                VerifyChatLockBehavior();
+                Console.WriteLine($"PASS: {_checks} chat lock, pin and Bridge close checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--peer-transcript-only"))
+            {
+                VerifyPeerTranscripts();
+                Console.WriteLine($"PASS: {_checks} Bridge transcript checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--project-chats-only"))
+            {
+                VerifyProjectChats();
+                Console.WriteLine($"PASS: {_checks} independent project chat awareness and messaging checks. No live model calls.");
+                return 0;
+            }
             if (args.Contains("--setup-only"))
             {
                 VerifySetupStartup();
@@ -121,6 +210,18 @@ internal static partial class Program
             {
                 VerifyJarvisSettingsAndNewChats();
                 Console.WriteLine($"PASS: {_checks} Jarvis settings, MCP persistence and multi-chat simulations. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--jarvis-knowledge-only"))
+            {
+                VerifyJarvisAppKnowledge();
+                Console.WriteLine($"PASS: {_checks} Jarvis live app knowledge checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--jarvis-knowledge-live"))
+            {
+                VerifyJarvisAppKnowledgeLive();
+                Console.WriteLine($"PASS: {_checks} live Jarvis knowledge checks (three short model turns).");
                 return 0;
             }
             if (args.Contains("--jarvis-actions-only"))
@@ -226,6 +327,7 @@ internal static partial class Program
             }
             VerifyBroadcastMessaging();
             VerifyMessaging();
+            VerifyLegacyManagerRemoval();
             VerifyTerminals();
             VerifyLayoutRestoration();
             VerifyCrashRecovery();
@@ -245,11 +347,19 @@ internal static partial class Program
             VerifyFreshTeamStartup();
             VerifyViews();
             VerifyBridgeTaskTitles();
+            VerifyMcpCoordination();
+            VerifySpeechProviderSwitch();
+            VerifySpeechComposerFocus();
+            VerifyIdleBridgePlans();
             VerifyBridgeHeaderStrip();
             VerifyBridgeEditLog();
             VerifyBridgeAgentStatus();
+            VerifyPeerTranscripts();
+            VerifyChatLockBehavior();
+            VerifyChatConfirmations();
             VerifyFastModeIsolation();
             VerifyCodexUserInput();
+            VerifyCodexSubagents();
             if (args.Contains("--replay-live")) ReplayLiveResults();
             Console.WriteLine($"PASS: {_checks} bridge terminal, orchestrator, MCP and rendering checks. No live model calls.");
             return 0;
@@ -280,7 +390,7 @@ internal static partial class Program
         var id = incoming["message_id"]!.ToString();
         Check("inbox ties message to stable sender and marks read", incoming["sender_id"]!.ToString() == a.BridgeAgentId && incoming["status"]!.ToString().StartsWith("read"));
         Reject("caller cannot spoof sender", () => Tool(a, "bridge_send_message", new()
-            { ["recipient"] = b.BridgeAgentId, ["message"] = "spoof", ["sender_id"] = c.BridgeAgentId }));
+        { ["recipient"] = b.BridgeAgentId, ["message"] = "spoof", ["sender_id"] = c.BridgeAgentId }));
         Reject("sender cannot acknowledge outgoing message", () => Tool(a, "bridge_mark_message", new() { ["message_id"] = id }));
         Tool(b, "bridge_mark_message", new() { ["message_id"] = id });
         Check("acknowledgment is visible to sender", Tool(a, "bridge_read_messages")["messages"]![0]!["status"]!.ToString().StartsWith("answered"));
@@ -345,9 +455,9 @@ internal static partial class Program
         Check("only coordinator gets initial objective", Session(team[0]).Sent.Count == 1 && Session(team[1]).Sent.Count == 0 && Session(team[2]).Sent.Count == 0);
         Check("orchestrator brief delegates with MCP", team[0].AppendSystemPrompt!.Contains("bridge_dispatch_task") && team[0].AppendSystemPrompt!.Contains("do not implement"));
         Reject("worker cannot dispatch as manager", () => Tool(team[1], "bridge_dispatch_task", new()
-            { ["recipient"] = team[2].BridgeAgentId, ["task_name"] = "Fix login", ["message"] = "Unauthorized assignment" }));
+        { ["recipient"] = team[2].BridgeAgentId, ["task_name"] = "Fix login", ["message"] = "Unauthorized assignment" }));
         Tool(team[0], "bridge_dispatch_task", new()
-            { ["recipient"] = team[1].BridgeAgentId, ["task_id"] = "repair-login", ["task_name"] = "Repair login", ["message"] = "Fix the login state handling in auth.cs; verify logout and login." });
+        { ["recipient"] = team[1].BridgeAgentId, ["task_id"] = "repair-login", ["task_name"] = "Repair login", ["message"] = "Fix the login state handling in auth.cs; verify logout and login." });
         PumpUntil(() => Session(team[1]).Sent.Count > 0);
         Check("MCP dispatch enters worker session with its durable task ID", Session(team[1]).Sent.Count == 1 &&
             Session(team[1]).Sent[0].Contains("Task repair-login") && Session(team[1]).Sent[0].Contains("Fix the login state handling"));
@@ -380,20 +490,26 @@ internal static partial class Program
         var (_, team) = Team("registration", 1);
         var endpoint = Call(team[0], "EnsureBridgeMcp")!;
         var registration = (McpServerDefinition)Call(endpoint, "Registration")!;
-        Check("built-in helper is enabled for every CLI provider", registration.UseClaude && registration.UseCodex && registration.UseKimi && registration.UseGrok && registration.Arguments.Last() == "--bridge-mcp");
-        Check("Codex projection approves only known bridge tools", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides.Any(c => c.Contains("bridge_dispatch_task") && c.Contains("approval_mode")));
+        Check("built-in helper is enabled for every CLI provider", registration.UseClaude && registration.UseCodex && registration.UseKimi && registration.UseGemini);
+        Check("Codex projection approves only known bridge tools", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides.Any(c => c.Contains("bridge_dispatch_task") && c.Contains("bridge_read_chat") && c.Contains("approval_mode")));
         Check("Claude receives built-in endpoint", McpCatalog.BuildClaudeConfig([registration]).ToJsonString().Contains("--bridge-mcp"));
         Check("Kimi receives built-in endpoint", McpCatalog.BuildKimiAcpServers([registration]).ToJsonString().Contains("--bridge-mcp"));
-        Check("Grok receives built-in endpoint", McpCatalog.BuildGrokAcpServers([registration]).ToJsonString().Contains("--bridge-mcp"));
         using var glm = new GlmSession(new GlmSessionOptions { Cwd = _root, ApiKeys = ["offline-fixture"], BridgeMcpPipe = (string)Property(endpoint, "PipeName")! });
-        Check("GLM advertises the same bridge contract", ((JsonArray)Call(glm, "ToolSchema")!).Any(t => t?["function"]?["name"]?.ToString() == "bridge_dispatch_task"));
+        Check("GLM advertises the same bridge contract", ((JsonArray)Call(glm, "ToolSchema")!).Any(t => t?["function"]?["name"]?.ToString() == "bridge_read_chat"));
         var host = new AgentStatusMcpHost(BridgeMcpTools.Create((_, _) => new JsonObject { ["ok"] = true }), serverName: "vibecode-bridge", instructions: BridgeMcpTools.Instructions);
-        var init = host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "initialize", ["params"] = new JsonObject
-            { ["protocolVersion"] = "2025-11-25", ["capabilities"] = new JsonObject(), ["clientInfo"] = new JsonObject { ["name"] = "fixture", ["version"] = "1" } } });
+        var init = host.Dispatch(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            { ["protocolVersion"] = "2025-11-25", ["capabilities"] = new JsonObject(), ["clientInfo"] = new JsonObject { ["name"] = "fixture", ["version"] = "1" } }
+        });
         Check("MCP initializes with bridge instructions", init?["result"]?["instructions"]?.ToString().Contains("bridge_send_message") == true);
         host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" });
         var listing = host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 2, ["method"] = "tools/list" });
-        Check("MCP tools list includes chat naming, task titles, broadcast, scope agreement, final review, agent status and file edit history", listing?["result"]?["tools"]?.AsArray().Count == 17 &&
+        Check("MCP tools list includes full peer transcripts, chat naming, task titles, broadcast, scope agreement, final review, live status and file edit history", listing?["result"]?["tools"]?.AsArray().Count == 18 &&
+            listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "bridge_read_chat") == true &&
             listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "bridge_agent_status") == true &&
             listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "bridge_file_edits") == true &&
             listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "bridge_set_task_title") == true &&
@@ -511,7 +627,7 @@ internal static partial class Program
         CheckSharedComposerLayout(sharedPanel, "dark wide", singleControlRow: true);
         Check("single terminal does not show per-second or per-minute token counters", Descendants<TextBlock>(sharedPanel)
             .All(t => !t.Text.Contains("/min") && !t.Text.Contains("/sec") && !t.Text.Contains("/s")));
-        var command = Descendants<ContentControl>(sharedPanel).Single(c => ReferenceEquals(c.Content, bash));
+        var command = Descendants<ContentControl>(sharedPanel).Single(c => c.Name == "EntryContent" && ReferenceEquals(c.Content, bash));
         var commandBody = (Grid)command.Parent;
         var commandRow = (Grid)commandBody.Parent;
         var agentHeader = commandRow.Children.OfType<StackPanel>().Single();
@@ -519,7 +635,7 @@ internal static partial class Program
             Math.Abs(command.ActualWidth - Math.Min(760, commandBody.ActualWidth)) < 1 &&
             Grid.GetColumn(commandBody) == 1 && Grid.GetColumn(agentHeader) == 0 && agentHeader.Visibility == Visibility.Collapsed);
         Check("consecutive Bash and bridge tools have no divider between them", ((Border)commandRow.Parent).BorderThickness == new Thickness(0));
-        var bridgeCommand = Descendants<ContentControl>(sharedPanel).Single(c => ReferenceEquals(c.Content, bridgeRead));
+        var bridgeCommand = Descendants<ContentControl>(sharedPanel).Single(c => c.Name == "EntryContent" && ReferenceEquals(c.Content, bridgeRead));
         var bridgeRow = (Grid)((Grid)bridgeCommand.Parent).Parent;
         var rowBorder = (Border)bridgeRow.Parent;
         Check("shared agent groups have one trailing divider and no repeated tool labels", rowBorder.BorderThickness == new Thickness(0, 0, 0, 1) &&

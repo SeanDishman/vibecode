@@ -43,8 +43,10 @@ internal static partial class Program
     {
         var start = new ProcessStartInfo(Path.ChangeExtension(Assembly.GetExecutingAssembly().Location, ".exe"))
         {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         start.ArgumentList.Add(mode); start.ArgumentList.Add(directory);
         return Process.Start(start)!;
@@ -61,8 +63,13 @@ internal static partial class Program
             foreach (var pane in team) pane.Status = "idle";
             vm.ConfigureBridgeOrchestrator(team[0], 2, "Repair the startup connection.", true);
             PumpUntil(() => Session(team[0]).Sent.Count > 0);
-            Tool(team[0], "bridge_dispatch_task", new() { ["recipient"] = team[1].BridgeAgentId, ["task_id"] = "crash-assignment",
-                ["task_name"] = "Verify restored tools", ["message"] = "Verify this assignment reaches the resumed provider fixture." });
+            Tool(team[0], "bridge_dispatch_task", new()
+            {
+                ["recipient"] = team[1].BridgeAgentId,
+                ["task_id"] = "crash-assignment",
+                ["task_name"] = "Verify restored tools",
+                ["message"] = "Verify this assignment reaches the resumed provider fixture."
+            });
             Tool(team[1], "bridge_send_message", new() { ["recipient"] = team[0].BridgeAgentId, ["message"] = "Durable note sent before the forced process kill." });
             foreach (var peer in team.Skip(1)) vm.Chats.Remove(peer);
             vm.SetBridgeTerminalMode(true);

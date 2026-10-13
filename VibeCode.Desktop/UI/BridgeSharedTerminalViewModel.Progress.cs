@@ -31,8 +31,15 @@ public sealed partial class BridgeSharedTerminalViewModel
             (Agents.FirstOrDefault(a => a.BridgeAgentId == task.OwnerId)?.BridgeTerminalIdentity ?? "Departed agent") + " · " +
             (task.State == "queued" && !work.Ready(task) ? "Waiting for dependencies" : task.State switch
             {
-                "planned" => "Planned", "queued" => "Queued", "dispatching" => "Starting", "running" => "In progress",
-                "completed" => "Complete", "interrupted" => "Interrupted — check before retrying", "failed" => "Failed", "blocked" => "Blocked", _ => task.State,
+                "planned" => "Planned",
+                "queued" => "Queued",
+                "dispatching" => "Starting",
+                "running" => "In progress",
+                "completed" => "Complete",
+                "interrupted" => "Interrupted — check before retrying",
+                "failed" => "Failed",
+                "blocked" => "Blocked",
+                _ => task.State,
             }),
             task.Summary + (task.Evidence.Length > 0 ? "\nEvidence: " + task.Evidence : "") +
             (task.Dependencies.Count > 0 ? "\nDepends on: " + string.Join(", ", task.Dependencies) : ""),

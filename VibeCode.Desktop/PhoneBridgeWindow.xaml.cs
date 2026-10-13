@@ -76,6 +76,16 @@ public partial class PhoneBridgeWindow : Window
 
     private void Refresh(bool recheck = false)
     {
+        // Enrollment and manual pairing raise changes from a socket thread. Touching WPF controls here used
+        // to throw after the enrollment was spent, dropping the phone's response and its only connection key.
+        // Queue the view update without making the network request wait for the UI.
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => Refresh(recheck)));
+            return;
+        }
+        if (_closed) return;
+
         PowerButton.Content = _bridge.Running ? "Turn off" : "Turn on";
         PairIdlePanel.Visibility = _bridge.Running && !_bridge.PairingOpen ? Visibility.Visible : Visibility.Collapsed;
         NoDevices.Visibility = _bridge.Devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -327,7 +337,8 @@ public partial class PhoneBridgeWindow : Window
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe",
-                $"/select,\"{path}\"") { UseShellExecute = true });
+                $"/select,\"{path}\"")
+            { UseShellExecute = true });
         }
         catch (Exception ex)
         {

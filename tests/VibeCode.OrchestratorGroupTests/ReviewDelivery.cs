@@ -34,7 +34,8 @@ internal static partial class Program
         {
             var visible = (string)CallStatic(typeof(ChatViewModel), "StripInjectedPrelude", UserTextOnWire(UserRequests(agent).First()))!;
             Check(tag + " provider replay hides review instructions for " + agent.BridgeTerminalIdentity,
-                !visible.Contains("[REVIEW LEVEL:") && !visible.Contains("[BRIDGE REVIEW SETTINGS]") && visible.Contains("Review fixture"));
+                !visible.Contains("[REVIEW LEVEL:") && !visible.Contains("[BRIDGE REVIEW SETTINGS]")
+                && visible.Contains("Review fixture"));
         }
         foreach (var choice in BridgeReviewPolicy.Choices)
         {

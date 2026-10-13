@@ -21,6 +21,8 @@ namespace VibeCode.Services;
 ///   * The transport is TLS 1.2/1.3 with a self-signed certificate that lives for the life of the install. The
 ///     phone pins its SHA-256 at pairing time and refuses any other certificate afterwards, so a device that has
 ///     paired once cannot be talked into trusting a machine impersonating this one on the same Wi-Fi.
+///   * Inside TLS, every complete request and response (including headers and URLs) requires AES-256-GCM.
+///     Fresh ephemeral key agreement and separate directional keys protect each connection; no plaintext fallback.
 ///   * Protected routes require both a 256-bit token and a signature by the single enrolled P-256 key.
 ///     Signed method/target/body/token, timestamp, nonce and process epoch prevent substitution and replay.
 ///   * Pairing is the only unauthenticated write, and it is closed by default: the user has to open a window on
@@ -527,17 +529,36 @@ public sealed class PhoneBridgeService : Observable
 
                 using var readDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
                 readDeadline.CancelAfter(TimeSpan.FromSeconds(15));
-                var request = await ReadRequestAsync(ssl, readDeadline.Token).ConfigureAwait(false);
+                using var channel = await PhoneAesChannel.AcceptAsync(ssl, readDeadline.Token).ConfigureAwait(false);
+                var plainRequest = await channel.ReceiveAsync(ssl, PhoneAesChannel.MaxRequestBytes, readDeadline.Token)
+                    .ConfigureAwait(false);
+                Request? request;
+                try
+                {
+                    using var input = new MemoryStream(plainRequest, writable: false);
+                    request = await ReadRequestAsync(input, readDeadline.Token).ConfigureAwait(false);
+                }
+                finally { CryptographicOperations.ZeroMemory(plainRequest); }
                 if (request is null) return;
                 var response = await RouteAsync(request, remote, cancel).ConfigureAwait(false);
                 using var writeDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
                 writeDeadline.CancelAfter(TimeSpan.FromSeconds(15));
-                await WriteAsync(ssl, response, writeDeadline.Token).ConfigureAwait(false);
+                using var output = new MemoryStream();
+                await WriteAsync(output, response, writeDeadline.Token).ConfigureAwait(false);
+                if (output.Length > PhoneAesChannel.MaxResponseBytes) return;
+                var plainResponse = output.ToArray();
+                try { await channel.SendAsync(ssl, plainResponse, writeDeadline.Token).ConfigureAwait(false); }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(plainResponse);
+                    CryptographicOperations.ZeroMemory(output.GetBuffer());
+                }
             }
         }
         catch (OperationCanceledException) { /* shutting down, or a phone that walked away */ }
         catch (IOException) { /* connection dropped mid-request - normal on a handset */ }
         catch (AuthenticationException) { /* a client that would not accept our certificate */ }
+        catch (CryptographicException) { /* invalid ciphertext or a client without mandatory AES encryption */ }
         catch (Exception ex)
         {
             CrashLog.Note("PhoneBridge", $"request from {remote} failed - {ex.GetType().Name}");
@@ -769,8 +790,14 @@ public sealed class PhoneBridgeService : Observable
         var body = Encoding.UTF8.GetBytes(response.Body);
         var reason = response.Status switch
         {
-            200 => "OK", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
-            404 => "Not Found", 429 => "Too Many Requests", 503 => "Service Unavailable", _ => "Error",
+            200 => "OK",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            429 => "Too Many Requests",
+            503 => "Service Unavailable",
+            _ => "Error",
         };
         var head = new StringBuilder()
             .Append("HTTP/1.1 ").Append(response.Status).Append(' ').Append(reason).Append("\r\n")
@@ -1264,7 +1291,7 @@ public sealed class PhoneBridgeService : Observable
         {
             var chat = vm.Chats.FirstOrDefault(c => c.BridgeId == id);
             if (chat is null) return 404;
-            if (chat.IsLocked) return 409;
+            if (!chat.CanCloseChat) return 409;
             vm.CloseChat(chat);
             return 200;
         }).ConfigureAwait(false);
@@ -1318,7 +1345,7 @@ public sealed class PhoneBridgeService : Observable
         // The folder has to already exist. This is not a sandbox - a paired phone can already make an agent run
         // anything - but it turns a typo into a clean 400 instead of a chat spawned against a path that is not there.
         if (!Directory.Exists(cwd)) return Fail(400, "that folder does not exist on the PC");
-        if (provider.Length > 0 && provider is not ("claude" or "codex" or "kimi" or "grok"))
+        if (provider.Length > 0 && provider is not ("claude" or "codex" or "kimi" or "gemini"))
             return Fail(400, "unknown provider");
 
         var id = await OnUi(vm =>

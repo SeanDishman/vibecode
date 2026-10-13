@@ -92,7 +92,7 @@ public sealed class Attachment : Observable
 }
 
 /// <summary>One Codex child thread surfaced by app-server's collabAgentToolCall/subAgentActivity lifecycle.</summary>
-public sealed class SubagentItem : Observable
+public sealed class SubagentItem : ItemVm
 {
     private string _threadId = "";
     private string? _parentToolUseId;
@@ -100,6 +100,8 @@ public sealed class SubagentItem : Observable
     private string _task = "";
     private string _activity = "Starting";
     private string _status = "pendingInit";
+    private bool _expanded;
+    private TextItem? _reportedResult;
     private string? _workflowAgentId;
     private ObservableCollection<ItemVm> _transcript = new();
 
@@ -134,6 +136,8 @@ public sealed class SubagentItem : Observable
     public string Label { get => _label; set => Set(ref _label, value); }
     public string Task { get => _task; set => Set(ref _task, value); }
     public string Activity { get => _activity; set => Set(ref _activity, value); }
+    /// <summary>The inline Codex card shares its transcript with the roster inspector. Its controls are deferred.</summary>
+    public bool Expanded { get => _expanded; set => Set(ref _expanded, value); }
     public string Status
     {
         get => _status;
@@ -174,6 +178,23 @@ public sealed class SubagentItem : Observable
         _transcript.CollectionChanged += OnTranscriptChanged;
         Raise(nameof(Transcript));
         Raise(nameof(HasTranscript));
+    }
+
+    /// <summary>Some app-server versions deliver only the child's final report on the parent collaboration item.</summary>
+    internal void ApplyReportedResult(string? report)
+    {
+        if (string.IsNullOrWhiteSpace(report)
+            || Transcript.OfType<TextItem>().Any(item => item.Text == report)) return;
+        _reportedResult = new TextItem { Text = report };
+        Transcript.Add(_reportedResult);
+    }
+
+    internal void ReconcileReportedResult(string? text)
+    {
+        // A delayed child message replaces the fallback report instead of showing it twice.
+        if (_reportedResult is not { } reported || reported.Text != text) return;
+        Transcript.Remove(reported);
+        _reportedResult = null;
     }
 
     private void OnTranscriptChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) =>
@@ -402,8 +423,6 @@ public sealed class QueuedItem : ItemVm
         get => _attachments;
         set { if (Set(ref _attachments, value)) Raise(nameof(HasAttachments)); }
     }
-    /// <summary>The one-shot choice is captured with the queued prompt so later UI toggles cannot change it.</summary>
-    public bool UseSwarm { get; init; }
     private bool _extended;
     /// <summary>True when this entry belongs to the opt-in extended queue. Extended entries are never folded into
     /// their neighbour and are dispatched in the owner's configured 1-3 request chunks. Settable, not init-only:
@@ -414,8 +433,6 @@ public sealed class QueuedItem : ItemVm
         get => _extended;
         internal set { if (Set(ref _extended, value)) RefreshQueueState(); }
     }
-    private bool _waitingForSwarmCapacity;
-    public bool WaitingForSwarmCapacity { get => _waitingForSwarmCapacity; set { if (Set(ref _waitingForSwarmCapacity, value)) Raise(nameof(QueueStatusText)); } }
     private bool _isQueueHead;
     /// <summary>Only the oldest pending prompt owns the shared "Send prompt now" action.</summary>
     public bool IsQueueHead { get => _isQueueHead; internal set => Set(ref _isQueueHead, value); }
@@ -429,9 +446,7 @@ public sealed class QueuedItem : ItemVm
         get => _retryCount;
         internal set { if (Set(ref _retryCount, value)) RefreshQueueState(); }
     }
-    public string QueueStatusText => WaitingForSwarmCapacity
-        ? "Queued · waiting for shared swarm capacity"
-        : Extended && Owner.ExtendedQueuePaused
+    public string QueueStatusText => Extended && Owner.ExtendedQueuePaused
             ? Owner.ExtendedQueuePauseText
             : Extended
                 ? $"Extended queue · {QueuePosition}/{QueueTotal} · {Owner.ExtendedQueueChunkSize} per turn" +
@@ -554,8 +569,8 @@ public sealed class TextItem : ItemVm
         // Never while streaming: a half-written block does not parse, so the text would reflow the moment its
         // terminator arrived. The flag is only set once the turn has ended anyway.
         var text = _hiddenVerbs.Count > 0 && !_streaming ? AgentDirectiveParser.Strip(_text, _hiddenVerbs) : _text;
-        if (!_streaming && _hiddenGoalStatus is { } marker && GoalPolicy.EndsWithMarker(text, marker))
-            text = text.TrimEnd()[..^marker.Length].TrimEnd();
+        if (!_streaming && _hiddenGoalStatus is { } marker)
+            text = GoalPolicy.StripTrailingMarker(text, marker);
         return !_streaming ? text : IsFenceOpen(text) ? text + Cursor + "\n```" : text + Cursor;
     }
 
@@ -627,7 +642,7 @@ public sealed class ThinkingItem : ItemVm
     // body; no text -> a static "Thought process" marker (never a dead expander that opens an empty box).
     // Claude: newer models default thinking.display to "omitted" (empty thinking + signature only). We launch
     // with --thinking-display summarized so thinking_delta carries plaintext summaries like interactive
-    // Claude Code. Codex/Kimi/Grok already stream thinking text into this field.
+
     public bool HasText => Text.Length > 0;
     public void Append(string delta)
     {
@@ -818,7 +833,7 @@ public sealed class ToolItem : ItemVm
         "Edit" or "MultiEdit" or "NotebookEdit" or "CodexEdit" => "",  // pencil
         "Grep" or "Glob" or "LS" => "",                 // search
         "WebSearch" or "WebFetch" => "",                // globe
-        "Task" or "Agent" or "spawn_subagent" => "",    // people (Claude Agent/Task + Grok spawn_subagent)
+        "Task" or "Agent" or "spawn_subagent" => "",
         "TodoWrite" => "",                              // checked box
         "AskUserQuestion" => "",                        // help
         "ExitPlanMode" or "EnterPlanMode" => "",        // document
@@ -898,11 +913,10 @@ public sealed class ToolItem : ItemVm
         ?? (Input?["agent_type"]?.GetValue<string>())
         ?? "agent";
 
-    /// <summary>Claude Agent/Task and Grok <c>spawn_subagent</c> all own a child worker in the Subagents roster.</summary>
     public static bool IsSubagentSpawnTool(string? name) =>
-        name is "Agent" or "Task" or "spawn_subagent"
-        || string.Equals(name, "SpawnSubagent", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(name, "spawn_agent", StringComparison.OrdinalIgnoreCase);
+    name is "Agent" or "Task" or "spawn_subagent"
+    || string.Equals(name, "SpawnSubagent", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(name, "spawn_agent", StringComparison.OrdinalIgnoreCase);
     public string BodyKind => Name switch
     {
         "Edit" or "MultiEdit" or "CodexEdit" => "diff",

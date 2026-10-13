@@ -35,7 +35,6 @@ public static class McpConfigSuggestionParser
                 UseClaude = ReadBool(json["useClaude"], true),
                 UseCodex = ReadBool(json["useCodex"], true) && transport != McpCatalog.SseTransport,
                 UseKimi = ReadBool(json["useKimi"], true),
-                UseGrok = ReadBool(json["useGrok"], true),
                 Enabled = true,
             };
             suggestion = new McpConfigSuggestion

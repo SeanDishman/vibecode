@@ -24,7 +24,7 @@ public sealed partial class ChatViewModel
         // in the normal queue; initialization dispatches it after the account is ready.
         if (_session is null && Status == "starting")
         {
-            QueuePrompt(objective, null, useSwarm: false, waitingForCapacity: false, extended: false);
+            QueuePrompt(objective, null, extended: false);
             return true;
         }
         return Send(objective);
@@ -125,7 +125,7 @@ public sealed partial class ChatViewModel
         "changes_requested" => "Changes requested",
         _ => BridgeReviewLevel == "none" ? "Review off" : "Final review pending",
     };
-    public string BridgeAvailabilityText => Status is "closed" or "error" ? Status : BridgeTaskState switch
+    public string BridgeAvailabilityText => WaitingForBridgeRetry ? BridgeRetryText : Status is "closed" or "error" ? Status : BridgeTaskState switch
     {
         "completed" => Status == "idle" ? "Completed" : Status,
         "interrupted" => "Interrupted",

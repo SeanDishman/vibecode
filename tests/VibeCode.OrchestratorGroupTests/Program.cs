@@ -32,7 +32,7 @@ internal static partial class Program
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
         Environment.SetEnvironmentVariable("REVIEW_FIXTURE_ROOT", Root);
         Environment.SetEnvironmentVariable("REVIEW_DELAYED_CATALOG", args.Contains("--startup-race-only") ? "1" : null);
-        Environment.SetEnvironmentVariable("REVIEW_ASYNC_ACK", args.Contains("--ack-order-only") || args.Contains("--groups") || args.Contains("--fast-mode") ? "1" : null);
+        Environment.SetEnvironmentVariable("REVIEW_ASYNC_ACK", args.Contains("--ack-order-only") || args.Contains("--groups") || args.Contains("--fast-mode") || args.Contains("--central-activity") ? "1" : null);
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", Path.Combine(Root, "empty-claude-home"));
         Directory.CreateDirectory(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")!);
         Environment.SetEnvironmentVariable("VIBECODE_CLAUDE_ACCOUNT_STORE", Path.Combine(Root, "empty-claude-accounts"));
@@ -44,11 +44,24 @@ internal static partial class Program
         app.Resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(new Uri("/VibeCode;component/Themes/Dark.xaml", UriKind.Relative)));
         app.Resources["BoolVis"] = new BooleanToVisibilityConverter(); app.Resources["ShowIf"] = new NonEmptyToVisibilityConverter();
         AppSettings.Current.AgentMemoryEnabled = false;
-
         AppSettings.Current.NotifyOnTurnEnd = AppSettings.Current.NotifyOnAwaitingInput = false;
         AppSettings.Current.BridgeAgentLimit = 12;
         try
         {
+            if (args.Contains("--central-error-retry"))
+            {
+                VerifyCentralErrorRetry();
+                Console.WriteLine($"RESULT: {Checks} passed, {Failures} failed central provider retry checks. Local provider fixtures only. Evidence: {Root}");
+                return Failures == 0 ? 0 : 1;
+            }
+            if (args.Contains("--central-activity"))
+            {
+                VerifyCentralActivity();
+                VerifyCentralFailure();
+                VerifyCentralCancellation();
+                Console.WriteLine($"RESULT: {Checks} passed, {Failures} failed central activity checks. Local provider fixtures only. Evidence: {Root}");
+                return Failures == 0 ? 0 : 1;
+            }
             if (args.Contains("--fast-mode"))
             {
                 VerifyOrchestratorFastMode();
@@ -287,41 +300,90 @@ internal static partial class Program
                 if (n["id"] is not { } requestId) continue; var method = n["method"]!.ToString();
                 if (method == "thread/resume") { id = n["params"]?["threadId"]?.ToString() ?? id; Log(new JsonObject { ["fixture_session"] = id }); }
                 var turnId = method == "turn/start" ? "review-turn-" + ++turnSequence : "";
-                var result = method switch { "model/list" => new JsonObject { ["data"] = new JsonArray() },
+                var result = method switch
+                {
+                    "model/list" => new JsonObject { ["data"] = new JsonArray() },
                     "account/rateLimits/read" => JsonNode.Parse("""{"rateLimits":{"limitId":"codex","primary":{"usedPercent":25}}}""")!,
-                    "thread/start" or "thread/resume" => new JsonObject { ["thread"] = new JsonObject { ["id"] = id } }, "turn/start" => new JsonObject { ["turn"] = new JsonObject { ["id"] = turnId } }, _ => new JsonObject() };
+                    "thread/start" or "thread/resume" => new JsonObject { ["thread"] = new JsonObject { ["id"] = id } },
+                    "turn/start" => new JsonObject { ["turn"] = new JsonObject { ["id"] = turnId } },
+                    _ => new JsonObject()
+                };
                 Emit(new() { ["id"] = requestId.DeepClone(), ["result"] = result });
-                if (method == "turn/start" && Environment.GetEnvironmentVariable("REVIEW_PLANNING_QUOTA") == "1")
+                if (method == "turn/start") StreamCentralFixture(n, provider, id, turnId, Emit);
+                var transient = Environment.GetEnvironmentVariable("REVIEW_PLANNING_TRANSIENT") == "1";
+                if (method == "turn/start" && (transient || Environment.GetEnvironmentVariable("REVIEW_PLANNING_QUOTA") == "1"))
                 {
                     if (quotaRetryReply is null && (CentralFixtureReply(n) is { } || line.Contains("Suggest between")))
                     {
                         quotaRetryReply = CentralFixtureReply(n) ?? "{\"worker_count\":2,\"reason\":\"One worker for each group.\"}";
-                        Emit(new() { ["method"] = "turn/completed", ["params"] = new JsonObject { ["threadId"] = id,
-                            ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "failed", ["error"] = new JsonObject
-                                { ["message"] = "You've reached your usage limit", ["codexErrorInfo"] = "usageLimitExceeded" } } } });
+                        Emit(new()
+                        {
+                            ["method"] = "turn/completed",
+                            ["params"] = new JsonObject
+                            {
+                                ["threadId"] = id,
+                                ["turn"] = new JsonObject
+                                {
+                                    ["id"] = turnId,
+                                    ["status"] = "failed",
+                                    ["error"] = new JsonObject
+                                    {
+                                        ["message"] = transient ? "Selected model is at capacity. Please try a different model." : "You've reached your usage limit",
+                                        ["codexErrorInfo"] = transient ? "serverOverloaded" : "usageLimitExceeded"
+                                    }
+                                }
+                            }
+                        });
                         continue;
                     }
                     if (quotaRetryReply is not null)
                     {
-                        Emit(new() { ["method"] = "item/completed", ["params"] = new JsonObject { ["threadId"] = id, ["turnId"] = turnId,
-                            ["item"] = new JsonObject { ["type"] = "agentMessage", ["id"] = "recovered-planning", ["text"] = quotaRetryReply } } });
-                        Emit(new() { ["method"] = "turn/completed", ["params"] = new JsonObject { ["threadId"] = id,
-                            ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "completed" } } });
+                        Emit(new()
+                        {
+                            ["method"] = "item/completed",
+                            ["params"] = new JsonObject
+                            {
+                                ["threadId"] = id,
+                                ["turnId"] = turnId,
+                                ["item"] = new JsonObject { ["type"] = "agentMessage", ["id"] = "recovered-planning", ["text"] = quotaRetryReply }
+                            }
+                        });
+                        Emit(new()
+                        {
+                            ["method"] = "turn/completed",
+                            ["params"] = new JsonObject
+                            {
+                                ["threadId"] = id,
+                                ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "completed" }
+                            }
+                        });
                         continue;
                     }
                 }
                 if (method == "turn/start" && line.Contains("Suggest between"))
-                    Emit(new() { ["method"] = "item/completed", ["params"] = new JsonObject
+                    Emit(new()
                     {
-                        ["threadId"] = id, ["turnId"] = turnId, ["item"] = new JsonObject
-                        { ["type"] = "agentMessage", ["id"] = "suggestion", ["text"] = "{\"worker_count\":2,\"reason\":\"One worker for each of two groups.\"}" },
-                    } });
+                        ["method"] = "item/completed",
+                        ["params"] = new JsonObject
+                        {
+                            ["threadId"] = id,
+                            ["turnId"] = turnId,
+                            ["item"] = new JsonObject
+                            { ["type"] = "agentMessage", ["id"] = "suggestion", ["text"] = "{\"worker_count\":2,\"reason\":\"One worker for each of two groups.\"}" },
+                        }
+                    });
                 if (method == "turn/start" && CentralFixtureReply(n) is { } centralReply)
-                    Emit(new() { ["method"] = "item/completed", ["params"] = new JsonObject
+                    Emit(new()
                     {
-                        ["threadId"] = id, ["turnId"] = turnId, ["item"] = new JsonObject
-                        { ["type"] = "agentMessage", ["id"] = "central-assignment", ["text"] = centralReply },
-                    } });
+                        ["method"] = "item/completed",
+                        ["params"] = new JsonObject
+                        {
+                            ["threadId"] = id,
+                            ["turnId"] = turnId,
+                            ["item"] = new JsonObject
+                            { ["type"] = "agentMessage", ["id"] = "central-assignment", ["text"] = centralReply },
+                        }
+                    });
                 if (method == "turn/start") Emit(new() { ["method"] = "turn/completed", ["params"] = new JsonObject { ["threadId"] = id, ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "completed" } } });
             }
             else if (n["type"]?.ToString() == "control_request")
@@ -335,7 +397,11 @@ internal static partial class Program
                 }
                 Emit(new() { ["type"] = "control_response", ["response"] = new JsonObject { ["subtype"] = "success", ["request_id"] = n["request_id"]!.DeepClone(), ["response"] = response } });
             }
-            else if (n["type"]?.ToString() == "user") Emit(new() { ["type"] = "result", ["session_id"] = id, ["is_error"] = false, ["result"] = CentralFixtureReply(n) ?? "Local review fixture complete" });
+            else if (n["type"]?.ToString() == "user")
+            {
+                StreamCentralFixture(n, provider, id, "", Emit);
+                Emit(new() { ["type"] = "result", ["session_id"] = id, ["is_error"] = false, ["result"] = CentralFixtureReply(n) ?? "Local review fixture complete" });
+            }
         }
         return 0;
     }
@@ -347,7 +413,8 @@ internal static partial class Program
 #pragma warning restore CS0067
         public JsonArray Commands { get; } = []; public JsonArray Models { get; } = [];
         public string? SessionId => null; public bool HasExited { get; private set; }
-        public void Start() { } public void Dispose() => HasExited = true; public void SendUser(JsonNode content) { }
+        public void Start() { }
+        public void Dispose() => HasExited = true; public void SendUser(JsonNode content) { }
         public Task InterruptAsync() => Task.CompletedTask; public Task SetPermissionModeAsync(string mode) => Task.CompletedTask;
         public Task SetModelAsync(string? model, string? effort = null) => Task.CompletedTask; public void RespondPermission(string requestId, JsonObject result, string? toolUseId) { }
     }

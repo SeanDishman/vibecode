@@ -31,6 +31,7 @@ public sealed class OpenChatState
     /// the seed for NEW chats - whatever any chat toggled last - so turning fast mode on in one Bridge pane turned it
     /// on for every Claude chat after the next launch. Null in older snapshots, which keep using the seed.</summary>
     public bool? FastMode { get; set; }
+    public bool UltrafastMode { get; set; }
     /// <summary>Unsent composer text. A force quit must not throw away a prompt the user was still writing.</summary>
     public string? Draft { get; set; }
     /// <summary>Chat is held back from the Second Brain. Persisted so a restart cannot quietly start recording a
@@ -72,11 +73,12 @@ public sealed class SavedBridgePane
     /// <summary>This pane's own fast-mode choice. Null in snapshots written before fast mode became per-chat, which
     /// is why it is nullable: those fall back to the host's, not to a hard false.</summary>
     public bool? FastMode { get; set; }
+    public bool UltrafastMode { get; set; }
     /// <summary>Unsent composer text for this pane.</summary>
     public string? Draft { get; set; }
     /// <summary>Peer is held back from the Second Brain, normally inherited from the host chat it was started from.</summary>
     public bool ExcludeFromMemory { get; set; }
-    /// <summary>True when this pane was the bridge's designated manager (the "brain" that dispatches the others).</summary>
+    /// <summary>Advanced Bridge orchestrator flag. Legacy managers without CoordinatesOnly are retired on restore.</summary>
     public bool IsManager { get; set; }
 }
 
@@ -106,15 +108,42 @@ public sealed class SavedBridgeState
     public string? HostTitle { get; set; }             // lets startup recover the anchor even if OpenChats was stale
     public string? HostAccountId { get; set; }
     public bool HostPinned { get; set; }
-    /// <summary>True when the HOST pane was the bridge's designated manager (peers store their own flag).</summary>
+    /// <summary>Advanced Bridge host orchestrator flag; peers store their own flag.</summary>
     public bool HostIsManager { get; set; }
     public string? Mode { get; set; }                 // permission mode to reapply to resumed peers
-    /// <summary>This roster's coordination board file name. Null in snapshots written before bridges could be forked;
-    /// those all shared the project's single ".vibecode-bridge.md". A forked bridge owns a numbered one instead, and
-    /// resuming it has to land on the same file or it starts claiming areas on the original roster's board.</summary>
+    /// <summary>Legacy roster key retained for saved and forked bridge compatibility. No Markdown board is maintained.</summary>
     public string? Board { get; set; }
     public List<SavedBridgePane> Peers { get; set; } = new();
     public DateTime SavedAt { get; set; }
+
+    /// <summary>Restore retired regular-bridge managers as independent agents, preserving Advanced Bridge roles.</summary>
+    internal void RemoveLegacyManagerRoles()
+    {
+        var retired = new HashSet<string>(StringComparer.Ordinal);
+        if (HostIsManager && !HostCoordinatesOnly)
+        {
+            retired.Add(HostSessionId);
+            HostIsManager = false;
+            HostOrchestrationScope = HostReviewState = HostReviewSummary = null;
+            HostTaskName = "Ready";
+            HostTaskState = "ready";
+            HostActivitySummary = "Ready for a task";
+        }
+        foreach (var peer in Peers.Where(p => p.IsManager && !p.CoordinatesOnly))
+        {
+            if (peer.SessionId is { } sessionId) retired.Add(sessionId);
+            peer.IsManager = false;
+            peer.OrchestrationScope = peer.ReviewState = peer.ReviewSummary = null;
+            peer.TaskName = "Ready";
+            peer.TaskState = "ready";
+            peer.ActivitySummary = "Ready for a task";
+        }
+        if (HostCoordinatorSessionId is { } hostCoordinator && retired.Contains(hostCoordinator))
+            HostCoordinatorSessionId = null;
+        foreach (var peer in Peers)
+            if (peer.CoordinatorSessionId is { } coordinator && retired.Contains(coordinator))
+                peer.CoordinatorSessionId = null;
+    }
 }
 
 /// <summary>Persistent user settings - %APPDATA%\VibeCode\settings.json.</summary>
@@ -134,10 +163,6 @@ public sealed class AppSettings
     public Dictionary<string, ChatMetadata> ChatMetadata { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>When true, the sidebar/home show only VibeCode's own chats, not the whole Claude Code history.</summary>
     public bool ShowOnlyOwnedSessions { get; set; } = true;
-    /// <summary>Opt back in to per-account workspaces, where the sidebar lists only the active login's chats.
-    /// Default false: switching Claude/Codex/Grok accounts must never make a conversation disappear - that reads as
-    /// data loss even though nothing was deleted. Off-account rows stay put, carry a chip naming their login, and keep
-    /// spawning under their own account (ChatViewModel passes its own AccountId to the provider's config dir).</summary>
     public bool IsolateChatsByAccount { get; set; }
     public List<string> Backgrounds { get; set; } = new();
     public string? ActiveBackground { get; set; }       // null → built-in gif
@@ -170,7 +195,7 @@ public sealed class AppSettings
     public string? DefaultEffort { get; set; }
     public string? DefaultModel { get; set; }           // null = CLI default; else a model alias/value key (opus, sonnet, …)
     /// <summary>Provider used when the home screen starts a new chat.</summary>
-    public string DefaultProvider { get; set; } = "claude"; // claude | codex | kimi | grok
+    public string DefaultProvider { get; set; } = "claude";
 
     private string _defaultMode = DefaultPermissionMode;
     /// <summary>The permission mode a NEW chat starts in, rewritten every time the user deliberately picks one -
@@ -202,9 +227,8 @@ public sealed class AppSettings
     public string? DefaultCodexEffort { get; set; }     // null = model default
     public string? DefaultCodexModel { get; set; }      // null = Codex CLI default
     public string? DefaultKimiEffort { get; set; }      // null = CLI default; on/off or K3 low/high/max when advertised
+    public string? DefaultGeminiModel { get; set; }
     public string? DefaultKimiModel { get; set; }       // null = Kimi CLI default
-    public string? DefaultGrokEffort { get; set; }      // null = Grok model default
-    public string? DefaultGrokModel { get; set; } = Protocol.Grok45Preset.NormalModelId;
     /// <summary>GLM's own model/effort seeds. They exist for the same reason every other provider has a pair:
     /// without them GLM falls through to <see cref="DefaultModel"/>/<see cref="DefaultEffort"/> — Claude's slots —
     /// and the two providers write over each other. Picking a GLM model would put a <c>zai-org/…</c> id in Claude's
@@ -213,16 +237,13 @@ public sealed class AppSettings
     /// Baseten ignores this slot and never sends it on the wire.</summary>
     public string? DefaultGlmModel { get; set; }        // null = selected service's default model
     public string? DefaultGlmEffort { get; set; }       // null = official Z.ai's max; unused by Baseten
-    /// <summary>Optional proxy for the account manager's "Delete all chats" action. grok.com's chat REST API sits
-    /// behind Cloudflare, which challenges most home IPs (a plain request gets a 403 "Just a moment" page); routing
-    /// through a clean-IP proxy is what lets the stored CLI token reach and delete conversations. Format
-    /// <c>host:port</c> or <c>host:port@user:pass</c>. Never a credential to a VibeCode service - it's the user's own proxy.</summary>
-    public string? GrokDeleteProxy { get; set; }
     /// <summary>Claude Code "fast mode" (faster output on supported models), applied per session via the CLI's
     /// <c>--settings {"fastMode":true}</c>. This is only the SEED for the next chat created - the live flag belongs
     /// to each chat (<see cref="UI.ChatViewModel.FastMode"/>), so toggling one Bridge pane cannot drag its siblings
     /// along. Written by whichever chat toggled it last, exactly like DefaultModel / DefaultEffort.</summary>
     public bool FastMode { get; set; }
+    /// <summary>Seed for new OpenAI chats only. Existing chats retain their own speed.</summary>
+    public bool CodexUltrafastMode { get; set; }
     /// <summary>Which saved Claude account new chats run under. Each chat spawns with THIS account's OAuth token in
     /// its env, so switching accounts (changing this) never touches a running chat's login. Null = the live ~/.claude login.</summary>
     public string? ActiveAccountId { get; set; }
@@ -264,24 +285,10 @@ public sealed class AppSettings
         set => _bridgeAgentLimit = BridgeAgentPolicy.ClampLimit(value);
     }
 
-    /// <summary>Bridge agents keep a "## Live activity" board in .vibecode-bridge.md alongside the area claims: one
-    /// compact block per agent naming the file(s) it is in right now and what it is adding there, rewritten in place
-    /// at checkpoints (start/switch/finish a file) rather than per edit, so the extra awareness stays cheap.
-    /// Off = classic high-level coordination only.</summary>
-    public bool BridgeRealtimeSharing { get; set; }
-
-    /// <summary>Let bridge agents send prompts straight to each other with <c>@@MSG agent=N</c>, instead of only the
-    /// manager being able to reach anyone. Off means the status board is the only sideways channel again — an agent
-    /// that hits something outside its lane can then only do the work in someone else's area or drop it.
-    /// Loop-bounded either way (see <see cref="PeerMessageLimits"/>); the switch exists for rosters where the extra
-    /// turns are not wanted.</summary>
+    /// <summary>Allow direct agent messages through the Bridge MCP tools. Roster, status and edit history remain available when disabled.</summary>
     public bool BridgePeerMessaging { get; set; } = true;
 
-    /// <summary>Expose provider-native child-agent swarms in Claude, Codex, and Grok chats. Kimi is excluded.</summary>
-    public bool AgentSwarmsEnabled { get; set; } = true;
-    /// <summary>Bridge peers are already parallel root CLIs, so child swarms inside each pane require a separate opt-in.</summary>
-    public bool AgentSwarmsInBridge { get; set; }
-    /// <summary>Maximum child workers one explicitly requested swarm turn may create.</summary>
+    /// <summary>Maximum child workers a chat may create for a user-requested swarm.</summary>
     public int SwarmMaxWorkers { get; set; } = SwarmPolicy.DefaultMaxWorkers;
 
     // ---- agent supervision: the orchestrator actively watches every delegated agent and escalates on a bounded
@@ -306,12 +313,10 @@ public sealed class AppSettings
     /// <summary>Identical consecutive turn outputs that count as a loop.</summary>
     public int SupervisionLoopRepeatThreshold { get; set; } = 3;
 
-    /// <summary>VibeCode's provider-neutral MCP catalog. Definitions are projected at launch instead of overwriting
-    /// Claude, Codex, Kimi, or Grok's own configuration files.</summary>
     public List<McpServerDefinition> McpServers { get; set; } = new();
 
     // Second Brain (agentmemory). The daemon is a native Windows sidecar; VibeCode talks to its REST API directly
-    // so capture/recall works the same way for Claude, Codex, Kimi, Grok, and Bridge agents. Authentication remains
+
     // in AGENTMEMORY_SECRET - never serialize bearer tokens into settings.json.
     /// <summary>Explicit opt-in to the Second Brain extension. Legacy implicit-on settings do not enable it.</summary>
     public bool SecondBrainEnabled { get; set; }
@@ -732,12 +737,10 @@ public sealed class AppSettings
     }
 
     private static readonly HashSet<string> SupportedProviders =
-        new(["claude", "codex", "kimi", "grok", Protocol.GlmPreset.ProviderId], StringComparer.OrdinalIgnoreCase);
+        new(["claude", "codex", "kimi", "gemini", Protocol.GlmPreset.ProviderId], StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>No Claude, Codex, Kimi or Grok model id contains "deepseek", so the substring safely catches the
-    /// retired provider's ids — including preset ids this build has never heard of.</summary>
     private static bool IsRetiredModelId(string? id) =>
-        !string.IsNullOrWhiteSpace(id) && id.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
+    !string.IsNullOrWhiteSpace(id) && id.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Clamp hand-edited or older settings before they reach provider launch arguments.</summary>
     public bool NormalizeSwarmSettings()
@@ -1073,11 +1076,13 @@ public sealed class AppSettings
         Backgrounds = MergeCollection(Backgrounds, disk.Backgrounds, baseline?.Backgrounds);
         McpServers = MergeCollection(McpServers, disk.McpServers, baseline?.McpServers);
         OpenChats = MergeCollection(OpenChats, disk.OpenChats, baseline?.OpenChats);
+        OpenChats.RemoveAll(chat => chat.SessionId is { } id && DeletedSessions.Contains(id));
         ChatMetadata = global::VibeCode.Services.ChatMetadata.Merge(ChatMetadata, disk.ChatMetadata, baseline?.ChatMetadata);
         // Folder recency is timestamped and additive: unioning avoids one app window erasing another window's newest chat.
         RecentDirectories = RecentDirectoryHistory.NormalizeRemembered(
             (RecentDirectories ?? new List<RecentDirectoryState>())
-            .Concat(disk.RecentDirectories ?? new List<RecentDirectoryState>()));
+            .Concat(disk.RecentDirectories ?? new List<RecentDirectoryState>())
+            .Where(entry => !ChatHistoryRetention.Expired(entry.LastUsed, DateTimeOffset.UtcNow)));
         SavedBridges = MergeSavedBridges(disk.SavedBridges);
         BridgeMailboxWorkspaces = BridgeMailboxWorkspaces.Concat(disk.BridgeMailboxWorkspaces)
             .Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -1099,7 +1104,7 @@ public sealed class AppSettings
         {
             if (string.IsNullOrWhiteSpace(bridge.HostSessionId)) continue;
             var key = BridgeKey(bridge.HostSessionId, bridge.Provider);
-            if (_droppedBridgeKeys.Contains(key)) continue;
+            if (_droppedBridgeKeys.Contains(key) || DeletedSessions.Contains(bridge.HostSessionId)) continue;
             // Same host seen twice (ours and the file's): the more recent snapshot has the fuller peer roster.
             if (!merged.TryGetValue(key, out var existing) || bridge.SavedAt > existing.SavedAt)
                 merged[key] = bridge;

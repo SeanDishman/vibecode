@@ -4,7 +4,7 @@ using System.Windows.Threading;
 using VibeCode.Services;
 using VibeCode.UI;
 
-internal static class Program
+internal static partial class Program
 {
     private static readonly List<ChatViewModel> Chats = [];
     private static string Root = "";
@@ -21,18 +21,16 @@ internal static class Program
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", Path.Combine(Root, "claude-home"));
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_ACCOUNT_STORE", Path.Combine(Root, "codex-accounts"));
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Path.Combine(Root, "codex-home"));
-        Environment.SetEnvironmentVariable("VIBECODE_GROK_ACCOUNT_STORE", Path.Combine(Root, "grok-accounts"));
-        Environment.SetEnvironmentVariable("VIBECODE_GROK_LEGACY_AUTH_PATH", Path.Combine(Root, "grok-home", "auth.json"));
         Environment.SetEnvironmentVariable("KIMI_CODE_HOME", Path.Combine(Root, "kimi-home"));
         Environment.SetEnvironmentVariable("KIMI_SHARE_DIR", Path.Combine(Root, "kimi-share"));
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
-        AppSettings.Current.AgentMemoryEnabled = AppSettings.Current.AgentSwarmsEnabled = false;
+        AppSettings.Current.AgentMemoryEnabled = false;
         AppSettings.Current.NotifyOnTurnEnd = AppSettings.Current.NotifyOnAwaitingInput = false;
-
         try
         {
             VerifyChatIsolation();
+            VerifySparkRetirement();
             VerifyLiveCatalogAndSelections();
             Console.WriteLine($"PASS: {Checks} chat model picker checks. No provider sessions started. Evidence: {Root}");
             return 0;
@@ -65,7 +63,7 @@ internal static class Program
     private static void VerifyChatIsolation()
     {
         var vm = new MainViewModel();
-        foreach (var provider in new[] { "codex", "claude", "kimi", "grok", "glm" })
+        foreach (var provider in new[] { "codex", "claude", "kimi", "glm" })
         {
             AppSettings.Current.DefaultProvider = provider == "claude" ? "codex" : "claude";
             foreach (var bridge in new[] { false, true })
@@ -77,7 +75,7 @@ internal static class Program
         }
         vm.ActiveChat = vm.Chats.First(c => c.IsCodex && !c.IsBridgeAgent);
         vm.SecondaryActiveChat = vm.Chats.First(c => c.IsClaude && !c.IsBridgeAgent);
-        foreach (var selectedProvider in new[] { "claude", "codex", "grok", "kimi", "glm" })
+        foreach (var selectedProvider in new[] { "claude", "codex", "kimi", "glm" })
         {
             AppSettings.Current.DefaultProvider = selectedProvider;
             AppSettings.Current.ActiveAccountId = "claude-other";
@@ -115,7 +113,8 @@ internal static class Program
             && codex.AccountId == "codex-original");
         codex.SetPickerModel(new ModelPickerChoice
         {
-            Model = new ModelChoice { Provider = "claude", Value = "claude-opus-5-5", Display = "Opus" }, CanApply = true,
+            Model = new ModelChoice { Provider = "claude", Value = "claude-opus-5-5", Display = "Opus" },
+            CanApply = true,
         });
         Check("a stale foreign model row cannot change a Codex chat", codex.Model == "codex-account-model");
 

@@ -10,7 +10,7 @@ public sealed partial class ChatViewModel
     private const int MaxPendingBridgeEdits = 512;
     private static readonly TimeSpan ShellClaimMemory = TimeSpan.FromMinutes(30);
 
-    /// <summary>Set by the main view model for every tracked chat. Only bridge panes record: edits whose tool result
+    /// <summary>Set by the main view model for every tracked project chat. Records edits whose tool result
     /// reported success, and files their shell commands changed.</summary>
     internal Action<BridgeEditObservation>? BridgeEditRecorder { get; set; }
 
@@ -31,7 +31,7 @@ public sealed partial class ChatViewModel
     /// final payload under the same id.</summary>
     private void NoteBridgeEditCall(JsonObject block)
     {
-        if (!IsBridgeAgent || BridgeEditRecorder is null) return;
+        if (BridgeEditRecorder is null || NoDirectoryWorkspace.IsNoDirectory(Cwd)) return;
         if (NodeString(block["name"]) is not { } name || NodeString(block["id"]) is not { } id) return;
         if (IsShellCommandTool(name))
         {
@@ -56,7 +56,7 @@ public sealed partial class ChatViewModel
             SettleBridgeShellCall(id, live);
             return;
         }
-        if (!_bridgeEditCalls.Remove(id, out var call) || !live || failed || !IsBridgeAgent) return;
+        if (!_bridgeEditCalls.Remove(id, out var call) || !live || failed) return;
         if (EditTarget(call.Input) is { } full)
         {
             if (call.Name == "CodexEdit" && id.StartsWith("turn-diff:", StringComparison.Ordinal)
@@ -72,7 +72,7 @@ public sealed partial class ChatViewModel
     private void SettleBridgeShellCall(string id, bool live)
     {
         if (BridgeShellEdits.Find(Cwd) is not { } tracker) return;
-        if (!live || !IsBridgeAgent) { tracker.Discard(this, id); return; }
+        if (!live || BridgeEditRecorder is null) { tracker.Discard(this, id); return; }
         var now = DateTime.UtcNow;
         foreach (var (path, shared) in tracker.Claim(this, id))
         {
@@ -80,7 +80,7 @@ public sealed partial class ChatViewModel
             if (state == TurnStart.Excluded) continue;
             _bridgeShellClaims[path] = now;
             BridgeEditRecorder?.Invoke(new BridgeEditObservation("Shell", new JsonObject { ["file_path"] = path }, null, Cwd)
-                { Before = before, BeforeKnown = state != TurnStart.Unknown, Shared = shared });
+            { Before = before, BeforeKnown = state != TurnStart.Unknown, Shared = shared });
         }
         if (_bridgeShellClaims.Count > MaxPendingBridgeEdits)
             foreach (var stale in _bridgeShellClaims.Where(c => now - c.Value > ShellClaimMemory).Select(c => c.Key).ToList())

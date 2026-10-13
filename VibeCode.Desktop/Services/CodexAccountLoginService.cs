@@ -361,7 +361,7 @@ public static class CodexAccountLoginService
             }, token);
             var response = await ReadResponseAsync(process, id, token);
             var result = response["result"];
-            var snapshot = result?["rateLimits"];
+            var snapshot = CodexCreditPolicy.MainBucket(result);
             int? sessionPercent = null, weekPercent = null;
             var limits = new List<CodexUsageLimit>();
             var mainLimitId = StringValue(snapshot?["limitId"]) ?? "codex";

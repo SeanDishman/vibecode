@@ -317,7 +317,10 @@ public static class NotificationService
                 Child = host,
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
-                    BlurRadius = 18, ShadowDepth = 2, Opacity = 0.45, Color = Colors.Black,
+                    BlurRadius = 18,
+                    ShadowDepth = 2,
+                    Opacity = 0.45,
+                    Color = Colors.Black,
                 },
             };
             Content = card;

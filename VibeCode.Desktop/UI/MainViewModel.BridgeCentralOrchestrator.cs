@@ -6,6 +6,17 @@ namespace VibeCode.UI;
 
 public sealed partial class MainViewModel
 {
+    public CentralPlannerActivity? CentralPlanner => BridgePanes.FirstOrDefault()?.BridgeWork?.CentralPlan?.Activity;
+    public CentralPlannerActivity? SecondaryCentralPlanner => SecondaryBridgePanes.FirstOrDefault()?.BridgeWork?.CentralPlan?.Activity;
+    public bool HasCentralPlanner => CentralPlanner is not null;
+    public bool SecondaryHasCentralPlanner => SecondaryCentralPlanner is not null;
+
+    private void RaiseCentralPlannerUi()
+    {
+        Raise(nameof(CentralPlanner)); Raise(nameof(HasCentralPlanner));
+        Raise(nameof(SecondaryCentralPlanner)); Raise(nameof(SecondaryHasCentralPlanner));
+    }
+
     private async Task RunCentralOrchestratorAsync(ChatViewModel host, LiveBridge bridge, ChatViewModel[] managers,
         ChatViewModel[] previousManagers, BridgeAgentConfiguration configuration)
     {
@@ -13,8 +24,29 @@ public sealed partial class MainViewModel
         var central = work.CentralPlan!;
         using var cancellation = central.Cancellation!;
         var panes = bridge.Panes.ToArray();
-        var status = new BannerItem { Level = "info", Text = "Central orchestrator is dividing the task. " +
-            $"{ProviderModelCatalog.DisplayName(configuration.Provider)} · {configuration.Model ?? "default model"} · Thinking: {configuration.Effort ?? "model default"}. Your orchestrators will start after the handoff." };
+        var previousPlanningUsage = work.PlanningUsage ?? new BridgeUsageSummary();
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        void UpdatePlanningUsage(BridgeUsageSummary usage)
+        {
+            // Immutable snapshots are safe for the provider callback and settings serialization to share.
+            work.PlanningUsage = previousPlanningUsage + usage;
+            void Refresh()
+            {
+                if (ReferenceEquals(host.BridgeWork, work)) host.RaiseBridgeProgress();
+            }
+            if (dispatcher is { HasShutdownStarted: true } or { HasShutdownFinished: true }) return;
+            if (dispatcher is null || dispatcher.CheckAccess()) Refresh();
+            else dispatcher.BeginInvoke((Action)Refresh);
+        }
+        using var activity = new CentralPlannerActivity(configuration);
+        central.Activity = activity;
+        RaiseCentralPlannerUi();
+        var status = new BannerItem
+        {
+            Level = "info",
+            Text = "Central orchestrator is dividing the task. " +
+            $"{ProviderModelCatalog.DisplayName(configuration.Provider)} · {configuration.Model ?? "default model"} · Thinking: {configuration.Effort ?? "model default"}. Your orchestrators will start after the handoff."
+        };
         host.Items.Add(status);
         foreach (var manager in managers)
         {
@@ -29,19 +61,26 @@ public sealed partial class MainViewModel
                 previousManagers.Contains(manager) && manager.BridgeOrchestrationScope.Length > 0 ? manager.BridgeOrchestrationScope : null)).ToArray();
             var assignments = await BridgeCentralOrchestratorService.DivideAsync(host, configuration, groups, cancellation.Token, waiting =>
             {
+                activity.SetStage(waiting ? "Waiting for usage limit reset…" : "Continuing task division…");
                 var at = host.Items.IndexOf(status);
-                status = new BannerItem { Level = "info", Text = waiting
+                status = new BannerItem
+                {
+                    Level = "info",
+                    Text = waiting
                     ? "Central planner is waiting for its usage limit to reset. The team will continue automatically."
-                    : "Central planner is continuing the task division." };
+                    : "Central planner is continuing the task division."
+                };
                 if (at >= 0) host.Items[at] = status;
-            });
+            }, activity.Observe, activity.SetStage, UpdatePlanningUsage);
             // The planning provider has been disposed before its result is handed to any permanent group.
+            activity.SetStage("Waiting for the team to connect…");
             await WaitForCentralRosterAsync(panes, cancellation.Token);
             if (!TryGetLiveBridge(host, out var live) || !ReferenceEquals(WorkFor(live.Panes), work) ||
                 !live.Panes.SequenceEqual(panes) || !managers.All(m => m.IsBridgeManager && m.CanAcceptBridgeObjective))
                 throw new InvalidOperationException("The team changed before the central handoff. Start a new team with the current roster.");
             central.Assignments = assignments.ToList();
             central.State = "handing_off";
+            activity.SetStage("Handing assignments to orchestrators…");
             work.ConfirmedVersions.Clear();
             foreach (var manager in managers)
             {
@@ -70,10 +109,15 @@ public sealed partial class MainViewModel
                     throw new InvalidOperationException($"The assignment could not reach {manager.BridgeTerminalIdentity}. Start a new team after reconnecting its account.");
             }
             central.State = "completed";
+            activity.SetStage("Assignments delivered. Task complete.");
             SaveWork(live);
             host.Items.Remove(status);
-            host.Items.Add(new BannerItem { Level = "info", Text =
-                $"Central orchestrator has been removed. Reason: assigned distinct tasks to all {managers.Length} orchestrators; task done." });
+            host.Items.Add(new BannerItem
+            {
+                Level = "info",
+                Text =
+                $"Central orchestrator has been removed. Reason: assigned distinct tasks to all {managers.Length} orchestrators; task done."
+            });
             RaiseRosterUi(BridgePanes.Contains(host) ? null : live);
             RequestSave();
         }
@@ -81,6 +125,7 @@ public sealed partial class MainViewModel
         {
             central.State = ex is OperationCanceledException ? "interrupted" : "failed";
             central.Error = ex is OperationCanceledException ? "The team was closed or changed before the handoff finished." : ex.Message;
+            activity.SetStage(central.Error);
             var shortReason = ex is CentralPlannerException planner ? planner.ShortReason
                 : ex is OperationCanceledException ? "the team changed" : null;
             work.ConfirmedVersions.Clear();
@@ -93,8 +138,12 @@ public sealed partial class MainViewModel
                     : $"Central assignment failed: {shortReason}. Start a new team to retry.";
             }
             host.Items.Remove(status);
-            host.Items.Add(new BannerItem { Level = "warn", Text = "Central orchestrator removed before completing the handoff. " + central.Error +
-                " Worker dispatch is paused. Start a new team to retry." });
+            host.Items.Add(new BannerItem
+            {
+                Level = "warn",
+                Text = "Central orchestrator removed before completing the handoff. " + central.Error +
+                " Worker dispatch is paused. Start a new team to retry."
+            });
             if (TryGetLiveBridge(host, out var live) && ReferenceEquals(WorkFor(live.Panes), work))
             {
                 SaveBridge(live.Panes, live.Board);
@@ -102,7 +151,23 @@ public sealed partial class MainViewModel
                 RequestSave();
             }
         }
-        finally { central.Cancellation = null; }
+        finally
+        {
+            // Keep a copyable record after the temporary pane disappears, including failed/cancelled runs.
+            host.Items.Add(new ToolItem
+            {
+                Id = "central-" + Guid.NewGuid().ToString("N"),
+                Name = "Central orchestrator",
+                SummaryOverride = central.State == "completed" ? "Assignment log" : "Assignment log · " + central.State,
+                Status = central.State == "completed" ? "done" : "error",
+                IsError = central.State != "completed",
+                Result = activity.Transcript()
+            });
+            central.Activity = null;
+            central.Cancellation = null;
+            RaiseCentralPlannerUi();
+            RequestSave();
+        }
     }
 
     private static async Task WaitForCentralRosterAsync(ChatViewModel[] panes, CancellationToken cancellationToken)
@@ -136,12 +201,20 @@ public sealed partial class MainViewModel
 
     private static JsonObject? CentralPlanJson(BridgeWorkState work) => work.CentralPlan is not { } central ? null : new()
     {
-        ["state"] = central.State, ["provider"] = central.Provider, ["model"] = central.Model, ["effort"] = central.Effort,
-        ["removed"] = central.State != "planning", ["error"] = central.Error,
+        ["state"] = central.State,
+        ["provider"] = central.Provider,
+        ["model"] = central.Model,
+        ["effort"] = central.Effort,
+        ["removed"] = central.State != "planning",
+        ["error"] = central.Error,
         ["assignments"] = new JsonArray(central.Assignments.Select(a => (JsonNode?)new JsonObject
         {
-            ["agent_id"] = a.AgentId, ["task_name"] = a.TaskName, ["scope"] = a.Scope,
-            ["exclusions"] = a.Exclusions, ["verification"] = a.Verification, ["handoffs"] = a.Handoffs,
+            ["agent_id"] = a.AgentId,
+            ["task_name"] = a.TaskName,
+            ["scope"] = a.Scope,
+            ["exclusions"] = a.Exclusions,
+            ["verification"] = a.Verification,
+            ["handoffs"] = a.Handoffs,
             ["plan_published"] = central.PublishedPlans.Contains(a.AgentId),
         }).ToArray()),
     };

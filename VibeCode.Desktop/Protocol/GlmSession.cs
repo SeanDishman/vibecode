@@ -178,7 +178,7 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
     private JsonArray BuildModels()
     {
         var array = new JsonArray();
-        foreach (var (value, display, description) in GlmPreset.ModelsFor(_backend))
+        foreach (var (value, display, description, resolved) in GlmPreset.ModelsFor(_backend).Select(m => (m.Value, m.Display, m.Description, m.Value)))
         {
             array.Add(new JsonObject
             {
@@ -187,12 +187,13 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
                 ["description"] = description,
                 ["supportsEffort"] = GlmPreset.IsZai(_backend),
                 ["supportedEffortLevels"] = new JsonArray(GlmPreset.EffortsFor(_backend).Select(e => (JsonNode?)JsonValue.Create(e)).ToArray()),
-                ["resolvedModel"] = value,
+                ["resolvedModel"] = resolved,
             });
         }
         return array;
     }
 
+    /// <summary>The id the endpoint accepts. A <c>vibecode:</c> wrapper is a picker alias, not a served model.</summary>
     private string WireModel => _model;
 
     // ---------------- the turn ----------------
@@ -267,6 +268,7 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
                 throw new InvalidOperationException($"No {GlmPreset.BackendName(_backend)} key is saved. Add a GLM account in the account manager.");
             string? lastFailedToolBatch = null;
             var repeatedFailedToolBatches = 0;
+            var turnStart = _history.Count;
             while (true)
             {
                 cancel.ThrowIfCancellationRequested();
@@ -280,7 +282,9 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
                     snapshot["context_input_tokens"] = usage.Input + usage.CacheRead;
                     Emit(new JsonObject
                     {
-                        ["type"] = "system", ["subtype"] = "usage_update", ["usage"] = snapshot,
+                        ["type"] = "system",
+                        ["subtype"] = "usage_update",
+                        ["usage"] = snapshot,
                     });
                 }).ConfigureAwait(false);
 
@@ -754,7 +758,9 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
         ["type"] = "stream_event",
         ["event"] = new JsonObject
         {
-            ["type"] = "content_block_start", ["index"] = index, ["content_block"] = block,
+            ["type"] = "content_block_start",
+            ["index"] = index,
+            ["content_block"] = block,
         },
     });
 
@@ -779,11 +785,16 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
         foreach (var tool in AgentStatus.Mcp.Bridge.BridgeMcpTools.Create((_, _) => new JsonObject()))
         {
             var definition = tool.Definition;
-            schema.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
+            schema.Add(new JsonObject
             {
-                ["name"] = tool.Name, ["description"] = definition["description"]!.DeepClone(),
-                ["parameters"] = definition["inputSchema"]!.DeepClone(),
-            }});
+                ["type"] = "function",
+                ["function"] = new JsonObject
+                {
+                    ["name"] = tool.Name,
+                    ["description"] = definition["description"]!.DeepClone(),
+                    ["parameters"] = definition["inputSchema"]!.DeepClone(),
+                }
+            });
         }
         return schema;
     }
@@ -801,7 +812,10 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
                 ["role"] = "assistant",
                 ["content"] = new JsonArray(new JsonObject
                 {
-                    ["type"] = "tool_use", ["id"] = id, ["name"] = call.Name, ["input"] = input.DeepClone(),
+                    ["type"] = "tool_use",
+                    ["id"] = id,
+                    ["name"] = call.Name,
+                    ["input"] = input.DeepClone(),
                 }),
             },
         });

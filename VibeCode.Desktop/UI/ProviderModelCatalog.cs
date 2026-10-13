@@ -16,16 +16,14 @@ internal static class ProviderModelCatalog
     public static string Normalize(string? provider) =>
         string.IsNullOrWhiteSpace(provider) ? "claude" : provider.Trim().ToLowerInvariant();
 
-    public static bool ModelBelongsTo(string? model, string? provider) =>
-        !CodexSession.IsRetiredModel(model)
-        && (model is null || !model.StartsWith("vibecode:", StringComparison.OrdinalIgnoreCase));
+    public static bool ModelBelongsTo(string? model, string? provider) => !CodexSession.IsRetiredModel(model) && !CodexModelCatalog.IsLegacyAlias(model);
 
     public static string DisplayName(string? provider) => Normalize(provider) switch
     {
         "codex" => "OpenAI Codex",
         "claude" => "Claude Code",
         "kimi" => "Kimi Code",
-        "grok" => "Grok",
+        "gemini" => "Gemini",
         GlmPreset.ProviderId => GlmPreset.DisplayName,
         var value => char.ToUpperInvariant(value[0]) + value[1..],
     };
@@ -52,7 +50,6 @@ internal static class ProviderModelCatalog
         {
             if (Catalogs.TryGetValue(key, out var catalog))
             {
-                if (key == "grok") return catalog;
                 if (key == "codex") return catalog.Where(m => CodexModelCatalog.ShouldList(m.Value)).ToList();
                 if (key != "claude") return catalog;
                 // Re-merge catalogs remembered by sessions that predate the current Claude lineup.
@@ -227,6 +224,7 @@ internal static class ProviderModelCatalog
         SupportsEffort = m.SupportsEffort,
         SupportsAutoMode = m.SupportsAutoMode,
         SupportsFastMode = m.SupportsFastMode,
+        SupportsUltrafastMode = m.SupportsUltrafastMode,
     };
 
     /// <summary>Current Opus, Fable, and Sonnet first; earlier versions and default follow.</summary>
@@ -265,10 +263,15 @@ internal static class ProviderModelCatalog
     /// </summary>
     private static ModelChoice ClaudeChoice(ClaudeModelCatalog.Spec model) => new()
     {
-        Provider = "claude", Value = model.Id, Display = model.Name, Description = model.Description,
-        ResolvedModel = model.Id, EffortLevels = model.EffortLevels,
+        Provider = "claude",
+        Value = model.Id,
+        Display = model.Name,
+        Description = model.Description,
+        ResolvedModel = model.Id,
+        EffortLevels = model.EffortLevels,
         SupportsEffort = model.EffortLevels.Count > 0,
-        SupportsAutoMode = model.EffortLevels.Count > 0, SupportsFastMode = model.Fast,
+        SupportsAutoMode = model.EffortLevels.Count > 0,
+        SupportsFastMode = model.Fast,
     };
 
     private static IReadOnlyList<ModelChoice> ClaudeFallback()
@@ -282,27 +285,27 @@ internal static class ProviderModelCatalog
     private static IReadOnlyList<ModelChoice> Fallback(string provider) => provider switch
     {
         "claude" => ClaudeFallback(),
+
         "codex" => CodexFallback(),
+        "gemini" =>
+        [
+            Choice("gemini", "default", "Gemini default", "Google sign-in supplies the models available to your account."),
+        ],
         "kimi" =>
         [
             Choice("kimi", "default", "Kimi Code default",
                 "The signed-in Kimi CLI supplies its live model catalog, including K3 when available."),
         ],
-        "grok" =>
-        [
-            Choice("grok", Grok45Preset.NormalModelId, Grok45Preset.NormalDisplayName,
-                Grok45Preset.NormalDescription),
-        ],
         // Model IDs and reasoning capabilities depend on the selected GLM service.
         GlmPreset.ProviderId =>
-            GlmPreset.ModelsFor(ApiKeyAccountService.Instance.SelectedGlmBackend)
+            GlmPreset.ModelsFor(ApiKeyAccountService.Instance.SelectedGlmBackend).Select(m => (Value: m.Value, Display: m.Display, Description: m.Description, Resolved: m.Value))
                 .Select(m => new ModelChoice
                 {
                     Provider = GlmPreset.ProviderId,
                     Value = m.Value,
                     Display = m.Display,
                     Description = m.Description,
-                    ResolvedModel = m.Value,
+                    ResolvedModel = m.Resolved,
                     SupportsEffort = GlmPreset.IsZai(ApiKeyAccountService.Instance.SelectedGlmBackend),
                     EffortLevels = GlmPreset.EffortsFor(ApiKeyAccountService.Instance.SelectedGlmBackend).ToList(),
                 })
@@ -322,19 +325,20 @@ internal static class ProviderModelCatalog
         // These slugs need a current Codex CLI. An older binary rejects a model it does not know.
         foreach (var model in CodexModelCatalog.Current)
             list.Add(Choice("codex", model.Id, model.DisplayName, model.Description));
-        list.Add(Choice("codex", CodexSession.SparkModelId, "GPT-5.3 Codex Spark", CodexSession.SparkDescription));
         return list;
     }
 
     private static ModelChoice Choice(string provider, string value, string display, string description,
         bool fastMode = false) => new()
-    {
-        Provider = provider,
-        Value = value,
-        Display = display,
-        Description = description,
-        SupportsFastMode = fastMode || (provider == "codex" && CodexSession.KnownFastModel(value)),
-    };
+        {
+            Provider = provider,
+            Value = value,
+            Display = display,
+            Description = description,
+            SupportsFastMode = fastMode || (provider == "codex" && CodexSession.KnownFastModel(value)),
+            // A preview is not evidence that this login is entitled to Ultrafast.
+            SupportsUltrafastMode = false,
+        };
 }
 
 /// <summary>One row in a pane's model popup, including whether it belongs to that pane's live provider.</summary>

@@ -20,10 +20,12 @@ public sealed record JarvisContext(string? CurrentProject, IReadOnlyList<string>
     string HomeDirectory, bool MemoryEnabled, string MemoryContext = "")
 {
     public string? CurrentChatId { get; init; }
+    public JarvisChatSummary? CurrentChat { get; init; }
     public IReadOnlyList<JarvisChatSummary> OpenChats { get; init; } = [];
     public JarvisMemoryAccess? MemoryAccess { get; init; }
     public Func<JarvisMemoryPermission>? ReadMemoryPermission { get; init; }
     public JsonObject? Settings { get; init; }
+    public Func<JsonObject>? ReadSettings { get; init; }
     public JarvisMemoryPermission CurrentMemoryPermission => ReadMemoryPermission?.Invoke()
         ?? new(MemoryEnabled, false, null);
 }

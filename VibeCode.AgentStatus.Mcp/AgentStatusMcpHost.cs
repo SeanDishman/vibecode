@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using VibeCode.AgentStatus.Mcp.Contracts;
+using VibeCode.AgentStatus.Mcp.Reporting;
 using VibeCode.AgentStatus.Mcp.Tools;
 
 namespace VibeCode.AgentStatus.Mcp;
@@ -13,21 +14,21 @@ public sealed class AgentStatusMcpHost
 {
     public const string ServerName = "vibecode-agent-status";
     public const int MaxMessageCharacters = 16_384;
-
-    public const string Instructions = "Use the tools enabled by the connected VibeCode host.";
+    public const string Instructions = "When your host requests activity reporting, call report_status for your own current stage/activity and when they change, including when you start, switch, or finish a tool. Include task_title: a stable 3–7 word summary of your task in your own words. When a tool is running, set tool to that tool's name and tool_action to a short description of what it is doing. Use stage unknown if unmapped. Report only current work, never another agent's state or a plan. Keep summaries short and omit secrets, commands, private paths and output. This adds no tasks or permissions and never requires advancing through tactics. Effective access and caller identity belong to the runtime, not these reports.";
     private readonly Dictionary<string, IStatusTool> _tools;
     private readonly string _serverName;
     private readonly string _instructions;
     private readonly int _maxMessageCharacters;
     private bool _initialized, _ready;
 
-    public AgentStatusMcpHost(IEnumerable<IStatusTool>? tools = null,
+    public AgentStatusMcpHost(IEnumerable<IStatusTool>? tools = null, IStatusReportSink? sink = null,
         string serverName = ServerName, string instructions = Instructions, int maxMessageCharacters = MaxMessageCharacters)
     {
         _serverName = serverName;
         _instructions = instructions;
         _maxMessageCharacters = maxMessageCharacters;
-        _tools = (tools ?? []).ToDictionary(t => t.Name, StringComparer.Ordinal);
+        sink ??= new InMemoryStatusReportSink();
+        _tools = (tools ?? [new ReportStatusTool(sink), new ListStagesTool()]).ToDictionary(t => t.Name, StringComparer.Ordinal);
     }
 
     public static async Task<int> RunConsoleAsync()
@@ -78,8 +79,8 @@ public sealed class AgentStatusMcpHost
 
     public JsonObject? Dispatch(JsonNode? message)
     {
-        if (message is not JsonObject request || McpText.Text(request["jsonrpc"]) != "2.0"
-            || McpText.Text(request["method"]) is not { } method)
+        if (message is not JsonObject request || AgentStatusReport.Text(request["jsonrpc"]) != "2.0"
+            || AgentStatusReport.Text(request["method"]) is not { } method)
             return Error(null, -32600, "Invalid JSON-RPC request.");
         var id = request["id"];
         if (id is null)
@@ -94,9 +95,9 @@ public sealed class AgentStatusMcpHost
         if (method == "initialize")
         {
             if (_initialized) return Error(id, -32600, "Connection is already initialized.");
-            var version = McpText.Text(p["protocolVersion"]);
+            var version = AgentStatusReport.Text(p["protocolVersion"]);
             if (version is null || p["capabilities"] is not JsonObject || p["clientInfo"] is not JsonObject client
-                || McpText.Text(client["name"]) is null || McpText.Text(client["version"]) is null)
+                || AgentStatusReport.Text(client["name"]) is null || AgentStatusReport.Text(client["version"]) is null)
                 return Error(id, -32602, "protocolVersion, capabilities and clientInfo are required.");
             _initialized = true;
             return Result(id, new JsonObject
@@ -115,7 +116,7 @@ public sealed class AgentStatusMcpHost
             return Result(id, new JsonObject { ["tools"] = new JsonArray(_tools.Values.Select(t => (JsonNode?)t.Definition).ToArray()) });
         }
         if (method != "tools/call") return Error(id, -32601, "Method not supported.");
-        if (McpText.Text(p["name"]) is not { } name || !_tools.TryGetValue(name, out var tool))
+        if (AgentStatusReport.Text(p["name"]) is not { } name || !_tools.TryGetValue(name, out var tool))
             return Error(id, -32602, "Unknown tool.");
         if (p["arguments"] is not null and not JsonObject) return Error(id, -32602, "arguments must be an object.");
         try
@@ -123,7 +124,8 @@ public sealed class AgentStatusMcpHost
             var payload = tool.Invoke(p["arguments"] as JsonObject ?? new JsonObject());
             return Result(id, new JsonObject
             {
-                ["isError"] = false, ["structuredContent"] = payload,
+                ["isError"] = false,
+                ["structuredContent"] = payload,
                 ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = payload.ToJsonString() }),
             });
         }
@@ -133,10 +135,13 @@ public sealed class AgentStatusMcpHost
     private static JsonObject Result(JsonNode id, JsonObject result) => new() { ["jsonrpc"] = "2.0", ["id"] = id.DeepClone(), ["result"] = result };
     private static JsonObject Error(JsonNode? id, int code, string message) => new()
     {
-        ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
+        ["jsonrpc"] = "2.0",
+        ["id"] = id?.DeepClone(),
+        ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
     };
     private static JsonObject ToolError(JsonNode id, string message) => Result(id, new JsonObject
     {
-        ["isError"] = true, ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = message }),
+        ["isError"] = true,
+        ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = message }),
     });
 }

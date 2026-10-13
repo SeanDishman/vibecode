@@ -9,7 +9,7 @@ internal static partial class Program
     private static int _checks;
 
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", Path.Combine(Environment.CurrentDirectory,
             "artifacts", "auto-scroll-fix", "test-data-" + Guid.NewGuid().ToString("N")));
@@ -19,11 +19,24 @@ internal static partial class Program
         var host = new Grid();
         var window = new Window
         {
-            Content = host, Width = 360, Height = 260, Left = -32000, Top = -32000,
-            ShowActivated = false, ShowInTaskbar = false, WindowStyle = WindowStyle.None,
+            Content = host,
+            Width = 360,
+            Height = 260,
+            Left = -32000,
+            Top = -32000,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
         };
         try
         {
+            if (args.Contains("--tool-memory-only"))
+            {
+                window.Show();
+                VerifyToolMemory(host, args.Contains("--measure-only"));
+                Console.WriteLine($"PASS: {_checks} tool-memory checks");
+                return 0;
+            }
             var list = new ListBox { Visibility = Visibility.Collapsed };
             AutoScroll.SetEnabled(list, true);
             host.Children.Add(list);
@@ -101,6 +114,9 @@ internal static partial class Program
             host.Children.Clear();
             Pump("virtualized transcript unloads before main-chat checks");
             VerifyMainChatScrolling(host, window);
+            host.Children.Clear();
+            Pump("scrolling checks unload before tool-memory checks");
+            VerifyToolMemory(host, false);
             Console.WriteLine($"PASS: {_checks} auto-scroll checks");
             return 0;
         }
@@ -119,7 +135,7 @@ internal static partial class Program
 
     private static bool AtBottom(ScrollViewer scroll) => Math.Abs(scroll.VerticalOffset - scroll.ScrollableHeight) < 1;
 
-    private static void Pump(string assertion)
+    private static void Pump(string assertion, int timeoutMs = 2000)
     {
         var dispatcher = Dispatcher.CurrentDispatcher;
         var frame = new DispatcherFrame();
@@ -131,7 +147,7 @@ internal static partial class Program
         }));
         // An external deadline still fires when a buggy callback endlessly requeues above input priority.
         using var deadline = new System.Threading.Timer(_ => dispatcher.BeginInvoke(DispatcherPriority.Send,
-            new Action(() => frame.Continue = false)), null, 2000, Timeout.Infinite);
+            new Action(() => frame.Continue = false)), null, timeoutMs, Timeout.Infinite);
         Dispatcher.PushFrame(frame);
         marker.Abort();
         Check(idle, assertion);

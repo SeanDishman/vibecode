@@ -8,11 +8,6 @@ public interface ICompactableSession
     Task CompactAsync(string? instructions = null);
 }
 
-/// <summary>
-/// Provider-neutral surface used by the chat view model. Claude speaks its stream-json
-/// protocol directly; CodexSession, KimiSession, and GrokSession adapt their JSON-RPC protocols to the
-/// same message stream so the rest of the UI can stay provider agnostic.
-/// </summary>
 public interface ICodingSession : IDisposable
 {
     event Action<JsonNode>? MessageReceived;
@@ -34,11 +29,6 @@ public interface ICodingSession : IDisposable
     void RespondPermission(string requestId, JsonObject result, string? toolUseId);
 }
 
-/// <summary>
-/// A session whose running turn can take another user message without being interrupted ("steering"). Codex has a
-/// steer request, Claude Code folds a mid-turn user message into the turn, Grok interjects a queued prompt, and GLM
-/// is VibeCode's own loop. Kimi's ACP adapter rejects any prompt while a turn runs, so it is not steerable.
-/// </summary>
 public interface ISteerableSession
 {
     /// <summary>True while a root turn is running that would accept guidance now.</summary>

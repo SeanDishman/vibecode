@@ -21,7 +21,10 @@ public sealed class JarvisRoleConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => (value as string) switch
     {
-        "user" => "You", "assistant" => "Jarvis", "system" => "Status", var role => role ?? "Jarvis",
+        "user" => "You",
+        "assistant" => "Jarvis",
+        "system" => "Status",
+        var role => role ?? "Jarvis",
     };
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
 }
@@ -30,7 +33,11 @@ public sealed class JarvisStateLabelConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => (value as string) switch
     {
-        "listening" => "Listening", "thinking" => "Thinking", "speaking" => "Speaking", "error" => "Needs attention", _ => "Ready",
+        "listening" => "Listening",
+        "thinking" => "Thinking",
+        "speaking" => "Speaking",
+        "error" => "Needs attention",
+        _ => "Ready",
     };
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
 }

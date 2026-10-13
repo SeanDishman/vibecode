@@ -285,7 +285,7 @@ public sealed partial class MainViewModel
             }
 
             if (!a.HasAssignment) { UpdatePaneSupervisionStatus(a); continue; }
-            if (a.Pane.WaitingForLimitReset)
+            if (a.Pane.WaitingForLimitReset || a.Pane.WaitingForBridgeRetry)
             {
                 a.LastActivityAt = now;
                 UpdatePaneSupervisionStatus(a);
@@ -413,8 +413,9 @@ public sealed partial class MainViewModel
         replacement.Model = old.Model;
         replacement.Effort = old.Effort;
         replacement.FastMode = old.FastMode;   // per chat, so a restart must carry it rather than re-read a default
+        replacement.UltrafastMode = old.UltrafastMode;
         replacement.AppendSystemPrompt = number > 0
-            ? BridgePrompt(replacement, number, BridgeNumbers(), ManagerNumberIn(BridgePanes))
+            ? BridgePrompt(replacement, number, BridgeNumbers())
             : old.AppendSystemPrompt;
         replacement.Items.Add(new DividerItem
         {
@@ -542,6 +543,4 @@ public sealed partial class MainViewModel
         pane.SupervisionAlert = a.Stage is SupervisionStage.Intervened or SupervisionStage.Restarted;
     }
 
-    private static List<int> ParseDependencies(string? attributes) =>
-        DispatchBlockParser.ParseDependencies(attributes);
 }

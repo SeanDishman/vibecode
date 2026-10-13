@@ -2,8 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace VibeCode.Services;
 
-/// <summary>Peer messages lifted out of any agent's reply — the sideways channel, as opposed to the manager's
-/// top-down <see cref="DispatchBlockParser"/> work orders.</summary>
+/// <summary>Peer messages lifted out of any agent's reply for delivery to another bridge participant.</summary>
 public static class PeerMessageParser
 {
     public static bool MentionsMessage(string? reply) =>

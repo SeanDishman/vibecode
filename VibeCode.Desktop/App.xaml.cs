@@ -195,6 +195,9 @@ public partial class App : Application
         // _restartTarget is set only by an update; everything else comes back as the same executable.
         if (_restartRequested && (_restartTarget ?? Environment.ProcessPath) is { Length: > 0 } exe)
         {
+            // Hand the data directory over first. Until this process is gone it still holds the single-instance
+            // lock, and a replacement that finds it held steps aside.
+            ReleaseInstanceLease();
             try { Process.Start(new ProcessStartInfo { FileName = exe, UseShellExecute = true }); }
             catch { /* the app still exits cleanly; the user can relaunch by hand */ }
         }
@@ -214,37 +217,11 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // A stdio server is a separate, headless role: never acquire the shell lease, load settings,
-        // create a window, start memory/browser services, or disturb the running desktop instance.
-        if (e.Args.Contains("--second-brain-mcp", StringComparer.Ordinal))
-        {
-            Environment.Exit(Task.Run(() => AgentStatus.Mcp.Memory.SecondBrainMcpHost.RunConsoleAsync()).GetAwaiter().GetResult());
-            return;
-        }
-        if (e.Args.Contains("--bridge-mcp", StringComparer.Ordinal))
-        {
-            Environment.Exit(Task.Run(() => AgentStatus.Mcp.Bridge.BridgeMcpClient.RunConsoleAsync()).GetAwaiter().GetResult());
-            return;
-        }
-        if (e.Args.Contains("--agent-status-mcp", StringComparer.Ordinal))
-        {
-            Environment.Exit(Task.Run(() => AgentStatus.Mcp.AgentStatusMcpHost.RunConsoleAsync()).GetAwaiter().GetResult());
-            return;
-        }
+        // The stdio servers (--bridge-mcp and friends) never get here: Program.Main runs them before WPF exists, so
+        // they never acquire the shell lease, load settings, create a window or disturb the running desktop instance.
         PortableEnvironment.Configure();
         base.OnStartup(e);
 
-        // Lifecycle breadcrumbs, written before anything else can go wrong. A run that is killed from outside
-        // (Task Manager, a script running Stop-Process/taskkill) throws nothing, gets no Windows Error Reporting
-        // entry and never reaches OnExit - so without the marker it left the log completely silent.
-        foreach (var abandoned in CrashLog.ClaimRunMarker())
-        {
-            CrashLog.Note("PreviousRunWasKilled",
-                "The previous run never reached its exit handler, so it did not close itself: it was killed from" +
-                Environment.NewLine +
-                "outside (Task Manager, or a script running Stop-Process / taskkill against VibeCode) or died hard." +
-                Environment.NewLine + abandoned);
-        }
         CrashLog.Note("Startup",
             $"exe {Environment.ProcessPath ?? "(unknown)"}{Environment.NewLine}args [{string.Join(' ', e.Args)}]");
 
@@ -262,6 +239,21 @@ public partial class App : Application
             Environment.Exit(0);
             return;
         }
+
+        // Lifecycle breadcrumbs. A run that is killed from outside (Task Manager, a script running
+        // Stop-Process/taskkill) throws nothing, gets no Windows Error Reporting entry and never reaches OnExit - so
+        // without the marker it left the log completely silent. Claimed only once this run owns the directory: a
+        // second launch leaves through Environment.Exit above, and its marker used to be reported as a killed run
+        // on the next start (pid 36152 on 2026-10-12, which had only stepped aside).
+        foreach (var abandoned in CrashLog.ClaimRunMarker())
+        {
+            CrashLog.Note("PreviousRunWasKilled",
+                "The previous run never reached its exit handler, so it did not close itself: it was killed from" +
+                Environment.NewLine +
+                "outside (Task Manager, or a script running Stop-Process / taskkill against VibeCode) or died hard." +
+                Environment.NewLine + abandoned);
+        }
+        ApplyRenderRecovery(e.Args);
         SingleInstance.ShowRequested += () => Dispatcher.BeginInvoke(new Action(BringPrimaryShellForward));
 
         AppDomain.CurrentDomain.ProcessExit += (_, _) => CrashLog.ReleaseRunMarker();
@@ -303,6 +295,14 @@ public partial class App : Application
             }
             catch { /* never throw from a crash handler */ }
             FlushStateSafely();
+            // A dead render thread throws once more from WPF's own dispatcher shutdown, where nothing can catch it.
+            // It is fully logged; ending here keeps Windows Error Reporting from holding the crashed process (and its
+            // single-instance lock) while the user is already relaunching. Other failures keep their report.
+            if (args.ExceptionObject is Exception fatal && IsRenderThreadFailure(fatal))
+            {
+                ReleaseInstanceLease();
+                EndProcessWithoutWpfShutdown();
+            }
         };
 
         // Unobserved task faults (async work that nobody awaited) — log without taking the process down.
@@ -365,6 +365,7 @@ public partial class App : Application
     {
         if (sender is not MainWindow owner) return;
         UsageDashboardWindow.MaybeAutoOpenForSmoke(owner);
+        MaybeSimulateRenderFailureForSmoke(owner.Dispatcher);
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs args)
@@ -373,6 +374,13 @@ public partial class App : Application
         // Log + save BEFORE showing the dialog: the app is in an unknown state and the user may kill it from the
         // error box rather than continue, which would otherwise discard everything since the last autosave.
         var logPath = CrashLog.Write(args.Exception, "DispatcherUnhandledException");
+        // dwm.exe is restarting. Nothing is wrong with VibeCode, and a modal box on a recovering desktop helps nobody.
+        if (IsCompositorReset(args.Exception)) return;
+        if (IsRenderThreadFailure(args.Exception))
+        {
+            RecoverFromRenderThreadFailure();   // saves, relaunches and ends this process
+            return;
+        }
         FlushStateSafely();
 
         var message = DescribeException(args.Exception);

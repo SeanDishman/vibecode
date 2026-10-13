@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using VibeCode.Protocol;
 
 namespace VibeCode.Services;
 
@@ -100,17 +101,17 @@ public static partial class UsageLimitRecovery
         var id = model == "gpt-reserve" ? "base_model_inference" : "codex";
         var map = result["rateLimitsByLimitId"] as JsonObject;
         var main = result["rateLimits"] as JsonObject;
-        var bucket = map?[id] as JsonObject ?? (main?["limitId"]?.ToString() == id
-            || main?["limitId"] is null && id == "codex" ? main : null);
+        var bucket = id == "codex" ? CodexCreditPolicy.MainBucket(result)
+            : map?[id] as JsonObject ?? (main?["limitId"]?.ToString() == id ? main : null);
         if (bucket is null) return UsageRecoverySnapshot.Unknown;
         var windows = new[] { bucket["primary"], bucket["secondary"] }.OfType<JsonObject>()
             .Where(w => Number(w["usedPercent"]) is not null)
             .Select(w => (Number(w["usedPercent"])!.Value, ParseReset(w["resetsAt"]?.ToString(), DateTimeOffset.Now)));
         var snapshot = UsageRecoverySnapshot.FromWindows(windows);
-        if (!string.IsNullOrEmpty(bucket["rateLimitReachedType"]?.ToString())
-            || Number((bucket["individualLimit"] as JsonObject)?["remainingPercent"]) is <= 0
-            || main?["rateLimitReachedType"]?.ToString() is "workspace_owner_credits_depleted" or "workspace_member_credits_depleted"
-                or "workspace_owner_usage_limit_reached" or "workspace_member_usage_limit_reached")
+        if (CodexCreditPolicy.HasHardLimit(bucket) || CodexCreditPolicy.HasHardLimit(main))
+            return snapshot with { Available = false };
+        if (id == "codex" && CodexCreditPolicy.CanUseCredits(result)) return new(true);
+        if (!string.IsNullOrEmpty(bucket["rateLimitReachedType"]?.ToString()))
             return snapshot with { Available = false };
         return snapshot;
     }

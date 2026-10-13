@@ -19,8 +19,7 @@ internal static class ProtocolBoundaryTests
     {
         var configured = new List<McpServerDefinition>
         {
-            new() { Id = "example-tools", Name = "example-tools", Command = "dotnet", Arguments = ["--info"] },
-        };
+            new() { Id = "example-tools",Name = "example-tools",Command = "dotnet",Arguments = ["--info"] }        };
         var firstChat = McpCatalog.Snapshot(configured);
         firstChat[0].Arguments.Add("chat-specific-argument");
         firstChat.Clear();
@@ -46,8 +45,11 @@ internal static class ProtocolBoundaryTests
         typeof(CodexSession).GetMethod("PrimeNotificationFixture", Hidden)!.Invoke(session, ["test-root"]);
         var request = new JsonObject
         {
-            ["threadId"] = "test-root", ["turnId"] = "test-turn", ["itemId"] = "test-command",
-            ["command"] = "dotnet --version", ["cwd"] = Environment.CurrentDirectory,
+            ["threadId"] = "test-root",
+            ["turnId"] = "test-turn",
+            ["itemId"] = "test-command",
+            ["command"] = "dotnet --version",
+            ["cwd"] = Environment.CurrentDirectory
         };
         typeof(CodexSession).GetMethod("HandleServerMessage", Hidden)!.Invoke(session,
             ["item/commandExecution/requestApproval", request, JsonValue.Create(17)!]);

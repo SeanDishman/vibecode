@@ -49,12 +49,18 @@ public sealed class JarvisViewModel : Observable, IDisposable
     public ObservableCollection<JarvisMessage> Messages { get; } = new();
     public string InputText { get => _inputText; set { if (Set(ref _inputText, value)) Raise(nameof(CanSubmit)); } }
     public bool IsBusy { get => _busy; private set { if (Set(ref _busy, value)) RefreshAvailability(); } }
-    public bool IsListening { get => _listening; private set { if (Set(ref _listening, value))
+    public bool IsListening
     {
-        if (value) { _lastAudioTick = Stopwatch.GetTimestamp(); _audioTimer.Start(); }
-        else { _audioTimer.Stop(); MicrophoneLevel = 0; }
-        RefreshAvailability();
-    } } }
+        get => _listening; private set
+        {
+            if (Set(ref _listening, value))
+            {
+                if (value) { _lastAudioTick = Stopwatch.GetTimestamp(); _audioTimer.Start(); }
+                else { _audioTimer.Stop(); MicrophoneLevel = 0; }
+                RefreshAvailability();
+            }
+        }
+    }
     public bool IsSpeaking { get => _speaking; private set { if (Set(ref _speaking, value)) RefreshAvailability(); } }
     public string State { get => _state; private set { if (Set(ref _state, value)) { Raise(nameof(HasError)); Raise(nameof(PresenceText)); } } }
     public bool HasError => State == "error";
@@ -62,7 +68,8 @@ public sealed class JarvisViewModel : Observable, IDisposable
     public double MicrophoneLevel { get => _microphoneLevel; private set => Set(ref _microphoneLevel, value); }
     public string PresenceText => State switch
     {
-        "listening" => "Listening…", "thinking" => "Thinking…",
+        "listening" => "Listening…",
+        "thinking" => "Thinking…",
         "speaking" or "transcribing" or "notice" or "error" => StatusText,
         _ => HasMicrophone ? "" : "Connect a microphone, or type a message.",
     };

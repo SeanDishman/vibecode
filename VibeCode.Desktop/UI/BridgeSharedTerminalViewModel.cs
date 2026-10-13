@@ -22,8 +22,11 @@ public sealed partial class BridgeSharedTerminalViewModel : Observable, IDisposa
     {
         _select = select;
         _setReviewLevel = setReviewLevel;
-        Activity = new ListCollectionView(Entries) { Filter = item => item is BridgeTranscriptEntry { HasContent: true } entry &&
-            (_reviewing is null || ReferenceEquals(entry.Owner, _reviewing)) };
+        Activity = new ListCollectionView(Entries)
+        {
+            Filter = item => item is BridgeTranscriptEntry { HasContent: true } entry &&
+            (_reviewing is null || ReferenceEquals(entry.Owner, _reviewing))
+        };
         Activity.CollectionChanged += OnActivityChanged;
     }
 
@@ -63,21 +66,26 @@ public sealed partial class BridgeSharedTerminalViewModel : Observable, IDisposa
             + (_teamUsage.Cost > 0 ? $" · {(_teamUsage.Estimated ? "~" : "")}${_teamUsage.Cost:0.00##}" : "")
         : "";
     public string UsageToolTip => $"Combined usage for all {_teamUsage.AgentCount} workers and orchestrators, including active turns.\n"
+        + (PlanningUsage.HasUsage ? "Includes the central planner, even after planning finishes.\n" : "")
         + $"Read: {_teamUsage.Read:N0} tokens (input and cache). Write: {_teamUsage.Write:N0} tokens."
         + (_teamUsage.Estimated ? "\n~ marks estimated cost." : "");
 
     private void RefreshUsage()
     {
         Raise(nameof(HasWorkingAgents));
+        var planning = PlanningUsage;
         var costs = Agents.Select(agent => agent.DisplayedCost).ToArray();
-        var usage = (Read: Agents.Sum(agent => agent.DisplayedInputTokens),
-            Write: Agents.Sum(agent => agent.DisplayedOutputTokens),
-            Cost: costs.Sum(cost => cost.Amount), Estimated: costs.Any(cost => cost.Estimated), AgentCount: Agents.Count);
+        var usage = (Read: Agents.Sum(agent => agent.DisplayedInputTokens) + planning.Read,
+            Write: Agents.Sum(agent => agent.DisplayedOutputTokens) + planning.Write,
+            Cost: costs.Sum(cost => cost.Amount) + planning.Cost,
+            Estimated: costs.Any(cost => cost.Estimated) || planning.Estimated, AgentCount: Agents.Count);
         if (!Set(ref _teamUsage, usage, nameof(UsageText))) return;
         Raise(nameof(InlineUsageText));
         Raise(nameof(HasUsage));
         Raise(nameof(UsageToolTip));
     }
+
+    private BridgeUsageSummary PlanningUsage => Agents.FirstOrDefault()?.BridgeWork?.PlanningUsage ?? new();
 
     public void Review(ChatViewModel agent)
     {
@@ -167,8 +175,8 @@ public sealed partial class BridgeSharedTerminalViewModel : Observable, IDisposa
         if (changed)
         {
             Raise(nameof(Entries));
-            RefreshUsage();
         }
+        RefreshUsage();
     }
 
     private void OnTranscriptChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -252,7 +260,7 @@ public sealed partial class BridgeSharedTerminalViewModel : Observable, IDisposa
     private void OnAgentChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(ChatViewModel.ShowWorkingText) or null or "") Raise(nameof(HasWorkingAgents));
-        if (e.PropertyName == nameof(ChatViewModel.BridgeProgressRevision)) RefreshProgress();
+        if (e.PropertyName == nameof(ChatViewModel.BridgeProgressRevision)) { RefreshProgress(); RefreshUsage(); }
         if (e.PropertyName is nameof(ChatViewModel.IsBridgeManager) or nameof(ChatViewModel.BridgeSingleTerminal) or null or "")
             SetThinkingSuppressed(_sources.Keys.Any(p => p.IsBridgeManager && p.BridgeSingleTerminal));
         if (e.PropertyName is nameof(ChatViewModel.TokensText) or nameof(ChatViewModel.CostText) or null or "")

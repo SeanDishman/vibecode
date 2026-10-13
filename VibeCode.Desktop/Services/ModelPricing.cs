@@ -24,24 +24,24 @@ public static class ModelPricing
     // input / output USD per 1M tokens. Keyed by the resolved model id with any "[1m]"-style variant tag stripped.
     private static readonly IReadOnlyDictionary<string, Price> Table = new Dictionary<string, Price>(StringComparer.OrdinalIgnoreCase)
     {
-        ["claude-fable-5"]    = new(10.00, 50.00),
-        ["claude-mythos-5"]   = new(10.00, 50.00),
+        ["claude-fable-5"] = new(10.00, 50.00),
+        ["claude-mythos-5"] = new(10.00, 50.00),
         // 5.1 (2026-09): same $10/$50 base as 5, but a quarter the cache-read rate - see CheapCacheReadMultiplier.
-        ["claude-fable-5-1"]  = new(10.00, 50.00),
+        ["claude-fable-5-1"] = new(10.00, 50.00),
         ["claude-mythos-5-1"] = new(10.00, 50.00),
         // Current Claude lineup: https://platform.claude.com/docs/en/about-claude/pricing
-        ["claude-opus-5-5"]   = new(4.00, 20.00),
+        ["claude-opus-5-5"] = new(4.00, 20.00),
         ["claude-sonnet-5-5"] = new(2.00, 10.00),
         // Earlier models retain their own rates; Sonnet 5 now shares the $2/$10 tier.
-        ["claude-opus-5"]     = new(5.00, 25.00),
-        ["claude-opus-4-8"]   = new(5.00, 25.00),
-        ["claude-opus-4-7"]   = new(5.00, 25.00),
-        ["claude-opus-4-6"]   = new(5.00, 25.00),
-        ["claude-opus-4-5"]   = new(5.00, 25.00),
-        ["claude-sonnet-5"]   = new(2.00, 10.00),
+        ["claude-opus-5"] = new(5.00, 25.00),
+        ["claude-opus-4-8"] = new(5.00, 25.00),
+        ["claude-opus-4-7"] = new(5.00, 25.00),
+        ["claude-opus-4-6"] = new(5.00, 25.00),
+        ["claude-opus-4-5"] = new(5.00, 25.00),
+        ["claude-sonnet-5"] = new(2.00, 10.00),
         ["claude-sonnet-4-6"] = new(3.00, 15.00),
         ["claude-sonnet-4-5"] = new(3.00, 15.00),
-        ["claude-haiku-4-5"]  = new(1.00, 5.00),
+        ["claude-haiku-4-5"] = new(1.00, 5.00),
 
         // OpenAI standard short-context rates, updated 2026-09-30. Cache-write is 1.25x input.
         // GPT-6.1 Sol's cache reads are 0.05x input; the other listed OpenAI models use 0.10x.
@@ -49,21 +49,21 @@ public static class ModelPricing
         // GPT-5.6 Sol's $4/$20 is the promotional rate OpenAI says runs at least through 2026-11-21.
         // TurnCost applies the long-context rate only when an individual request's size is known.
         // A whole agentic turn's token total must never be mistaken for one request's context.
-        ["gpt-6-astra"]        = new(10.00, 50.00),
-        ["gpt-6.1-sol"]        = new(2.00, 10.00),
-        ["gpt-6-sol"]          = new(2.00, 10.00),
-        ["gpt-6-luna"]         = new(0.10, 0.50),
-        ["gpt-5.6-sol"]        = new(4.00, 20.00),
-        ["gpt-5.6-terra"]      = new(2.00, 12.00),
-        ["gpt-5.6-luna"]       = new(0.20, 1.20),
-        ["gpt-5.5"]            = new(5.00, 30.00),
+        ["gpt-6-astra"] = new(10.00, 50.00),
+        ["gpt-6.1-sol"] = new(2.00, 10.00),
+        ["gpt-6-sol"] = new(2.00, 10.00),
+        ["gpt-6-luna"] = new(0.10, 0.50),
+        ["gpt-5.6-sol"] = new(4.00, 20.00),
+        ["gpt-5.6-terra"] = new(2.00, 12.00),
+        ["gpt-5.6-luna"] = new(0.20, 1.20),
+        ["gpt-5.5"] = new(5.00, 30.00),
 
         // Moonshot Kimi API. K3 cache-hit input is 10% of fresh input; K2.7's is 20%.
-        ["k3"]                  = new(3.00, 15.00),
-        ["kimi-k3"]             = new(3.00, 15.00),
-        ["kimi-code/k3"]        = new(3.00, 15.00),
-        ["kimi-k2.7-code"]      = new(0.95, 4.00),
-        ["kimi-for-coding"]     = new(0.95, 4.00),
+        ["k3"] = new(3.00, 15.00),
+        ["kimi-k3"] = new(3.00, 15.00),
+        ["kimi-code/k3"] = new(3.00, 15.00),
+        ["kimi-k2.7-code"] = new(0.95, 4.00),
+        ["kimi-for-coding"] = new(0.95, 4.00),
         ["kimi-code/kimi-for-coding"] = new(0.95, 4.00),
         ["kimi-k2.7-code-highspeed"] = new(1.90, 8.00),
         ["kimi-for-coding-highspeed"] = new(1.90, 8.00),
@@ -74,14 +74,14 @@ public static class ModelPricing
         // the fallback below is the Opus tier, which would have reported the cheapest model here as 33x its real
         // input cost.
         ["zai-org/glm-5.3-flash"] = new(0.15, 0.50),
-        ["zai-org/glm-5.2"]       = new(1.40, 4.40),
-        ["zai-org/glm-5.2-fast"]  = new(2.10, 6.60),
-        ["zai-org/glm-4.7"]       = new(0.60, 2.20),
+        ["zai-org/glm-5.2"] = new(1.40, 4.40),
+        ["zai-org/glm-5.2-fast"] = new(2.10, 6.60),
+        ["zai-org/glm-4.7"] = new(0.60, 2.20),
         // Official Z.ai list prices, 2026-09-25: https://docs.z.ai/guides/overview/pricing
         // As for other subscriptions, Coding Plan usage shows equivalent API cost, not a subscription charge.
-        ["glm-5.3-flash"]         = new(0.15, 0.50),
-        ["glm-5.3-flashx"]        = new(0.37, 1.25),
-        ["glm-5.3"]               = new(1.40, 4.40),
+        ["glm-5.3-flash"] = new(0.15, 0.50),
+        ["glm-5.3-flashx"] = new(0.37, 1.25),
+        ["glm-5.3"] = new(1.40, 4.40),
     };
 
     /// <summary>Opus-tier fallback for a model we don't have a listed price for (the app defaults to Opus).</summary>
@@ -160,7 +160,7 @@ public static class ModelPricing
         return (inputUsd + outputUsd) * SpeedMultiplier(id, serviceTier) / 1_000_000.0;
     }
 
-    /// <summary>API dollar rates, not subscription quota consumption. Verified 2026-10-02.
+    /// <summary>API dollar rates, not subscription quota consumption. Ultrafast verified 2026-10-13.
     /// https://developers.openai.com/api/docs/pricing
     /// https://platform.claude.com/docs/en/build-with-claude/fast-mode
     /// A model with a separately priced fast/highspeed id already includes its premium in Table.</summary>
@@ -168,7 +168,7 @@ public static class ModelPricing
     {
         var id = Strip(modelId).ToLowerInvariant();
         var tier = serviceTier?.Trim().ToLowerInvariant();
-        if (tier == "ultrafast" && id == "gpt-6-astra") return 6;
+        if (tier == "ultrafast" && id is "gpt-6-astra" or "gpt-6.1-sol") return 6;
         if (tier is not ("fast" or "priority")) return 1;
         if (id == "gpt-5.5") return 2.5;
         return id is "claude-opus-5-5" or "claude-opus-5" or "claude-opus-4-8"
@@ -179,12 +179,10 @@ public static class ModelPricing
     private static string Strip(string? s)
     {
         if (string.IsNullOrEmpty(s)) return "";
-        int i = s.IndexOf('[');
+        var i = s.IndexOf('[');
         var id = (i >= 0 ? s[..i] : s).Trim();
-        // Claude Code resolves Haiku to its dated API snapshot. That is the same priced model as the alias.
         if (id.StartsWith("claude-", StringComparison.OrdinalIgnoreCase) && id.Length > 9
-            && id[^9] == '-' && id[^8..].All(char.IsAsciiDigit) && Table.ContainsKey(id[..^9]))
-            id = id[..^9];
+            && id[^9] == '-' && id[^8..].All(char.IsAsciiDigit) && Table.ContainsKey(id[..^9])) id = id[..^9];
         return id;
     }
 }

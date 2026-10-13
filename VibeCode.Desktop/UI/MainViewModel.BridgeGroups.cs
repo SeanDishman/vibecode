@@ -20,10 +20,8 @@ public sealed partial class MainViewModel
         if (worker.IsBridgeManager) return null;
         var agents = roster.ToArray();
         if (worker.BridgeCoordinatorAgentId is { } id)
-            return agents.FirstOrDefault(p => p.IsBridgeManager && p.BridgeAgentId == id);
-        // Preserve older flat-manager teams, which predate explicit worker ownership.
-        var managers = agents.Where(p => p.IsBridgeManager).ToArray();
-        return managers.Length == 1 && !managers[0].BridgeCoordinatesOnly ? managers[0] : null;
+            return agents.FirstOrDefault(p => p.IsBridgeManager && p.BridgeCoordinatesOnly && p.BridgeAgentId == id);
+        return null;
     }
 
     private static void ReconcileBridgeGroups(IReadOnlyList<ChatViewModel> roster)
@@ -97,7 +95,7 @@ public sealed partial class MainViewModel
         var numbers = bridge.Panes.Select(BridgeNumberOf).ToArray();
         foreach (var pane in bridge.Panes)
         {
-            var brief = BridgePrompt(bridge.Board, pane, BridgeNumberOf(pane), numbers, ManagerNumberIn(bridge.Panes));
+            var brief = BridgePrompt(bridge.Board, pane, BridgeNumberOf(pane), numbers);
             pane.AppendSystemPrompt = brief;
             StagePeerNotice(pane, brief);
         }
@@ -144,14 +142,25 @@ public sealed partial class MainViewModel
                 throw new StatusValidationException("The central handoff has not completed. Read bridge_list_tasks for its state; worker dispatch remains paused.");
             if (scope != assignment.Scope)
                 throw new StatusValidationException("The central orchestrator already assigned your scope. Keep that exact scope and publish only its worker plan with bridge_set_plan.");
-            return new JsonObject { ["agent_id"] = caller.BridgeAgentId, ["scope"] = assignment.Scope,
-                ["coordination_ready"] = CoordinationReady(bridge.Panes), ["plan_version"] = work.PlanVersion,
-                ["next_step"] = "Publish your worker plan with bridge_set_plan. The app opens dispatch when every group's plan is published; no peer scope negotiation is required." };
+            return new JsonObject
+            {
+                ["agent_id"] = caller.BridgeAgentId,
+                ["scope"] = assignment.Scope,
+                ["coordination_ready"] = CoordinationReady(bridge.Panes),
+                ["plan_version"] = work.PlanVersion,
+                ["next_step"] = "Publish your worker plan with bridge_set_plan. The app opens dispatch when every group's plan is published; no peer scope negotiation is required."
+            };
         }
         if (caller.BridgeScopeConfirmed)
-            return new JsonObject { ["agent_id"] = caller.BridgeAgentId, ["scope"] = caller.BridgeOrchestrationScope,
-                ["coordination_ready"] = CoordinationReady(bridge.Panes), ["already_confirmed"] = true, ["plan_version"] = work.PlanVersion,
-                ["next_step"] = "Your scope is already confirmed for this goal. Keep the existing division and worker ownership. Do not re-confirm or change it; a new orchestrator setup opens a fresh coordination round." };
+            return new JsonObject
+            {
+                ["agent_id"] = caller.BridgeAgentId,
+                ["scope"] = caller.BridgeOrchestrationScope,
+                ["coordination_ready"] = CoordinationReady(bridge.Panes),
+                ["already_confirmed"] = true,
+                ["plan_version"] = work.PlanVersion,
+                ["next_step"] = "Your scope is already confirmed for this goal. Keep the existing division and worker ownership. Do not re-confirm or change it; a new orchestrator setup opens a fresh coordination round."
+            };
         var peers = bridge.Panes.Where(p => p.IsBridgeManager && !ReferenceEquals(p, caller)).ToArray();
         if (work.DispatchStarted) throw new StatusValidationException("Worker dispatch has begun; the setup agreement is permanently closed for this run.");
         foreach (var peer in peers)
@@ -178,10 +187,16 @@ public sealed partial class MainViewModel
         RaiseRosterUi(BridgePanes.Contains(caller) ? null : bridge);
         SaveWork(bridge);
         RequestSave();
-        return new JsonObject { ["agent_id"] = caller.BridgeAgentId, ["scope"] = scope, ["plan_version"] = work.PlanVersion,
-            ["coordination_ready"] = ready, ["next_step"] = ready
+        return new JsonObject
+        {
+            ["agent_id"] = caller.BridgeAgentId,
+            ["scope"] = scope,
+            ["plan_version"] = work.PlanVersion,
+            ["coordination_ready"] = ready,
+            ["next_step"] = ready
                 ? "Assign useful work to your own workers with bridge_dispatch_task."
-                : "Finish your turn. The app will notify you when the other orchestrators confirm their scopes." };
+                : "Finish your turn. The app will notify you when the other orchestrators confirm their scopes."
+        };
     }
 
     public ChatViewModel LaunchBridgeOrchestrator(ChatViewModel template, int workerCount, string objective,
@@ -228,65 +243,6 @@ public sealed partial class MainViewModel
 
     private bool _launchingOrchestratorGroup;
 
-    private void ToggleBridgeGroupCoordinator(ChatViewModel pane)
-    {
-        if (!TryGetLiveBridge(pane, out var bridge)) return;
-        if (!pane.IsBridgeManager && WorkFor(bridge.Panes).DispatchStarted)
-        {
-            pane.Items.Add(new BannerItem { Level = "warning", Text = "This run has already dispatched work. Start a new bridge to add another orchestrator." });
-            return;
-        }
-        var target = BridgePanes.Contains(pane) ? null : bridge;
-        if (pane.IsBridgeManager)
-        {
-            var workers = bridge.Panes.Where(p => p.BridgeCoordinatorAgentId == pane.BridgeAgentId).ToArray();
-            pane.IsBridgeManager = false;
-            pane.BridgeCoordinatesOnly = false;
-            pane.BridgeOrchestrationScope = "";
-            pane.BridgeReviewState = "pending";
-            pane.BridgeReviewSummary = "";
-            pane.BridgeTaskState = "ready";
-            pane.BridgeTaskName = "Ready";
-            pane.BridgeActivitySummary = "Orchestrator role removed";
-            pane.PurgeManagerInjectedQueue();
-            pane.ClearManagerPreludes();
-            foreach (var worker in workers)
-            {
-                worker.BridgeCoordinatorAgentId = null;
-                worker.PurgeManagerInjectedQueue();
-                worker.ClearManagerPreludes();
-                worker.Items.Add(new DividerItem { Label = $"{pane.BridgeTerminalIdentity} stepped down; this worker is unassigned" });
-            }
-            pane.Items.Add(new DividerItem { Label = "Orchestrator role removed" });
-        }
-        else
-        {
-            var firstManager = !bridge.Panes.Any(p => p.IsBridgeManager);
-            pane.IsBridgeManager = true;
-            pane.BridgeCoordinatesOnly = true;
-            pane.BridgeCoordinatorAgentId = null;
-            if (firstManager)
-                foreach (var worker in bridge.Panes.Where(p => !p.IsBridgeManager && p.BridgeCoordinatorAgentId is null))
-                    worker.BridgeCoordinatorAgentId = pane.BridgeAgentId;
-            pane.BridgeTaskName = "Orchestrator";
-            pane.Items.Add(new DividerItem { Label = "Orchestrator role assigned" });
-        }
-        RebriefBridgeGroups(bridge);
-        if (pane.IsBridgeManager)
-        {
-            pane.Send("[BRIDGE ORCHESTRATOR] The user chose you to coordinate your own worker group. " +
-                "Use bridge_list_agents for group ownership. If there are other orchestrators, exchange proposed non-overlapping scopes, " +
-                "read their replies, and each call bridge_agree_scope before dispatching. Use bridge_dispatch_task for your own workers. " +
-                "Use the goal already established in this conversation; ask the user for it if no goal was given.");
-            foreach (var manager in bridge.Panes.Where(p => p.IsBridgeManager && !ReferenceEquals(p, pane)))
-                SendManagerUpdate(manager, $"{pane.BridgeTerminalIdentity} is now another orchestrator. Keep your own workers, coordinate the goal division, and confirm your agreed scope with bridge_agree_scope before assigning new work.");
-        }
-        NoteBridgeActivity(target);
-        SaveBridge(bridge.Panes, bridge.Board);
-        RaiseRosterUi(target);
-        RequestSave();
-    }
-
     public int MaximumOrchestratorWorkers(ChatViewModel template, bool createNew)
     {
         if (!TryGetLiveBridge(template, out var bridge))
@@ -299,7 +255,7 @@ public sealed partial class MainViewModel
     }
 
     public ChatViewModel LaunchBridgeWorker(ChatViewModel template, string? provider = null,
-        BridgeAgentConfiguration? configuration = null)
+        BridgeAgentConfiguration? configuration = null, string? accountId = null)
     {
         if (!TryGetLiveBridge(template, out var bridge)) throw new InvalidOperationException("Open a bridge first.");
         var coordinator = template.IsBridgeManager ? template : CoordinatorFor(template, bridge.Panes);
@@ -310,7 +266,7 @@ public sealed partial class MainViewModel
         workerSettings = BridgeAgentConfigurationPolicy.Normalize(workerSettings);
         var before = bridge.Panes.ToHashSet();
         _launchingOrchestratorGroup = true;
-        try { AddBridgeAgent(workerSettings.Provider, BridgePanes.Contains(template) ? null : bridge, template, coordinator, workerSettings); }
+        try { AddBridgeAgent(workerSettings.Provider, BridgePanes.Contains(template) ? null : bridge, template, coordinator, workerSettings, accountId); }
         finally { _launchingOrchestratorGroup = false; }
         var worker = bridge.Panes.FirstOrDefault(p => !before.Contains(p))
             ?? throw new InvalidOperationException("The bridge is at its agent limit. Raise the limit in Settings to add another worker.");

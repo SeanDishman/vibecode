@@ -481,6 +481,19 @@ public sealed class PhoneBridgeMirror
                 yield return ToolJson(tool);
                 break;
 
+            case SubagentItem agent:
+                yield return new JsonObject
+                {
+                    ["k"] = "tool",
+                    ["n"] = agent.Label,
+                    ["st"] = agent.VisualStatus,
+                    ["sum"] = Cap(agent.Task, 400),
+                    ["t"] = agent.Activity,
+                    ["err"] = agent.Status == "errored",
+                    ["agent"] = true,
+                }.ToJsonString();
+                break;
+
             case CompactToolGroupItem group:
                 foreach (var child in group.Tools.ToList()) yield return ToolJson(child);
                 break;

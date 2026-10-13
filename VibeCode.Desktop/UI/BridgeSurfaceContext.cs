@@ -33,6 +33,8 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
 
     // ---- the roster this window is showing ----
     public BridgePaneCollection BridgePanes => _vm.SecondaryBridgePanes;
+    public CentralPlannerActivity? CentralPlanner => _vm.SecondaryCentralPlanner;
+    public bool HasCentralPlanner => _vm.SecondaryHasCentralPlanner;
     public bool IsSingleTerminalBridge => _vm.SecondaryIsSingleTerminalBridge;
     public string BridgeTerminalsText => _vm.SecondaryBridgeTerminalsText;
     public BridgeSharedTerminalViewModel SharedBridgeTerminal => _vm.SecondarySharedBridgeTerminal;
@@ -42,10 +44,6 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
     public bool BridgeUsesClaude => _vm.SecondaryBridgeUsesClaude;
     public bool BridgeUsesCodex => _vm.SecondaryBridgeUsesCodex;
     public bool BridgeUsesKimi => _vm.SecondaryBridgeUsesKimi;
-    public bool BridgeUsesGrok => _vm.SecondaryBridgeUsesGrok;
-    public IEnumerable<GrokAccountInfo> BridgeGrokAccounts => _vm.SecondaryBridgeGrokAccounts;
-    public string BridgeGrokAccountCountText => _vm.SecondaryBridgeGrokAccountCountText;
-    public string BridgeGrokUsageSummary => _vm.SecondaryBridgeGrokUsageSummary;
     public bool HasMinimizedBridgePanes => _vm.SecondaryHasMinimizedBridgePanes;
     public bool CanAnnounceToBridge => _vm.SecondaryCanAnnounceToBridge;
     public bool CanAddBridgeAgent => _vm.SecondaryCanAddBridgeAgent;

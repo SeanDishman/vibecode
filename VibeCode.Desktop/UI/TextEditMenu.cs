@@ -100,8 +100,9 @@ public static class TextEditMenu
 
     private static bool IsOurs(ContextMenu menu) => (bool)menu.GetValue(OursProperty);
 
-    private static ContextMenu BuildFor(FrameworkElement target)
+    internal static ContextMenu BuildFor(FrameworkElement target, Action<string>? copyText = null)
     {
+        copyText ??= SetClipboard;
         var menu = new ContextMenu
         {
             Style = Application.Current?.TryFindResource("DarkContextMenu") as Style,
@@ -134,7 +135,7 @@ public static class TextEditMenu
                 // Read-only text: message bubbles, thinking blocks, markdown replies, tool output.
                 Add(menu, "Copy", ApplicationCommands.Copy, target, "Ctrl+C");
                 Add(menu, "Select all", ApplicationCommands.SelectAll, target, "Ctrl+A");
-                AddTranscriptActions(menu, target);
+                AddTranscriptActions(menu, target, copyText);
                 break;
         }
 
@@ -146,18 +147,29 @@ public static class TextEditMenu
     /// the surrounding card offers - otherwise right-clicking the text itself would be a downgrade from
     /// right-clicking the margin beside it.
     /// </summary>
-    private static void AddTranscriptActions(ContextMenu menu, FrameworkElement target)
+    private static void AddTranscriptActions(ContextMenu menu, FrameworkElement target, Action<string> copyText)
     {
-        var item = Ancestors(target).Select(a => a.DataContext).OfType<ItemVm>().FirstOrDefault();
-        var chat = Ancestors(target).Select(a => a.DataContext).OfType<ChatViewModel>().FirstOrDefault();
-        if (item is null && chat is null) return;
+        var hasItem = TranscriptContext<ItemVm>(target) is not null;
+        var hasChat = TranscriptContext<ChatViewModel>(target) is not null;
+        if (!hasItem && !hasChat) return;
 
         Separator(menu);
-        if (item is not null)
-            menu.Items.Add(Item("Copy message", () => SetClipboard(MainWindow.BlockText(item))));
-        if (chat is not null)
-            menu.Items.Add(Item("Copy whole conversation", () => SetClipboard(MainWindow.ConversationText(chat))));
+        // Recycled transcript controls keep their menu while their DataContext changes. Resolve the owner
+        // at click time so these actions copy the visible message/chat and do nothing once it is detached.
+        if (hasItem)
+            menu.Items.Add(Item("Copy message", () =>
+            {
+                if (TranscriptContext<ItemVm>(target) is { } item) copyText(MainWindow.BlockText(item));
+            }));
+        if (hasChat)
+            menu.Items.Add(Item("Copy whole conversation", () =>
+            {
+                if (TranscriptContext<ChatViewModel>(target) is { } chat) copyText(MainWindow.ConversationText(chat));
+            }));
     }
+
+    private static T? TranscriptContext<T>(FrameworkElement target) where T : class =>
+        Ancestors(target).Select(a => a.DataContext).OfType<T>().FirstOrDefault();
 
     private static void Add(ContextMenu menu, string header, ICommand command, IInputElement target, string gesture) =>
         menu.Items.Add(new MenuItem

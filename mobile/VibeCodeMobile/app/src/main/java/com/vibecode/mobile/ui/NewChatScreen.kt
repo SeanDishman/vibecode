@@ -59,7 +59,6 @@ private val Providers = listOf(
     "claude" to "Claude",
     "codex" to "Codex",
     "kimi" to "Kimi",
-    "grok" to "Grok",
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)

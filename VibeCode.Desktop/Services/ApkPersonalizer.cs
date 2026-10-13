@@ -259,8 +259,7 @@ public static class ApkPersonalizer
                 CentralDirectoryOffset = (int)BinaryPrimitives.ReadUInt32LittleEndian(apk.AsSpan(eocd + 16)),
             };
 
-            if (layout.CentralDirectoryOffset == unchecked((int)uint.MaxValue)
-                || layout.CentralDirectorySize == unchecked((int)uint.MaxValue))
+            if (layout.CentralDirectoryOffset == 0xFFFFFFFF || layout.CentralDirectorySize == 0xFFFFFFFF)
                 throw new InvalidOperationException("ZIP64 APKs are not supported here");
 
             layout.EntriesEnd = layout.CentralDirectoryOffset;

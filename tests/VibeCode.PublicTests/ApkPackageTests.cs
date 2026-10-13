@@ -22,8 +22,12 @@ internal static class ApkPackageTests
         using var signer = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(30));
         var payload = new JsonObject
         {
-            ["configured"] = true, ["pcName"] = "Test desktop", ["hosts"] = new JsonArray("127.0.0.1"),
-            ["port"] = 8765, ["fingerprint"] = new string('0', 64), ["secret"] = "synthetic-enrollment",
+            ["configured"] = true,
+            ["pcName"] = "Test desktop",
+            ["hosts"] = new JsonArray("127.0.0.1"),
+            ["port"] = 8765,
+            ["fingerprint"] = new string('0', 64),
+            ["secret"] = "synthetic-enrollment"
         };
         ApkPersonalizer.Personalize(template, output, payload.ToJsonString(), signer);
         using (var archive = ZipFile.OpenRead(output))

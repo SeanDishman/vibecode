@@ -32,7 +32,7 @@ public static class McpConfigAssistantService
           "useClaude": true,
           "useCodex": true,
           "useKimi": true,
-          "useGrok": true,
+          "useGemini": true,
           "notes": "Brief prerequisites and the official source URL used, if one was found."
         }
 
@@ -133,15 +133,15 @@ public static class McpConfigAssistantService
             AppendSystemPrompt = SystemPrompt,
             McpServers = Array.Empty<McpServerDefinition>(),
         }),
-        "kimi" => new KimiSession(new KimiSessionOptions
+        "gemini" => new GeminiSession(new KimiSessionOptions
         {
             Cwd = cwd,
             Model = model,
             PermissionMode = "default",
             AppendSystemPrompt = SystemPrompt,
-            McpServers = Array.Empty<McpServerDefinition>(),
+            McpServers = [],
         }),
-        "grok" => new GrokSession(new GrokSessionOptions
+        "kimi" => new KimiSession(new KimiSessionOptions
         {
             Cwd = cwd,
             Model = model,
@@ -178,7 +178,7 @@ public static class McpConfigAssistantService
     {
         "codex" => "OpenAI Codex",
         "kimi" => "Kimi Code",
-        "grok" => "Grok",
+        "gemini" => "Gemini",
         _ => "Claude Code",
     };
 

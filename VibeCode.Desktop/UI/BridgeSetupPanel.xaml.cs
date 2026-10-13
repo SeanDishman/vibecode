@@ -12,7 +12,7 @@ public partial class BridgeSetupPanel : UserControl
 {
     public sealed record ProviderChoice(string Id, string Label);
     public static IReadOnlyList<ProviderChoice> Providers { get; } =
-    [new("claude", "Claude Code"), new("codex", "OpenAI Codex"), new("grok", "Grok"), new("kimi", "Kimi Code"), new("glm", "GLM")];
+    [new("claude", "Claude Code"), new("codex", "OpenAI Codex"), new("kimi", "Kimi Code"), new("gemini", "Gemini"), new("glm", "GLM")];
     private const string AutomaticCount = "Let AI choose";
     private ChatViewModel? _host;
     private int _maximum = 8;
@@ -24,6 +24,8 @@ public partial class BridgeSetupPanel : UserControl
     private bool _starting;
     private bool _advancedOnly;
     private bool _hasOtherOrchestrators;
+    private bool _includeKimiAccount;
+    private IReadOnlyList<BridgeAccountChoice> _accounts = [];
     private int _micToken;
     private DateTime _transcribingSince;
     private readonly DispatcherTimer _speechTimer;
@@ -42,7 +44,10 @@ public partial class BridgeSetupPanel : UserControl
     public IReadOnlyList<int> WorkerAllocation => Groups.Select(group => group.WorkerCount).ToArray();
     public ObservableCollection<BridgeSetupGroup> Groups { get; } = new();
     public string Objective => ObjectiveBox.Text.Trim();
-    public string Provider => (IsAdvanced ? OrchestratorProviderBox : PeerProviderBox).SelectedValue as string ?? _host?.Provider ?? "claude";
+    public BridgeAccountChoice? PeerAccount => PeerAccountBox.SelectedItem as BridgeAccountChoice;
+    public BridgeProviderChoice? PeerProvider => PeerProviderBox.SelectedItem as BridgeProviderChoice;
+    public string Provider => (IsAdvanced ? OrchestratorProviderBox.SelectedValue as string : PeerAccount?.Provider ?? PeerProvider?.Id)
+        ?? _host?.Provider ?? "claude";
 
     public BridgeSetupPanel()
     {
@@ -54,7 +59,8 @@ public partial class BridgeSetupPanel : UserControl
     }
 
     public void Configure(ChatViewModel host, int maximumWorkers, bool advancedOnly = false,
-        bool singleTerminal = true, Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false)
+        bool singleTerminal = true, Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false,
+        bool includeKimiAccount = false)
     {
         var retainDraft = ReferenceEquals(_host, host) && _advancedOnly == advancedOnly;
         Suspend();
@@ -65,13 +71,12 @@ public partial class BridgeSetupPanel : UserControl
         _workerCapacity = workerCapacity;
         _advancedOnly = advancedOnly;
         _hasOtherOrchestrators = hasOtherOrchestrators;
+        _includeKimiAccount = includeKimiAccount || host.IsKimi;
         ModeChoices.Visibility = advancedOnly ? Visibility.Collapsed : Visibility.Visible;
         Heading.Text = advancedOnly ? "Add an orchestrator" : "Start a bridge";
         if (!retainDraft)
         {
-            PeerProviderBox.ItemsSource = Providers;
             OrchestratorProviderBox.ItemsSource = Providers;
-            PeerProviderBox.SelectedValue = host.Provider;
             OrchestratorProviderBox.SelectedValue = host.Provider;
             ObjectiveBox.Text = host.Draft;
             SingleTerminalChoice.IsChecked = singleTerminal;
@@ -80,6 +85,16 @@ public partial class BridgeSetupPanel : UserControl
             RegularChoice.IsChecked = !advancedOnly;
             AgentOptions.Configure(host, host.Provider);
         }
+        var previousAccount = retainDraft ? PeerAccount : null;
+        var previousProvider = retainDraft ? PeerProvider?.Id : null;
+        _accounts = BridgeAccountChoice.Load(_includeKimiAccount);
+        var providers = BridgeProviderChoice.From(_accounts);
+        PeerProviderBox.ItemsSource = providers;
+        // Provider first, then only its accounts. A reopened draft keeps its provider; a fresh one starts on the host's.
+        PeerProviderBox.SelectedItem = providers.FirstOrDefault(p => p.IsUsable && p.Id == previousProvider)
+            ?? providers.FirstOrDefault(p => p.IsUsable && p.Id == host.Provider)
+            ?? providers.FirstOrDefault(p => p.IsUsable);
+        ShowPeerAccounts(previousAccount);
         if (_workerCapacity is not null) _singleGroupMaximum = Math.Max(0, _workerCapacity(OrchestratorProviderBox.SelectedValue as string ?? host.Provider));
         if (!retainDraft) OrchestratorCountBox.SelectedItem = null;
         SetWorkerChoices();
@@ -106,6 +121,38 @@ public partial class BridgeSetupPanel : UserControl
     {
         ErrorText.Text = message;
         ErrorText.Visibility = string.IsNullOrWhiteSpace(message) ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    public BridgeAccountChoice RequirePeerAccount()
+    {
+        var selected = PeerAccount;
+        if (selected is null || !BridgeAccountChoice.Load(_includeKimiAccount).Any(a => a.IsUsable &&
+                a.Provider == selected.Provider && a.AccountId == selected.AccountId))
+            throw new InvalidOperationException("This account is unavailable. Reopen bridge setup to choose an account, or sign in again in AI accounts.");
+        return selected;
+    }
+
+    /// <summary>List the chosen provider's accounts only, keeping <paramref name="preferred"/> while it is still usable.</summary>
+    private void ShowPeerAccounts(BridgeAccountChoice? preferred = null)
+    {
+        var host = _host;
+        var accounts = _accounts.Where(a => a.Provider == PeerProvider?.Id).ToArray();
+        PeerAccountBox.ItemsSource = accounts;
+        PeerAccountBox.SelectedItem = accounts.FirstOrDefault(a => a.IsUsable && preferred is not null &&
+                a.Provider == preferred.Provider && a.AccountId == preferred.AccountId)
+            ?? accounts.FirstOrDefault(a => a.IsUsable && host is not null && a.Provider == host.Provider && a.AccountId == (host.AccountId ?? ""))
+            ?? accounts.FirstOrDefault(a => a.IsUsable && a.IsDefault)
+            ?? accounts.FirstOrDefault(a => a.IsUsable);
+    }
+
+    private void OnPeerProviderChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_configuring || StartButton is null) return;
+        _configuring = true;
+        ShowPeerAccounts();
+        _configuring = false;
+        ShowError("");
+        UpdateControls();
     }
 
     public void Suspend()
@@ -253,18 +300,24 @@ public partial class BridgeSetupPanel : UserControl
         var hostName = _host?.AgentDisplay ?? "This chat";
         var peerName = Providers.FirstOrDefault(p => p.Id == Provider)?.Label ?? Provider;
         RegularSummary.Text = $"{hostName} + {peerName}. Chats open side by side.";
+        RegularSummary.Visibility = PeerAccount is null ? Visibility.Collapsed : Visibility.Visible;
+        AccountNote.Text = "Add or reconnect an account in AI accounts to start a bridge.";
+        AccountNote.Visibility = PeerAccountBox.Items.OfType<BridgeAccountChoice>().Any(a => a.IsUsable)
+            ? Visibility.Collapsed : Visibility.Visible;
         if (!AppSettings.Current.BridgePeerMessaging)
             RegularSummary.Text += " Messaging is paused in Bridge settings.";
         ObjectiveBox.IsReadOnly = busy;
         ModeChoices.IsEnabled = !busy;
-        OrchestratorProviderBox.IsEnabled = PeerProviderBox.IsEnabled = WorkerCountBox.IsEnabled = !busy;
+        OrchestratorProviderBox.IsEnabled = WorkerCountBox.IsEnabled = !busy;
+        PeerProviderBox.IsEnabled = !busy && PeerProviderBox.Items.OfType<BridgeProviderChoice>().Any(p => p.IsUsable);
+        PeerAccountBox.IsEnabled = !busy && PeerAccountBox.HasItems;
         LayoutFields.IsEnabled = !busy;
         AgentOptions.IsEnabled = !busy;
         OrchestratorCountBox.IsEnabled = GroupAllocation.IsEnabled = !busy;
         MicButton.IsEnabled = !busy;
-        StartButton.Content = busy ? "Choosing team…" : IsAdvanced ? "Start team" : "Start bridge";
+        StartButton.Content = _starting ? "Starting…" : busy ? "Choosing team…" : IsAdvanced ? "Start team" : "Start bridge";
         StartButton.IsEnabled = _host is not null && !busy && _micToken == 0 &&
-            (!IsAdvanced || Objective.Length > 0 && _maximum >= OrchestratorCount);
+            (IsAdvanced ? Objective.Length > 0 && _maximum >= OrchestratorCount : PeerAccount?.IsUsable == true);
         TeamSizeText.Text = !IsAdvanced ? "2 connected agents" : AutomaticWorkers
             ? $"{OrchestratorCount} orchestrator{(OrchestratorCount == 1 ? "" : "s")} · AI chooses workers"
             : OrchestratorCount == 1 ? $"1 orchestrator + {WorkerCount} worker{(WorkerCount == 1 ? "" : "s")}"
@@ -446,7 +499,7 @@ public partial class BridgeSetupPanel : UserControl
             return;
         }
         if (speech.State == SpeechState.Downloading && speech.DownloadStalledFor > TimeSpan.FromMinutes(2) ||
-            speech.State == SpeechState.Transcribing && DateTime.UtcNow - _transcribingSince > TimeSpan.FromSeconds(183))
+            speech.State == SpeechState.Transcribing && DateTime.UtcNow - (speech.TranscriptionStartedAtUtc ?? _transcribingSince) > TimeSpan.FromSeconds(183))
         {
             speech.ForceReset();
             ShowError("Speech-to-text stopped responding. Try the microphone again.");
@@ -456,7 +509,8 @@ public partial class BridgeSetupPanel : UserControl
         var recording = speech.State == SpeechState.Recording;
         MicGlyph.SetResourceReference(TextBlock.ForegroundProperty, recording ? "WeatherBlue" : "Accent");
         SpeechText.Text = recording ? "Listening · click to finish" : speech.State == SpeechState.Downloading
-            ? "Downloading speech model " + speech.DownloadProgressText : "Transcribing…";
+            ? "Downloading speech model " + speech.DownloadProgressText
+            : SpeechService.UsesGroq ? "Transcribing with Groq…" : "Transcribing…";
         SpeechText.ToolTip = SpeechText.Text;
         MicButton.ToolTip = recording ? "Stop dictation and insert text" : "Transcribing your task";
         System.Windows.Automation.AutomationProperties.SetName(MicButton, recording ? "Stop dictating team task" : "Dictate team task");
