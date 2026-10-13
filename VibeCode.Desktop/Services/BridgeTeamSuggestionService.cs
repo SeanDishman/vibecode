@@ -160,19 +160,10 @@ public static class BridgeTeamSuggestionService
                 McpServers = [],
                 DialogueOnly = dialogueOnly,
             }),
-            "gemini" => new GeminiSession(new KimiSessionOptions
+            "gemini" => new GeminiSession(new GeminiSessionOptions
             {
                 Cwd = host.Cwd,
                 Model = model,
-                PermissionMode = "plan",
-                AppendSystemPrompt = instructions,
-                McpServers = [],
-            }),
-            "kimi" => new KimiSession(new KimiSessionOptions
-            {
-                Cwd = host.Cwd,
-                Model = model,
-                Effort = effort,
                 PermissionMode = "plan",
                 AppendSystemPrompt = instructions,
                 McpServers = [],

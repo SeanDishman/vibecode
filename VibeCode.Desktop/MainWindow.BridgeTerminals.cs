@@ -112,8 +112,8 @@ public partial class MainWindow
         if (SharedTerminalForWindow.Target is not { } template || e.OriginalSource is not FrameworkElement anchor) return;
         if (!CanAddBridgeAgentForWindow) { ShowBridgeAgentLimitReached(); return; }
         var menu = CreateBridgeMenu(anchor);
-        var accounts = BridgeAccountChoice.Load(_vm.IsKimiSignedIn);
-        foreach (var (provider, label) in new[] { ("claude", "Claude Code"), ("codex", "Codex"), ("kimi", "Kimi Code"), ("gemini", "Gemini"), ("glm", "GLM") })
+        var accounts = BridgeAccountChoice.Load();
+        foreach (var (provider, label) in new[] { ("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini"), ("glm", "GLM") })
         {
             var item = new MenuItem { Header = label, Tag = provider };
             AttachBridgeAccountMenu(item, accounts, account => LaunchWorker(account.Provider, account.AccountId));

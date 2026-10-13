@@ -228,7 +228,7 @@ public sealed class ModelSpeedService
 
     // ---- mapping this app's model ids onto OpenRouter's ----
 
-    /// <summary>Claude Code ships tier aliases rather than ids, and Kimi's ids drop the vendor.</summary>
+    /// <summary>Claude Code ships tier aliases rather than ids.</summary>
     private static readonly IReadOnlyDictionary<string, string> Aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["opus"] = "anthropic/claude-opus-5.5",
@@ -236,16 +236,12 @@ public sealed class ModelSpeedService
         ["sonnet"] = "anthropic/claude-sonnet-5.5",
         ["haiku"] = "anthropic/claude-haiku-4.5",
         ["fable"] = "anthropic/claude-fable-5.1",
-        ["k3"] = "moonshotai/kimi-k3",
-        ["kimi-for-coding"] = "moonshotai/kimi-k2.7-code",
-        ["kimi-for-coding-highspeed"] = "moonshotai/kimi-k2.7-code",
     };
 
     private static readonly IReadOnlyDictionary<string, string> VendorPrefixes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["claude"] = "anthropic/",
         ["codex"] = "openai/",
-        ["kimi"] = "moonshotai/",
     };
 
     /// <summary>In-app presets wrap a real backend model; the wrapper prompt doesn't change how fast it runs.</summary>
@@ -278,7 +274,6 @@ public sealed class ModelSpeedService
         var bracket = id.IndexOf('[');
         if (bracket >= 0) id = id[..bracket];                   // "claude-opus-5[1m]" is the same model, longer context
         if (id.StartsWith("vibecode:", StringComparison.Ordinal)) id = id["vibecode:".Length..];
-        if (id.StartsWith("kimi-code/", StringComparison.Ordinal)) id = id["kimi-code/".Length..];
         foreach (var suffix in PresetSuffixes)
             if (id.EndsWith(suffix, StringComparison.Ordinal)) { id = id[..^suffix.Length]; break; }
         id = DateSuffix.Replace(id, "");                        // strip the snapshot date before dashes become dots

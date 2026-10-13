@@ -16,7 +16,7 @@ internal static partial class Program
         Near("priority and fast aliases price identically", Price("gpt-6.1-sol", "priority"), Price("gpt-6.1-sol", "fast"));
         Near("GPT-5.5 retains its documented API fast exception", Price("gpt-5.5", "fast"), Price("gpt-5.5") * 2.5);
         Near("Astra ultrafast metadata uses its own dollar rate", Price("gpt-6-astra", "ultrafast"), Price("gpt-6-astra") * 6);
-        foreach (var model in new[] { "claude-sonnet-5-5", "claude-opus-4-6", "claude-opus-4-7", "kimi-k2.7-code-highspeed", "zai-org/glm-5.2-fast" })
+        foreach (var model in new[] { "claude-sonnet-5-5", "claude-opus-4-6", "claude-opus-4-7", "zai-org/glm-5.2-fast" })
             Near(model + " receives no unrelated fast surcharge", Price(model, "fast"), Price(model));
         Near("Claude one-hour cache writes use the higher write rate", ModelPricing.TurnCost("claude-opus-5-5", 0, 1000, 0, 0, "fast", cacheWrite1h: 1000), 0.016);
         Near("long cache writes cannot exceed the write total", ModelPricing.TurnCost("claude-opus-5-5", 0, 1000, 0, 0, "fast", cacheWrite1h: 5000), 0.016);

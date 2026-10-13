@@ -18,14 +18,13 @@ public static class CliInstallationService
     static CliInstallationService() => Http.DefaultRequestHeaders.UserAgent.ParseAdd("VibeCode/1.1.4");
     public static string Root => Path.GetFullPath(Environment.GetEnvironmentVariable("VIBECODE_RUNTIME_DIR") is { Length: > 0 } custom
         ? custom : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VibeCode", "runtimes"));
-    public static bool Supports(string provider) => provider is "claude" or "codex" or "kimi" or "gemini";
+    public static bool Supports(string provider) => provider is "claude" or "codex" or "gemini";
     public static string DisplayName(string provider) => provider switch
-    { "claude" => "Claude Code", "codex" => "Codex", "kimi" => "Kimi Code", "gemini" => "Gemini", _ => provider };
+    { "claude" => "Claude Code", "codex" => "Codex", "gemini" => "Gemini", _ => provider };
 
     public static string? ManagedPath(string provider) => FindInDirectory(provider, Path.Combine(Root, provider));
     internal static string? FindInDirectory(string provider, string directory)
     {
-        if (provider == "kimi") return Existing(Path.Combine(directory, "bin", "kimi.exe"));
         if (provider == "gemini") return Existing(Path.Combine(directory, "node_modules", "@google", "gemini-cli", "bundle", "gemini.js"));
         if (provider == "claude") return Existing(Path.Combine(directory, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"));
         if (provider == "codex")
@@ -58,11 +57,9 @@ public static class CliInstallationService
             {
                 "claude" => ClaudeSession.ResolveCliPath(),
                 "codex" => CodexSession.ResolveCliPath(),
-                "kimi" => KimiSession.ResolveCliPath(),
                 _ => GeminiRuntime.ResolveCliPath(),
             };
             if (provider == "gemini") _ = NodePath;
-            if (provider == "kimi" && FindOnPath("git.exe") is null && !File.Exists(Path.Combine(Root, "git", "cmd", "git.exe"))) return false;
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
@@ -71,7 +68,7 @@ public static class CliInstallationService
     /// <summary>Process-local PATH only. A copied EXE discovers its managed tools on its next launch.</summary>
     public static void ConfigureEnvironment()
     {
-        var managed = new[] { Path.Combine(Root, "node"), Path.Combine(Root, "git", "cmd"), Path.Combine(Root, "kimi", "bin") };
+        var managed = new[] { Path.Combine(Root, "node") };
         var current = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
         Environment.SetEnvironmentVariable("PATH", string.Join(Path.PathSeparator, managed.Where(Directory.Exists).Concat(current).Distinct(StringComparer.OrdinalIgnoreCase)));
     }
@@ -86,8 +83,7 @@ public static class CliInstallationService
             ConfigureEnvironment();
             if (IsReady(provider)) { progress?.Report($"{DisplayName(provider)} is ready."); return; }
             Directory.CreateDirectory(Root);
-            if (provider == "kimi") await EnsureGitAsync(progress, cancellationToken).ConfigureAwait(false);
-            else await EnsureNodeAsync(progress, cancellationToken).ConfigureAwait(false);
+            await EnsureNodeAsync(progress, cancellationToken).ConfigureAwait(false);
             ConfigureEnvironment();
             if (IsReady(provider)) return;
             var staging = Path.Combine(Root, $".install-{provider}-{Guid.NewGuid():N}");
@@ -95,19 +91,15 @@ public static class CliInstallationService
             try
             {
                 progress?.Report($"Installing {DisplayName(provider)} CLI…");
-                if (provider == "kimi") await InstallKimiAsync(staging, progress, cancellationToken).ConfigureAwait(false);
-                else
+                var package = provider switch
                 {
-                    var package = provider switch
-                    {
-                        "claude" => "@anthropic-ai/claude-code@latest",
-                        "codex" => "@openai/codex@latest",
-                        _ => $"@google/gemini-cli@{GeminiRuntime.SupportedVersion}",
-                    };
-                    var npm = Path.Combine(Path.GetDirectoryName(NodePath)!, "node_modules", "npm", "bin", "npm-cli.js");
-                    await RunAsync(NodePath, [npm, "install", "--prefix", staging, package, "--include=optional", "--no-audit", "--no-fund",
-                        "--registry=https://registry.npmjs.org"], cancellationToken).ConfigureAwait(false);
-                }
+                    "claude" => "@anthropic-ai/claude-code@latest",
+                    "codex" => "@openai/codex@latest",
+                    _ => $"@google/gemini-cli@{GeminiRuntime.SupportedVersion}",
+                };
+                var npm = Path.Combine(Path.GetDirectoryName(NodePath)!, "node_modules", "npm", "bin", "npm-cli.js");
+                await RunAsync(NodePath, [npm, "install", "--prefix", staging, package, "--include=optional", "--no-audit", "--no-fund",
+                    "--registry=https://registry.npmjs.org"], cancellationToken).ConfigureAwait(false);
                 var cli = FindInDirectory(provider, staging) ?? throw new IOException("The installer finished without the CLI. Retry the installation.");
                 progress?.Report($"Checking {DisplayName(provider)} CLI…");
                 using var check = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -144,35 +136,7 @@ public static class CliInstallationService
         await InstallArchiveAsync(baseUrl + name + ".zip", checksum, "node", name, progress, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task EnsureGitAsync(IProgress<string>? progress, CancellationToken cancellationToken)
-    {
-        if (FindOnPath("git.exe") is not null || File.Exists(Path.Combine(Root, "git", "cmd", "git.exe"))) return;
-        progress?.Report("Setting up Git for Kimi Code…");
-        var release = JsonNode.Parse(await Http.GetStringAsync("https://api.github.com/repos/git-for-windows/git/releases/latest", cancellationToken).ConfigureAwait(false));
-        var asset = release?["assets"]?.AsArray().OfType<JsonObject>().FirstOrDefault(a => Regex.IsMatch(a["name"]?.ToString() ?? "", @"^MinGit-[\d.]+-64-bit\.zip$"))
-            ?? throw new IOException("The official Git download is unavailable. Retry when the connection is restored.");
-        var digest = asset["digest"]?.ToString();
-        if (digest?.StartsWith("sha256:", StringComparison.Ordinal) != true) throw new IOException("The Git release is missing its download checksum.");
-        var url = asset["browser_download_url"]?.ToString() ?? "";
-        if (!url.StartsWith("https://github.com/git-for-windows/git/releases/download/", StringComparison.Ordinal)) throw new IOException("Unexpected Git download address.");
-        await InstallArchiveAsync(url, digest[7..], "git", null, progress, cancellationToken).ConfigureAwait(false);
-    }
 
-    private static async Task InstallKimiAsync(string staging, IProgress<string>? progress, CancellationToken cancellationToken)
-    {
-        const string baseUrl = "https://code.kimi.com/kimi-code/";
-        var version = (await Http.GetStringAsync(baseUrl + "latest", cancellationToken).ConfigureAwait(false)).Trim();
-        if (!Regex.IsMatch(version, @"^\d+\.\d+\.\d+(?:[-.][a-zA-Z0-9]+)*$")) throw new IOException("Invalid Kimi release metadata.");
-        var target = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "win32-arm64" : "win32-x64";
-        var releaseUrl = baseUrl + "binaries/" + version + "/";
-        var manifest = JsonNode.Parse(await Http.GetStringAsync(releaseUrl + "manifest.json", cancellationToken).ConfigureAwait(false));
-        var entry = manifest?["platforms"]?[target] ?? throw new IOException("Kimi does not have a build for this Windows architecture.");
-        var file = entry["filename"]?.ToString() ?? "";
-        if (!Regex.IsMatch(file, @"^[a-zA-Z0-9._-]+\.exe$")) throw new IOException("Invalid Kimi download metadata.");
-        var bin = Path.Combine(staging, "bin");
-        Directory.CreateDirectory(bin);
-        await DownloadAsync(releaseUrl + file, Path.Combine(bin, "kimi.exe"), entry["checksum"]?.ToString() ?? "", progress, cancellationToken).ConfigureAwait(false);
-    }
 
     private static async Task InstallArchiveAsync(string url, string checksum, string component, string? inner,
         IProgress<string>? progress, CancellationToken cancellationToken)

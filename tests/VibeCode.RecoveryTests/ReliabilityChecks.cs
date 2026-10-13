@@ -1,10 +1,7 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
-using System.Text;
 using System.Text.Json.Nodes;
 using System.Windows.Threading;
 using VibeCode.Protocol;
@@ -128,7 +125,7 @@ internal static partial class Program
         Check("native compaction failure releases working state and reports the error", !failed.IsWorking && !failed.WaitingForLimitReset
             && failed.Items.OfType<BannerItem>().Any(b => b.Text.Contains("Native compaction request failed")));
         failed.Close();
-        foreach (var provider in new[] { "kimi", "glm" })
+        foreach (var provider in new[] { "gemini", "glm" })
         {
             var (chat, _) = NewChat("unsupported-compact-" + provider, provider);
             Field(chat, "_session", new NonCompactSession());
@@ -174,7 +171,6 @@ internal static partial class Program
         var second = (Task<UsageRecoverySnapshot>)Call(codex, "ReadRecoveryUsageAsync")!;
         Pump(() => second.IsCompleted);
         Check("Codex does not reuse a cached available reading", second.GetAwaiter().GetResult().Available == false && reads == 2);
-        KimiAllowanceChecks();
         GlmAllowanceChecks();
     }
 
@@ -242,44 +238,6 @@ internal static partial class Program
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(response(request));
     }
 
-    private static void KimiAllowanceChecks()
-    {
-        var credentialPath = Path.Combine(Environment.GetEnvironmentVariable("KIMI_CODE_HOME")!, "credentials", "kimi-code.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(credentialPath)!);
-        var credentials = new JsonObject { ["access_token"] = "recovery-fixture-token", ["expires_at"] = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() }.ToJsonString();
-        File.WriteAllText(credentialPath, credentials);
-        var oldBase = Environment.GetEnvironmentVariable("KIMI_CODE_BASE_URL");
-        using var server = new LoopbackUsageServer(n => n switch
-        {
-            1 => (200, """{"usage":{"limit":"100","used":"10"}}"""),
-            2 => (503, "temporary failure"),
-            3 => (200, """{"usage":{"limit":"100","used":"100","resetTime":"2030-01-01T12:00:00.123456789Z"},"limits":[{"detail":{"limit":"50","used":"50","resetTime":"2030-01-02T12:00:00Z"}}]}"""),
-            _ => (200, "{}"),
-        });
-        Environment.SetEnvironmentVariable("KIMI_CODE_BASE_URL", server.Url);
-        UsageRecoverySnapshot Read()
-        {
-            var task = (Task<UsageRecoverySnapshot>)Call(KimiUsageService.Instance, "ReadRecoveryUsageAsync")!;
-            Pump(() => task.IsCompleted); return task.GetAwaiter().GetResult();
-        }
-        try
-        {
-            Check("Kimi reads fresh allowance from the provider endpoint", Read().Available == true);
-            Check("Kimi failed endpoint cannot reuse cached available allowance", Read().Available is null);
-            var blocked = Read();
-            Check("Kimi awaits every exhausted window and parses high-precision reset dates", blocked.Available == false
-                && blocked.ResetsAt == new DateTimeOffset(2030, 1, 2, 12, 0, 0, TimeSpan.Zero));
-            Check("Kimi empty successful response is unknown", Read().Available is null);
-            Check("Kimi recovery uses the existing token and only the usage endpoint", server.Requests.Count == 4
-                && server.Requests.All(request => request.StartsWith("GET /usages HTTP/") && request.Contains("Authorization: Bearer recovery-fixture-token")));
-            Check("checking Kimi usage does not rewrite credentials", File.ReadAllText(credentialPath) == credentials);
-            File.WriteAllText(credentialPath, new JsonObject { ["access_token"] = "expired-fixture-token", ["expires_at"] = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeSeconds() }.ToJsonString());
-            Check("expired Kimi token is inconclusive and never queried", Read().Available is null && server.Requests.Count == 4);
-            File.Delete(credentialPath);
-            Check("missing Kimi login is inconclusive and never queried", Read().Available is null && server.Requests.Count == 4);
-        }
-        finally { Environment.SetEnvironmentVariable("KIMI_CODE_BASE_URL", oldBase); }
-    }
 
     private sealed class NonCompactSession : ICodingSession
     {
@@ -303,41 +261,4 @@ internal static partial class Program
         public void Dispose() { }
     }
 
-    // TCP loopback avoids OS URL ACLs and real provider calls. The production HttpClient and parser remain in use.
-    private sealed class LoopbackUsageServer : IDisposable
-    {
-        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
-        private readonly CancellationTokenSource _stop = new();
-        private readonly Task _serving;
-        public ConcurrentQueue<string> Requests { get; } = new();
-        public string Url { get; }
-        public LoopbackUsageServer(Func<int, (int Status, string Body)> response)
-        {
-            _listener.Start();
-            Url = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}";
-            _serving = Task.Run(async () =>
-            {
-                try
-                {
-                    while (!_stop.IsCancellationRequested)
-                    {
-                        using var client = await _listener.AcceptTcpClientAsync(_stop.Token);
-                        await using var stream = client.GetStream();
-                        using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
-                        var request = new StringBuilder();
-                        while (await reader.ReadLineAsync(_stop.Token) is { Length: > 0 } line) request.AppendLine(line);
-                        Requests.Enqueue(request.ToString());
-                        var (status, body) = response(Requests.Count);
-                        var bytes = Encoding.UTF8.GetBytes(body);
-                        var header = Encoding.ASCII.GetBytes($"HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n");
-                        await stream.WriteAsync(header, _stop.Token);
-                        await stream.WriteAsync(bytes, _stop.Token);
-                    }
-                }
-                catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
-                catch (SocketException) when (_stop.IsCancellationRequested) { }
-            });
-        }
-        public void Dispose() { _stop.Cancel(); _listener.Stop(); _serving.GetAwaiter().GetResult(); _stop.Dispose(); }
-    }
 }

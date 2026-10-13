@@ -366,7 +366,7 @@ public sealed class AgentMemoryService : INotifyPropertyChanged
         return string.Join(unit,
             server.Name, server.Transport, server.Command,
             server.Enabled ? "1" : "0", server.UseClaude ? "1" : "0", server.UseCodex ? "1" : "0",
-            server.UseKimi ? "1" : "0", "0",
+            "0",
             string.Join(record, server.Arguments),
             string.Join(record, server.Environment
                 .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)

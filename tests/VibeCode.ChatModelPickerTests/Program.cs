@@ -21,8 +21,7 @@ internal static partial class Program
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", Path.Combine(Root, "claude-home"));
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_ACCOUNT_STORE", Path.Combine(Root, "codex-accounts"));
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Path.Combine(Root, "codex-home"));
-        Environment.SetEnvironmentVariable("KIMI_CODE_HOME", Path.Combine(Root, "kimi-home"));
-        Environment.SetEnvironmentVariable("KIMI_SHARE_DIR", Path.Combine(Root, "kimi-share"));
+        Environment.SetEnvironmentVariable("GEMINI_CLI_HOME", Path.Combine(Root, "gemini-home"));
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         AppSettings.Current.AgentMemoryEnabled = false;
@@ -63,7 +62,7 @@ internal static partial class Program
     private static void VerifyChatIsolation()
     {
         var vm = new MainViewModel();
-        foreach (var provider in new[] { "codex", "claude", "kimi", "glm" })
+        foreach (var provider in new[] { "codex", "claude", "gemini", "glm" })
         {
             AppSettings.Current.DefaultProvider = provider == "claude" ? "codex" : "claude";
             foreach (var bridge in new[] { false, true })
@@ -75,7 +74,7 @@ internal static partial class Program
         }
         vm.ActiveChat = vm.Chats.First(c => c.IsCodex && !c.IsBridgeAgent);
         vm.SecondaryActiveChat = vm.Chats.First(c => c.IsClaude && !c.IsBridgeAgent);
-        foreach (var selectedProvider in new[] { "claude", "codex", "kimi", "glm" })
+        foreach (var selectedProvider in new[] { "claude", "codex", "gemini", "glm" })
         {
             AppSettings.Current.DefaultProvider = selectedProvider;
             AppSettings.Current.ActiveAccountId = "claude-other";
@@ -83,7 +82,7 @@ internal static partial class Program
             Check("switching New Chat to " + selectedProvider + " leaves every chat's provider and models intact",
                 vm.Chats.All(c => c.PickerModels.Count > 0 && c.PickerModels.All(m => m.Model.Provider == c.Provider && m.CanApply)));
             Check("switching New Chat to " + selectedProvider + " keeps original chat accounts and both window selections",
-                vm.Chats.All(c => c.AccountId == (c.IsKimi ? null : c.Provider + "-original"))
+                vm.Chats.All(c => c.AccountId == c.Provider + "-original")
                 && vm.ActiveChat!.IsCodex && vm.SecondaryActiveChat!.IsClaude);
         }
         AppSettings.Current.DefaultProvider = "claude";

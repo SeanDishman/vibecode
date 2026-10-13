@@ -9,7 +9,7 @@ public sealed partial class ChatViewModel
     private bool _steerQueueHold;
 
     /// <summary>Providers whose running turn can take a message without being interrupted (see
-    /// <see cref="ISteerableSession"/>). Kimi's ACP adapter rejects any prompt while a turn runs, so it only queues.</summary>
+    /// <see cref="ISteerableSession"/>). Adapters without steering support queue prompts until the turn ends.</summary>
     public bool SupportsSteer => IsCodex || IsClaude || IsGlm;
 
     /// <summary>A running root turn can accept guidance without starting another turn.</summary>
@@ -123,7 +123,7 @@ public sealed partial class ChatViewModel
     /// <summary>A regular bridge asks each agent for its pane title in a note riding every new request, so a chat that
     /// becomes a bridge agent part-way through a turn stayed untitled until the user next wrote to it. Steer the
     /// question into the running turn instead. It is the app's note, not the user's message: no bubble, prompt history
-    /// or memory record. Nothing is sent when the turn can't take it (idle, Kimi); the next request then asks as usual.</summary>
+    /// or memory record. Nothing is sent when the turn can't take it (idle or unsupported adapter); the next request then asks as usual.</summary>
     internal async Task<bool> RequestBridgeTaskTitleNowAsync()
     {
         if (!UsesBridgeTaskTitle || BridgeHeaderTaskTitle.Length > 0 || !CanSteer

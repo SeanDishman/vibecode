@@ -27,10 +27,9 @@ internal static partial class Program
         Root = Path.Combine(Environment.CurrentDirectory, "artifacts", "compact-recovery", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Root);
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", Path.Combine(Root, "settings"));
-        Environment.SetEnvironmentVariable("KIMI_CODE_HOME", Path.Combine(Root, "empty-kimi"));
-        Environment.SetEnvironmentVariable("KIMI_SHARE_DIR", Path.Combine(Root, "empty-kimi-share"));
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Path.Combine(Root, "empty-codex"));
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
+        Environment.SetEnvironmentVariable("GEMINI_CLI_HOME", Path.Combine(Root, "empty-gemini-home"));
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         AppSettings.Current.AgentMemoryEnabled = false;
@@ -154,7 +153,7 @@ internal static partial class Program
     private static void ChatChecks()
     {
         AppSettings.Current.ContinueAfterLimitResets = true;
-        foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "gemini", "glm" })
             foreach (var role in new[] { "chat", "bridge", "advanced-worker", "advanced-orchestrator" })
             {
                 var (chat, session) = NewChat(provider + "-" + role, provider);

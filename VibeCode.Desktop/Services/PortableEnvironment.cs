@@ -18,7 +18,6 @@ internal static class PortableEnvironment
         {
             ["VIBECODE_CODEX_PATH"] = @"tools\codex\bin\codex.exe",
             ["VIBECODE_CLAUDE_PATH"] = @"tools\claude\claude.exe",
-            ["VIBECODE_KIMI_PATH"] = @"tools\kimi\kimi.exe",
             ["CLAUDE_CODE_GIT_BASH_PATH"] = @"tools\git\bin\bash.exe",
             ["GIT_SSL_CAINFO"] = @"tools\git\mingw64\etc\ssl\certs\ca-bundle.crt",
         };
@@ -37,7 +36,8 @@ internal static class PortableEnvironment
         var tools = new[]
         {
             @"tools\node", @"tools\git\cmd", @"tools\git\bin", @"tools\codex\bin",
-            @"tools\codex\codex-path", @"tools\claude", @"tools\kimi",         };
+            @"tools\codex\codex-path", @"tools\claude",
+        };
         var directories = tools.Select(relativePath => Path.Combine(root, relativePath)).Where(Directory.Exists);
         var existing = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries);
         Environment.SetEnvironmentVariable("PATH", string.Join(';', directories.Concat(existing).Distinct(StringComparer.OrdinalIgnoreCase)));

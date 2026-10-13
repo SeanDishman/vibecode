@@ -23,10 +23,9 @@ internal static partial class Program
             (args.Contains("--live") ? "live-" : "offline-") + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(_root);
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", Path.Combine(_root, "settings"));
-        Environment.SetEnvironmentVariable("KIMI_CODE_HOME", Path.Combine(_root, "empty-kimi-home"));
-        Environment.SetEnvironmentVariable("KIMI_SHARE_DIR", Path.Combine(_root, "empty-kimi-share"));
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Path.Combine(_root, "empty-codex-home"));
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
+        Environment.SetEnvironmentVariable("GEMINI_CLI_HOME", Path.Combine(_root, "empty-gemini-home"));
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         AppSettings.Current.AgentMemoryEnabled = false;
@@ -55,7 +54,7 @@ internal static partial class Program
 
     private static void RunOffline()
     {
-        foreach (var provider in new[] { "codex", "claude", "glm", "kimi" })
+        foreach (var provider in new[] { "codex", "claude", "glm", "gemini" })
         {
             var menu = new ChatViewModel(_root, provider: provider) { ExcludeFromMemory = true };
             Chats.Add(menu);

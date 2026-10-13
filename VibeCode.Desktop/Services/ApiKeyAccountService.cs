@@ -60,7 +60,7 @@ public sealed class ApiKeyValidation
 }
 
 /// <summary>
-/// API-key sign-in for the four coding CLIs VibeCode drives.
+/// API-key sign-in for supported coding providers.
 ///
 /// Every one of them authenticates through an environment variable, which is why this fits the existing
 /// design: a session already gets its account by having env pointed at a per-account credential home.
@@ -92,7 +92,6 @@ public sealed class ApiKeyAccountService : Observable
     {
         "claude" => "Claude",
         "codex" => "ChatGPT",
-        "kimi" => "Kimi",
         VibeCode.Protocol.GlmPreset.ProviderId => VibeCode.Protocol.GlmPreset.DisplayName,
         _ => provider ?? "",
     };
@@ -114,7 +113,7 @@ public sealed class ApiKeyAccountService : Observable
         /// <see cref="DropRetiredProviders"/> checks, so omitting it would silently delete every saved GLM key
         /// on the next launch.</remarks>
         internal static readonly string[] InMenuOrder =
-            ["claude", "codex", "kimi", VibeCode.Protocol.GlmPreset.ProviderId];
+            ["claude", "codex", VibeCode.Protocol.GlmPreset.ProviderId];
     }
 
     /// <summary>The providers that can be signed into with a key, in menu order.</summary>
@@ -200,7 +199,6 @@ public sealed class ApiKeyAccountService : Observable
             {
                 "claude" => ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
                 "codex" => ["OPENAI_API_KEY", "CODEX_API_KEY"],
-                "kimi" => ["MOONSHOT_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
                 _ => [],
             };
             foreach (var variable in variables) psi.Environment.Remove(variable);
@@ -222,13 +220,6 @@ public sealed class ApiKeyAccountService : Observable
                 break;
             case "codex":
                 psi.Environment["OPENAI_API_KEY"] = key;
-                break;
-            case "kimi":
-                // Moonshot speaks the Anthropic wire format, so a Kimi key drives an Anthropic-shaped
-                // client by repointing the base URL rather than needing its own transport.
-                psi.Environment["MOONSHOT_API_KEY"] = key;
-                psi.Environment["ANTHROPIC_BASE_URL"] = "https://api.moonshot.ai/anthropic";
-                psi.Environment["ANTHROPIC_AUTH_TOKEN"] = key;
                 break;
             case VibeCode.Protocol.GlmPreset.ProviderId:
                 // Nothing to inject: this provider has no CLI to launch. GlmSession is spoken in-process and
@@ -303,8 +294,6 @@ public sealed class ApiKeyAccountService : Observable
                     r.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
                 })),
             "codex" => ("https://api.openai.com/v1/models",
-                r => r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key)),
-            "kimi" => ("https://api.moonshot.ai/v1/models",
                 r => r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key)),
             // Baseten. Its own scheme rather than Bearer (both work, this is the documented one). A bad key here
             // answers 403 rather than 401, which the status mapping below already treats as a rejection.

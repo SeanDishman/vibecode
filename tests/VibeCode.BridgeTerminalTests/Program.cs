@@ -490,10 +490,9 @@ internal static partial class Program
         var (_, team) = Team("registration", 1);
         var endpoint = Call(team[0], "EnsureBridgeMcp")!;
         var registration = (McpServerDefinition)Call(endpoint, "Registration")!;
-        Check("built-in helper is enabled for every CLI provider", registration.UseClaude && registration.UseCodex && registration.UseKimi && registration.UseGemini);
+        Check("built-in helper is enabled for every CLI provider", registration.UseClaude && registration.UseCodex && registration.UseGemini);
         Check("Codex projection approves only known bridge tools", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides.Any(c => c.Contains("bridge_dispatch_task") && c.Contains("bridge_read_chat") && c.Contains("approval_mode")));
         Check("Claude receives built-in endpoint", McpCatalog.BuildClaudeConfig([registration]).ToJsonString().Contains("--bridge-mcp"));
-        Check("Kimi receives built-in endpoint", McpCatalog.BuildKimiAcpServers([registration]).ToJsonString().Contains("--bridge-mcp"));
         using var glm = new GlmSession(new GlmSessionOptions { Cwd = _root, ApiKeys = ["offline-fixture"], BridgeMcpPipe = (string)Property(endpoint, "PipeName")! });
         Check("GLM advertises the same bridge contract", ((JsonArray)Call(glm, "ToolSchema")!).Any(t => t?["function"]?["name"]?.ToString() == "bridge_read_chat"));
         var host = new AgentStatusMcpHost(BridgeMcpTools.Create((_, _) => new JsonObject { ["ok"] = true }), serverName: "vibecode-bridge", instructions: BridgeMcpTools.Instructions);

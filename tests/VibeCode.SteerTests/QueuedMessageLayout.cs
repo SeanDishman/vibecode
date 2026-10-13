@@ -102,7 +102,7 @@ internal static class QueuedMessageLayout
     private static object Queued(bool codex, bool extended = false, bool head = true, bool active = true) => new
     {
 
-        // queues, such as Kimi, whose ACP adapter refuses a prompt while a turn runs.
+        // queues, such as Gemini, whose ACP adapter refuses a prompt while a turn runs.
         Owner = new { IsCodex = codex, SupportsSteer = codex, CanSteer = active, CanSendQueuedNow = true },
         IsQueueHead = head,
         Extended = extended,

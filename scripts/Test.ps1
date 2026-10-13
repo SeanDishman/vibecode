@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $testEnvironment = @{}
 $accountRoot = Join-Path $repositoryRoot ('artifacts\test-accounts-' + [Guid]::NewGuid().ToString('N'))
-foreach ($name in @('VIBECODE_CODEX_ACCOUNT_STORE','VIBECODE_CODEX_LEGACY_HOME','VIBECODE_CLAUDE_ACCOUNT_STORE','CLAUDE_CONFIG_DIR','KIMI_CODE_HOME','GEMINI_CLI_HOME')) {
+foreach ($name in @('VIBECODE_CODEX_ACCOUNT_STORE','VIBECODE_CODEX_LEGACY_HOME','VIBECODE_CLAUDE_ACCOUNT_STORE','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME')) {
     $testEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
     $directory = Join-Path $accountRoot $name
     New-Item -ItemType Directory -Path $directory -Force | Out-Null

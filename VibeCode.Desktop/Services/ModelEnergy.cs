@@ -121,19 +121,6 @@ public static class ModelEnergy
         ["gpt-5.6-terra"] = 60,
         ["gpt-5.6-luna"] = 6,
 
-        // Moonshot. PUBLISHED: Kimi K2 activates 32B of 1.04T (8 of 384 experts). Carried forward to the later
-        // Kimi ids, which have not published an architecture. The "highspeed" tiers are the same model served
-        // with less batching, which does cost more per token - not modelled, so those two read low.
-        ["k3"] = 32,
-        ["kimi-k3"] = 32,
-        ["kimi-code/k3"] = 32,
-        ["kimi-k2.7-code"] = 32,
-        ["kimi-for-coding"] = 32,
-        ["kimi-code/kimi-for-coding"] = 32,
-        ["kimi-k2.7-code-highspeed"] = 32,
-        ["kimi-for-coding-highspeed"] = 32,
-        ["kimi-code/kimi-for-coding-highspeed"] = 32,
-
         // Zhipu GLM. PUBLISHED for the 4.5/4.6 generation: 32B active of 355B total. Carried forward to the 5.x
         // ids, which have published no architecture - so these are the same kind of estimate as the closed models
         // above, not a disclosure. Listed rather than left out because the fallback is the 300B Opus tier, which

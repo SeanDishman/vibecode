@@ -35,7 +35,7 @@ internal static partial class Program
                 try
                 {
                     shell.Show(); shell.UpdateLayout();
-                    foreach (var provider in new[] { "claude", "codex", "kimi", "gemini" })
+                    foreach (var provider in new[] { "claude", "codex", "gemini", "gemini" })
                     {
                         Call(shell, "SelectAccountManagerProvider", provider);
                         var label = ((TextBlock)shell.FindName("AccountManagerAddLabel")).Text;

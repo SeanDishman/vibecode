@@ -133,8 +133,9 @@
                     <Run Text="  •  " Foreground="#343A4B"/>
                     <Run Text="CLAUDE"/>
                     <Run Text="  •  " Foreground="#343A4B"/>
-                    <Run Text="KIMI"/>
+                    <Run Text="GEMINI"/>
                     <Run Text="  •  " Foreground="#343A4B"/>
+                    <Run Text="GLM"/>
                     </TextBlock>
             </StackPanel>
         </Border>

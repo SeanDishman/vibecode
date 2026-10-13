@@ -8,7 +8,7 @@ public sealed record BridgeAccountChoice(string Provider, string AccountId, stri
 {
     public string AccessibleLabel => $"{Label}, {Detail}";
 
-    public static IReadOnlyList<BridgeAccountChoice> Load(bool includeKimi = false)
+    public static IReadOnlyList<BridgeAccountChoice> Load()
     {
         var keys = ApiKeyAccountService.Instance;
         var choices = new List<BridgeAccountChoice>();
@@ -16,9 +16,6 @@ public sealed record BridgeAccountChoice(string Provider, string AccountId, stri
             "claude", a.Id, a.Label, a.ProviderLine, a.Usable, a.IsCurrent && keys.SelectedFor("claude") is null)));
         choices.AddRange(CodexAccountService.Instance.List().Select(a => new BridgeAccountChoice(
             "codex", a.Id, a.Label, a.ProviderLine, a.Usable, a.IsCurrent && keys.SelectedFor("codex") is null)));
-        if (includeKimi)
-            choices.Add(new("kimi", "", "Kimi account", "Kimi Code · Shared CLI login",
-                IsDefault: keys.SelectedFor("kimi") is null));
         if (GeminiRuntime.HasLogin)
             choices.Add(new("gemini", "", GeminiRuntime.AccountEmail ?? "Google account", "Gemini · Google sign-in", GeminiRuntime.IsInstalled, true));
         foreach (var provider in ApiKeyAccountService.Providers)
@@ -33,13 +30,13 @@ public sealed record BridgeAccountChoice(string Provider, string AccountId, stri
             .Select(g => g.Key).ToHashSet();
         return choices.Select(a => duplicateNames.Contains((a.Provider, a.Label, a.Detail))
                 ? a with { Label = $"{a.Label} · {a.AccountId[^Math.Min(6, a.AccountId.Length)..]}" } : a)
-            .OrderBy(a => Array.IndexOf(new[] { "claude", "codex", "kimi", "gemini", "glm" }, a.Provider))
+            .OrderBy(a => Array.IndexOf(new[] { "claude", "codex", "gemini", "glm" }, a.Provider))
             .ThenByDescending(a => a.IsDefault).ThenBy(a => a.Label, StringComparer.CurrentCultureIgnoreCase).ToArray();
     }
 
     /// <summary>One provider's accounts, in picker order.</summary>
-    public static IReadOnlyList<BridgeAccountChoice> For(string provider, bool includeKimi = false) =>
-        Load(includeKimi).Where(a => a.Provider == provider).ToArray();
+    public static IReadOnlyList<BridgeAccountChoice> For(string provider) =>
+        Load().Where(a => a.Provider == provider).ToArray();
 
     /// <summary>The account to use without asking: the only signed-in one. Null when there is a real choice
     /// (two or more) or nothing usable, which leaves the provider's own default in charge.</summary>

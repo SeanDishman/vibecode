@@ -18,15 +18,16 @@ internal static partial class Program
 {
     private static void IsolateBridgeAccountStores()
     {
+        var accountRoot = Path.Combine(_root, "accounts", Guid.NewGuid().ToString("N"));
         foreach (var variable in new[] { "CLAUDE_CONFIG_DIR", "VIBECODE_CLAUDE_ACCOUNT_STORE",
-                     "VIBECODE_CODEX_ACCOUNT_STORE", "VIBECODE_CODEX_LEGACY_HOME"})
+                     "VIBECODE_CODEX_ACCOUNT_STORE", "VIBECODE_CODEX_LEGACY_HOME", "GEMINI_CLI_HOME"})
         {
-            var path = Path.Combine(_root, "accounts", variable);
+            var path = Path.Combine(accountRoot, variable);
             Directory.CreateDirectory(path);
             Environment.SetEnvironmentVariable(variable, path);
         }
         var exe = Path.ChangeExtension(Assembly.GetExecutingAssembly().Location, ".exe");
-        foreach (var provider in new[] { "CODEX", "CLAUDE", "KIMI" })
+        foreach (var provider in new[] { "CODEX", "CLAUDE" })
             Environment.SetEnvironmentVariable("VIBECODE_" + provider + "_PATH", exe);
     }
 
@@ -72,20 +73,20 @@ internal static partial class Program
         foreach (var provider in ApiKeyAccountService.Providers)
             fixtures[provider] = keys.Add(provider, "fixture-key-" + provider, provider.ToUpperInvariant() + " API account");
         var secondKey = keys.Add("codex", "fixture-other-codex-key", "Second Codex API account");
-        fixtures["kimi"].Label = "Research workspace with a deliberately long account name for checking narrow dropdown layouts";
+        fixtures["claude"].Label = "Research workspace with a deliberately long account name for checking narrow dropdown layouts";
 
-        panel.Configure(host, 8, includeKimiAccount: true);
+        panel.Configure(host, 8);
         var providers = providerBox.Items.OfType<BridgeProviderChoice>().ToArray();
         Check("provider picker lists every provider and enables only signed-in choices", providers.Select(p => p.Id)
             .SequenceEqual(BridgeSetupPanel.Providers.Select(p => p.Id))
             && providers.All(p => p.IsUsable == (p.Id != "gemini")) && providerBox.IsEnabled);
         Check("provider picker starts on the host's provider and counts its accounts",
             panel.PeerProvider?.Id == "codex" && providers.Single(p => p.Id == "codex").Detail == "5 accounts" &&
-            providers.Single(p => p.Id == "kimi").Detail == "2 accounts" && providers.Single(p => p.Id == "glm").Detail == "1 account");
+            providers.Single(p => p.Id == "claude").Detail == "1 account" && providers.Single(p => p.Id == "glm").Detail == "1 account");
         var choices = box.Items.OfType<BridgeAccountChoice>().ToArray();
         Check("account picker lists only the chosen provider's accounts", choices.Length == 5 && choices.All(a => a.Provider == "codex"));
-        Check("every saved account is still reachable through its provider", BridgeAccountChoice.Load(true).Count == fixtures.Count + 5 &&
-            providers.Where(p => p.IsUsable).All(p => BridgeAccountChoice.For(p.Id, true).Count > 0));
+        Check("every saved account is still reachable through its provider", BridgeAccountChoice.Load().Count == fixtures.Count + 4 &&
+            providers.Where(p => p.IsUsable).All(p => BridgeAccountChoice.For(p.Id).Count > 0));
         Check("host account is initially selected even when an API key is the default", panel.PeerAccount?.AccountId == "personal");
         Check("unusable accounts are identified", choices.Single(a => a.AccountId == "expired") is { IsUsable: false } unavailable && unavailable.Detail.Contains("Sign in"));
         Check("account picker has an accessible name", AutomationProperties.GetName(box) == "Bridge partner AI account");
@@ -102,7 +103,7 @@ internal static partial class Program
         ((ComboBox)panel.FindName("OrchestratorProviderBox")).SelectedValue = "claude";
         Check("advanced provider choice remains independent", panel.Provider == "claude");
         ((RadioButton)panel.FindName("RegularChoice")).IsChecked = true;
-        panel.Configure(host, 8, includeKimiAccount: true);
+        panel.Configure(host, 8);
         Check("account choice survives switching modes and reopening", panel.PeerAccount?.AccountId == "work");
         CaptureAccountSetup(panel, "bridge-accounts-selected.png");
         box.ApplyTemplate();
@@ -114,10 +115,10 @@ internal static partial class Program
         CaptureAccountDropdown(dropdown, 436, 320, "bridge-accounts-dropdown.png");
         box.IsDropDownOpen = false;
 
-        ChooseProvider("kimi");
-        Check("the shared Kimi login and Kimi API key are listed under Kimi only", box.Items.OfType<BridgeAccountChoice>()
-            .Select(a => a.AccountId).Order().SequenceEqual(new[] { "", fixtures["kimi"].Id }.Order()));
-        box.SelectedItem = box.Items.OfType<BridgeAccountChoice>().Single(a => a.AccountId == fixtures["kimi"].Id);
+        ChooseProvider("claude");
+        Check("the Claude API key is listed under Claude only", box.Items.OfType<BridgeAccountChoice>()
+            .Select(a => a.AccountId).Order().SequenceEqual(new[] { fixtures["claude"].Id }.Order()));
+        box.SelectedItem = box.Items.OfType<BridgeAccountChoice>().Single(a => a.AccountId == fixtures["claude"].Id);
         CaptureAccountSetup(panel, "bridge-accounts-long-name.png");
         box.IsDropDownOpen = true;
         box.UpdateLayout();
@@ -139,17 +140,19 @@ internal static partial class Program
         CaptureAccountDropdown(providerDropdown, 436, 320, "bridge-providers-dropdown.png");
         providerBox.IsDropDownOpen = false;
 
-        var duplicateA = keys.Add("kimi", "duplicate-fixture-one", "Shared name");
-        var duplicateB = keys.Add("kimi", "duplicate-fixture-two", "Shared name");
+        var duplicateA = keys.Add("claude", "duplicate-fixture-one", "Shared name");
+        var duplicateB = keys.Add("claude", "duplicate-fixture-two", "Shared name");
         var duplicates = BridgeAccountChoice.Load().Where(a => a.AccountId == duplicateA.Id || a.AccountId == duplicateB.Id).ToArray();
         Check("matching account names can be distinguished", duplicates.Length == 2 && duplicates[0].Label != duplicates[1].Label);
+        keys.Remove(duplicateA.Id);
+        keys.Remove(duplicateB.Id);
 
-        foreach (var provider in new[] { "claude", "codex", "kimi" })
+        foreach (var provider in new[] { "claude", "codex" })
         {
             var account = fixtures[provider];
             var chosen = new ProcessStartInfo();
             Check(provider + " applies the explicitly selected API key", keys.ApplyTo(chosen, provider, account.Id));
-            var variable = provider switch { "claude" => "ANTHROPIC_API_KEY", "codex" => "OPENAI_API_KEY", _ => "MOONSHOT_API_KEY" };
+            var variable = provider == "claude" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
             Check(provider + " uses that key rather than another account", chosen.Environment[variable] == "fixture-key-" + provider);
             var subscription = new ProcessStartInfo(); subscription.Environment[variable] = "ambient-fixture-key";
             Check(provider + " subscription selection excludes global and inherited API keys", !keys.ApplyTo(subscription, provider, "subscription-id") && !subscription.Environment.ContainsKey(variable));
@@ -162,10 +165,6 @@ internal static partial class Program
         var claudeProcess = (ProcessStartInfo)typeof(ClaudeSession).GetMethod("CreateStartInfo", Flags)!
             .Invoke(null, [new ClaudeSessionOptions { Cwd = cwd, AccountId = fixtures["claude"].Id }])!;
         Check("Claude launch environment honors the account override", claudeProcess.Environment["ANTHROPIC_API_KEY"] == "fixture-key-claude");
-        var kimiProcess = (ProcessStartInfo)typeof(KimiSession).GetMethod("CreateCliStartInfoForAccount", Flags)!
-            .Invoke(null, [cwd, fixtures["kimi"].Id, new[] { "acp" }])!;
-        Check("Kimi launch environment honors the account override", kimiProcess.Environment["MOONSHOT_API_KEY"] == "fixture-key-kimi");
-
         foreach (var secondary in new[] { false, true })
             foreach (var hostProvider in new[] { "codex", "claude" })
                 VerifyBridgeAccountLaunch(secondary, hostProvider, "work");

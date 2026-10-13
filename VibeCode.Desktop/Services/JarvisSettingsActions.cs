@@ -9,7 +9,7 @@ namespace VibeCode.Services;
 public static class JarvisSettingsActions
 {
     private static readonly string[] McpFields =
-        ["Name", "Transport", "Enabled", "UseClaude", "UseCodex", "UseKimi", "UseGemini", "Command", "Arguments", "Url",
+        ["Name", "Transport", "Enabled", "UseClaude", "UseCodex", "UseGemini", "Command", "Arguments", "Url",
          "Environment", "Headers", "BearerTokenEnvironmentVariable", "StartupTimeoutSeconds", "ToolTimeoutSeconds"];
 
     public static bool IsSettingsAction(string kind) => kind is
@@ -105,7 +105,7 @@ public static class JarvisSettingsActions
             foreach (var (property, provider) in new[]
             {
                 (nameof(AppSettings.DefaultModel), "claude"), (nameof(AppSettings.DefaultCodexModel), "codex"),
-                (nameof(AppSettings.DefaultKimiModel), "kimi"),                 (nameof(AppSettings.DefaultGlmModel), "glm"),
+                (nameof(AppSettings.DefaultGlmModel), "glm"),
             })
                 if (changes.Any(change => change.Property.Name == property))
                     RequireCompatibleModel((string?)typeof(AppSettings).GetProperty(property)!.GetValue(candidate), provider);

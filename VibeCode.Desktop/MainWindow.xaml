@@ -556,25 +556,6 @@
             </Button>
         </DataTemplate>
 
-        <DataTemplate DataType="{x:Type ui:KimiAccountEntry}">
-            <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1" Click="OnManageKimiAccount" ToolTip="Connect or use the Kimi Code CLI account" AutomationProperties.Name="{Binding Label}">
-                <DockPanel>
-                    <TextBlock DockPanel.Dock="Right" Text="" FontFamily="{StaticResource Icons}" FontSize="13" Foreground="{StaticResource Green}" VerticalAlignment="Center" Margin="12,0,2,0" Visibility="{Binding IsVibeCodeSelected, Converter={StaticResource BoolVis}}"/>
-                    <TextBlock DockPanel.Dock="Right" Text="shared login" Width="68" Margin="12,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Faint}" FontSize="10" TextAlignment="Right"/>
-                    <Border DockPanel.Dock="Left" Width="32" Height="32" CornerRadius="{StaticResource Rad8}" Background="{StaticResource BrandGradient}" Margin="0,0,10,0">
-                        <TextBlock Text="{Binding Initial}" Foreground="White" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <Border DockPanel.Dock="Left" Background="{StaticResource AmberSoft}" CornerRadius="{StaticResource Rad6}" Padding="7,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="52">
-                        <TextBlock Text="Kimi" FontSize="9.5" FontWeight="SemiBold" Foreground="{StaticResource Amber}" HorizontalAlignment="Center"/>
-                    </Border>
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Label}" FontSize="12.5" Foreground="{StaticResource Text}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                        <TextBlock Text="{Binding ProviderLine}" FontSize="10" Foreground="{StaticResource Faint}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                        <TextBlock Text="{Binding UsageDisplay}" FontSize="9.5" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}" Margin="0,2,0,0" Visibility="{Binding UsageDisplay, Converter={StaticResource ShowIf}}"/>
-                    </StackPanel>
-                </DockPanel>
-            </Button>
-        </DataTemplate>
 
         <DataTemplate DataType="{x:Type ui:GeminiAccountEntry}">
             <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1" Click="OnManageGeminiAccount" ToolTip="Connect or use the Gemini CLI account" AutomationProperties.Name="{Binding Label}">
@@ -2111,7 +2092,7 @@
                         <Border x:Name="AccountFooter" DockPanel.Dock="Bottom" BorderBrush="{StaticResource SurfaceOutline}" BorderThickness="0,1,0,0" Padding="8,8">
                             <StackPanel>
                                 <!-- account switcher: a full-width sidebar-footer row (not a floating pill) -->
-                                <ToggleButton x:Name="AccountToggle" Cursor="Hand" HorizontalAlignment="Stretch" Checked="OnAccountChecked" Unchecked="OnAccountUnchecked" AutomationProperties.Name="Account manager" ToolTip="Manage Claude, Codex, Kimi accounts">
+                                <ToggleButton x:Name="AccountToggle" Cursor="Hand" HorizontalAlignment="Stretch" Checked="OnAccountChecked" Unchecked="OnAccountUnchecked" AutomationProperties.Name="Account manager" ToolTip="Manage Claude, Codex, Gemini, and GLM accounts">
                                     <ToggleButton.Template>
                                         <ControlTemplate TargetType="ToggleButton">
                                             <Border x:Name="bd" CornerRadius="{StaticResource Rad10}" Padding="7,6" Background="Transparent" BorderBrush="Transparent" BorderThickness="1">
@@ -2367,7 +2348,7 @@
                         <Image Width="76" Height="76" HorizontalAlignment="Center" Source="pack://application:,,,/VibeCode;component/Assets/logo.png" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" Effect="{StaticResource BrandGlow}"/>
 
                         <TextBlock Text="What are we vibing on?" FontFamily="{StaticResource Display}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,20,0,6"/>
-                        <TextBlock Text="Choose Claude Code, OpenAI Codex, Kimi CodeGemini, or GLM, then work with its connected account and your project tools." Foreground="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,28"/>
+                        <TextBlock Text="Choose Claude Code, OpenAI Codex, Gemini, or GLM, then work with its connected account and your project tools." Foreground="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,28"/>
 
                         <Border Style="{StaticResource Card}" Padding="14" CornerRadius="{StaticResource Rad16}">
                             <StackPanel>
@@ -2383,12 +2364,6 @@
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="◎" FontSize="12" Margin="0,0,6,0"/>
                                                 <TextBlock Text="OpenAI Codex"/>
-                                            </StackPanel>
-                                        </ToggleButton>
-                                        <ToggleButton x:Name="KimiProviderToggle" Style="{StaticResource PillTab}" Tag="kimi" Click="OnProviderPick" AutomationProperties.Name="Use Kimi Code">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="K" FontSize="11" FontWeight="SemiBold" Margin="0,0,6,0"/>
-                                                <TextBlock Text="Kimi Code"/>
                                             </StackPanel>
                                         </ToggleButton>
                                         <ToggleButton x:Name="GeminiProviderToggle" Style="{StaticResource PillTab}" Tag="gemini" Click="OnProviderPick" AutomationProperties.Name="Use Gemini">
@@ -3139,58 +3114,10 @@
                                         </ControlTemplate>
                                     </ToggleButton.Template>
                                 </ToggleButton>
-                                <!-- Kimi for Coding quota. Kimi's own /usage only counts session tokens, so this comes
-                                     from the plan quota endpoint the Kimi CLI itself uses. -->
                                 <Button Style="{StaticResource GhostButton}" Padding="7,3" Margin="0,0,5,0" Click="OnRefreshGeminiUsage" Visibility="{Binding BridgeUsesGemini, Converter={StaticResource BoolVis}}" AutomationProperties.Name="Gemini plan usage" ToolTip="{Binding Detail, Source={x:Static svc:GeminiUsageService.Instance}}">
                                         <StackPanel Orientation="Horizontal"><TextBlock Text="Gemini" Foreground="{StaticResource Blue}" FontSize="10" Margin="0,0,5,0"/>
                                             <TextBlock Text="{Binding Summary, Source={x:Static svc:GeminiUsageService.Instance}}" Foreground="{StaticResource Muted}" FontSize="10"/></StackPanel>
                                     </Button>
-                                <ToggleButton x:Name="BridgeKimiUsageToggle" Cursor="Hand" Margin="0,0,5,0" VerticalAlignment="Center" Checked="OnBridgeKimiUsageChecked" Unchecked="OnBridgeKimiUsageUnchecked" ToolTip="{Binding Summary, Source={x:Static svc:KimiUsageService.Instance}, StringFormat='Kimi — {0}. Click for quota and reset times.'}" AutomationProperties.Name="Kimi account usage">
-                                    <ToggleButton.Style>
-                                        <Style TargetType="ToggleButton">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                            <Style.Triggers>
-                                                <MultiDataTrigger>
-                                                    <MultiDataTrigger.Conditions>
-                                                        <Condition Binding="{Binding BridgeUsesKimi}" Value="True"/>
-                                                        <Condition Binding="{Binding HasData, Source={x:Static svc:KimiUsageService.Instance}}" Value="True"/>
-                                                    </MultiDataTrigger.Conditions>
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                </MultiDataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </ToggleButton.Style>
-                                    <ToggleButton.Template>
-                                        <ControlTemplate TargetType="ToggleButton">
-                                            <Border x:Name="kimiPill" Background="{StaticResource ChipFill}" BorderBrush="{StaticResource ChipOutline}" BorderThickness="1" CornerRadius="{StaticResource Rad99}" Padding="7,2">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="Kimi" FontSize="9" FontWeight="SemiBold" Foreground="{StaticResource Accent}" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                                    <TextBlock Text="{Binding Summary, Source={x:Static svc:KimiUsageService.Instance}, Converter={StaticResource CompactUsage}}" FontSize="9.5" FontFamily="{StaticResource Mono}" VerticalAlignment="Center" TextWrapping="NoWrap">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Setter Property="Foreground" Value="{StaticResource Muted}"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding AtLimit, Source={x:Static svc:KimiUsageService.Instance}}" Value="True">
-                                                                        <Setter Property="Foreground" Value="{StaticResource Amber}"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                </StackPanel>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="kimiPill" Property="Background" Value="{StaticResource Bg3}"/>
-                                                </Trigger>
-                                                <Trigger Property="IsChecked" Value="True">
-                                                    <Setter TargetName="kimiPill" Property="Background" Value="{StaticResource Bg3}"/>
-                                                    <Setter TargetName="kimiPill" Property="BorderBrush" Value="{StaticResource AccentDim}"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </ToggleButton.Template>
-                                </ToggleButton>
                                 <!-- Announce: icon-only megaphone; hover tooltip says "Announce". Pause every agent
                                      on this bridge and hand them one broadcast, then they carry on. Left of Add agent. -->
                                 <ToggleButton x:Name="BridgeAnnounceToggle" Style="{StaticResource GhostToggle}" Padding="7,5" Margin="0,0,7,0" VerticalAlignment="Center" MinWidth="30" Checked="OnBridgeAnnounceChecked" Unchecked="OnBridgeAnnounceUnchecked" IsEnabled="{Binding CanAnnounceToBridge}" ToolTip="Announce" AutomationProperties.Name="Announce">
@@ -3250,17 +3177,6 @@
                                                         <StackPanel>
                                                             <TextBlock Text="OpenAI Codex"/>
                                                             <TextBlock Text="Add a Codex agent to this bridge" FontSize="11.5" Foreground="{StaticResource MenuSecondary}"/>
-                                                        </StackPanel>
-                                                    </StackPanel>
-                                                </MenuItem.Header>
-                                            </MenuItem>
-                                            <MenuItem Tag="kimi" Click="OnAddBridgeProvider" AutomationProperties.Name="Add Kimi Code agent">
-                                                <MenuItem.Header>
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <TextBlock Text="K" FontSize="11" FontWeight="SemiBold" Width="22" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
-                                                        <StackPanel>
-                                                            <TextBlock Text="Kimi Code"/>
-                                                            <TextBlock Text="Add a Kimi agent to this bridge" FontSize="11.5" Foreground="{StaticResource MenuSecondary}"/>
                                                         </StackPanel>
                                                     </StackPanel>
                                                 </MenuItem.Header>
@@ -4140,52 +4056,6 @@
                 </Border>
             </Popup>
 
-            <!-- Kimi for Coding quota: the plan pool plus every rolling rate window Kimi reports (typically 5h). -->
-            <Popup x:Name="BridgeKimiUsagePopup" PlacementTarget="{Binding ElementName=BridgeKimiUsageToggle}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="6" Closed="OnBridgeKimiUsagePopupClosed">
-                <Border Style="{StaticResource PopupCard}" Width="304">
-                    <StackPanel Margin="14,11" DataContext="{x:Static svc:KimiUsageService.Instance}">
-                        <DockPanel>
-                            <Border DockPanel.Dock="Right" Background="{StaticResource AccentSoft}" CornerRadius="{StaticResource Rad99}" Padding="8,1.5" VerticalAlignment="Center" Visibility="{Binding Plan, Converter={StaticResource ShowIf}}">
-                                <TextBlock Text="{Binding Plan}" FontSize="9.5" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
-                            </Border>
-                            <TextBlock Text="Kimi account usage" FontWeight="SemiBold" FontSize="12.5" VerticalAlignment="Center"/>
-                        </DockPanel>
-                        <ItemsControl ItemsSource="{Binding Limits}" Margin="0,9,0,0">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Margin="0,0,0,9">
-                                        <DockPanel Margin="0,0,0,4">
-                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Percent, StringFormat={}{0}%}" FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="SemiBold" Foreground="{Binding Percent, Converter={StaticResource UsageBrush}}" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                            <TextBlock Text="{Binding Label}" FontSize="11.5" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                                        </DockPanel>
-                                        <ProgressBar Style="{StaticResource SlimProgress}" Height="4" Value="{Binding Percent, Mode=OneWay}" Maximum="100" Foreground="{Binding Percent, Converter={StaticResource UsageBrush}}"/>
-                                        <DockPanel Margin="0,3,0,0">
-                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Detail}" FontSize="9.5" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}" Margin="8,0,0,0"/>
-                                            <TextBlock Text="{Binding ResetDisplay, StringFormat=resets {0}}" FontSize="9.5" Foreground="{StaticResource Faint}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Visibility="{Binding HasReset, Converter={StaticResource BoolVis}}"/>
-                                        </DockPanel>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <!-- Kimi's access token only lives ~15 minutes and VibeCode never spends the refresh token,
-                             so this line also carries "these numbers are from HH:MM" when the read went stale. -->
-                        <TextBlock Text="{Binding Status}" FontSize="10.5" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,9,0,2" Visibility="{Binding HasStatus, Converter={StaticResource BoolVis}}"/>
-                        <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="0,4,0,7"/>
-                        <DockPanel>
-                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="9,3" Click="OnBridgeKimiUsageRefresh" ToolTip="Refresh Kimi quota now">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="10" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
-                                    <TextBlock Text="Refresh" FontSize="10.5" Foreground="{StaticResource Muted}" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Button>
-                            <TextBlock Text="{Binding UpdatedText}" FontSize="9.5" Foreground="{StaticResource Faint}" VerticalAlignment="Center"/>
-                        </DockPanel>
-                    </StackPanel>
-                </Border>
-            </Popup>
-
-            <!-- Announce: type one message and it's delivered to every agent on the bridge at once. Sending first
-                 interrupts each running agent so the notice lands immediately; they resume on their own afterwards. -->
             <Popup x:Name="BridgeAnnouncePopup" PlacementTarget="{Binding ElementName=BridgeAnnounceToggle}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="6" Closed="OnBridgeAnnouncePopupClosed">
                 <Border Style="{StaticResource PopupCard}" Width="342">
                     <StackPanel Margin="15,13">
@@ -4342,7 +4212,6 @@
                                         <ComboBoxItem Tag="all" Content="All accounts"/>
                                         <ComboBoxItem Tag="claude" Content="Claude Code"/>
                                         <ComboBoxItem Tag="codex" Content="OpenAI Codex"/>
-                                        <ComboBoxItem Tag="kimi" Content="Kimi Code"/>
                                         <ComboBoxItem Tag="glm" Content="GLM"/>
                                         <ComboBoxItem Tag="gemini" Content="Gemini"/>
                                     </ComboBox>
@@ -4507,8 +4376,6 @@
                                         </ListBox>
                                     </Grid>
 
-                                    <!-- Kimi's CLI owns one shared OAuth login, but it still participates in the
-                                         same provider selector and remains visible while signed out or uninstalled. -->
                                     <StackPanel x:Name="GeminiAccountsPanel" Visibility="Collapsed" Margin="8,4">
                                         <TextBlock Text="Gemini account" Foreground="{StaticResource Text}" FontSize="14" FontWeight="SemiBold"/>
                                         <TextBlock Text="Use Google sign-in for your AI Pro, Ultra, or free plan." Foreground="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,5,0,14"/>
@@ -4528,29 +4395,6 @@
                                         </ItemsControl>
                                         <TextBlock Text="{Binding UpdatedText, Source={x:Static svc:GeminiUsageService.Instance}}" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,6,0,8"/>
                                         <Button Content="Refresh usage" Style="{StaticResource GhostButton}" Click="OnRefreshGeminiUsage" HorizontalAlignment="Left" Padding="10,6"/>
-                                    </StackPanel>
-                                    <StackPanel x:Name="KimiAccountsPanel" Visibility="Collapsed">
-                                        <DockPanel Margin="8,4,8,10">
-                                            <TextBlock DockPanel.Dock="Right" Text="shared CLI login" Foreground="{StaticResource Faint}" FontSize="10.5" VerticalAlignment="Bottom"/>
-                                            <StackPanel>
-                                                <TextBlock Text="Kimi Code account" Foreground="{StaticResource Text}" FontSize="14" FontWeight="SemiBold"/>
-                                                <TextBlock Text="Kimi Code uses the account connected through its installed CLI." Foreground="{StaticResource Faint}" FontSize="11" Margin="0,3,0,0"/>
-                                            </StackPanel>
-                                        </DockPanel>
-                                        <Button x:Name="KimiAccountRow" Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1" Click="OnManageKimiAccount" ToolTip="Connect or use the Kimi Code CLI account" AutomationProperties.Name="Kimi Code account">
-                                            <DockPanel>
-                                                <TextBlock DockPanel.Dock="Right" Text="" FontFamily="{StaticResource Icons}" FontSize="13" Foreground="{StaticResource Green}" VerticalAlignment="Center" Margin="12,0,2,0" Visibility="{Binding IsKimiSelected, Converter={StaticResource BoolVis}}"/>
-                                                <Border DockPanel.Dock="Left" Width="32" Height="32" CornerRadius="{StaticResource Rad8}" Background="{StaticResource BrandGradient}" Margin="0,0,10,0">
-                                                    <TextBlock Text="{Binding KimiAccountInitial}" Foreground="White" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                </Border>
-                                                <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding KimiAccountLabel}" FontSize="12.5" Foreground="{StaticResource Text}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                                                    <TextBlock Text="{Binding KimiAccountSub}" FontSize="10" Foreground="{StaticResource Faint}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                                                    <TextBlock Text="{Binding KimiAccountUsage}" FontSize="9.5" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Visibility="{Binding KimiAccountUsage, Converter={StaticResource ShowIf}}" ToolTip="Live quota read through the Kimi Code CLI's saved login; it refreshes while Kimi agents run."/>
-                                                </StackPanel>
-                                            </DockPanel>
-                                        </Button>
-                                        <TextBlock x:Name="KimiAccountEmptyText" Text="The Kimi account does not match the current search or status filter." Foreground="{StaticResource Faint}" FontSize="11.5" TextWrapping="Wrap" Margin="20,36" HorizontalAlignment="Center" Visibility="Collapsed"/>
                                     </StackPanel>
 
                                     <!-- GLM accounts retain their service so subscription and API routes stay distinct. -->

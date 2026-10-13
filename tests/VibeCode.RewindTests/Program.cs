@@ -33,7 +33,7 @@ internal static partial class Program
             PumpUntil(() => run.IsCompleted);
             run.GetAwaiter().GetResult();
             VerifyConfirmationAndComposers();
-            Console.WriteLine($"PASS: {_checks} rewind checks across Claude, Codex, Kimi and GLM; normal chats and Bridge panes. No live model calls.");
+            Console.WriteLine($"PASS: {_checks} rewind checks across Claude, Codex, Gemini and GLM; normal chats and Bridge panes. No live model calls.");
             return 0;
         }
         catch (Exception error)
@@ -56,7 +56,7 @@ internal static partial class Program
 
     private static async Task Run()
     {
-        foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "gemini", "glm" })
             foreach (var bridge in new[] { false, true })
                 await VerifyStopAndCascade(provider, bridge);
         await VerifyFileConflict();
@@ -120,7 +120,7 @@ internal static partial class Program
         Check("conflict: later user edit preserved", !result.Success && File.ReadAllText(path) == "user's later edit");
         Check("conflict: transcript and draft preserved", chat.Items.Contains(prompt) && chat.Draft == "keep my draft");
 
-        var peer = Chat("peer-conflict", "kimi", true, chat.Cwd);
+        var peer = Chat("peer-conflict", "gemini", true, chat.Cwd);
         var peerPrompt = Prompt(peer, "Peer edit", path, "peer edit", completed: true);
         result = await chat.StopAndUndoPromptAsync(prompt);
         Check("bridge: newer peer checkpoint blocks owner rewind", !result.Success && File.ReadAllText(path) == "peer edit"

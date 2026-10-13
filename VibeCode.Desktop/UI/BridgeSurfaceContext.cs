@@ -43,7 +43,6 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
     public string BridgeProjectPath => _vm.SecondaryBridgeProjectPath;
     public bool BridgeUsesClaude => _vm.SecondaryBridgeUsesClaude;
     public bool BridgeUsesCodex => _vm.SecondaryBridgeUsesCodex;
-    public bool BridgeUsesKimi => _vm.SecondaryBridgeUsesKimi;
     public bool HasMinimizedBridgePanes => _vm.SecondaryHasMinimizedBridgePanes;
     public bool CanAnnounceToBridge => _vm.SecondaryCanAnnounceToBridge;
     public bool CanAddBridgeAgent => _vm.SecondaryCanAddBridgeAgent;

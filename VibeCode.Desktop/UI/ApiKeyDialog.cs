@@ -173,7 +173,6 @@ public sealed class ApiKeyDialog : Window
     {
         "claude" => "Create one at console.anthropic.com → API keys. Starts with \"sk-ant-\".",
         "codex" => "Create one at platform.openai.com → API keys. Starts with \"sk-\".",
-        "kimi" => "Create one at platform.moonshot.ai → API keys. Kimi is used through its Anthropic-compatible endpoint.",
         _ => "Paste the provider's API key.",
     };
 

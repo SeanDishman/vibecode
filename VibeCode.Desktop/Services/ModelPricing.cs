@@ -11,8 +11,7 @@ public static class ModelPricing
     /// <summary>USD per 1M tokens for one model.</summary>
     public readonly record struct Price(double InputPerMTok, double OutputPerMTok);
 
-    // Claude/OpenAI prompt caching uses these defaults. Kimi's automatic context cache has model-specific
-    // cache-hit rates and no separate cache-write premium; TurnCost selects those rates by model id below.
+    // Claude/OpenAI prompt caching uses these defaults; GLM rates are selected by model below.
     public const double CacheWriteMultiplier = 1.25;
     public const double CacheReadMultiplier = 0.10;
 
@@ -57,17 +56,6 @@ public static class ModelPricing
         ["gpt-5.6-terra"] = new(2.00, 12.00),
         ["gpt-5.6-luna"] = new(0.20, 1.20),
         ["gpt-5.5"] = new(5.00, 30.00),
-
-        // Moonshot Kimi API. K3 cache-hit input is 10% of fresh input; K2.7's is 20%.
-        ["k3"] = new(3.00, 15.00),
-        ["kimi-k3"] = new(3.00, 15.00),
-        ["kimi-code/k3"] = new(3.00, 15.00),
-        ["kimi-k2.7-code"] = new(0.95, 4.00),
-        ["kimi-for-coding"] = new(0.95, 4.00),
-        ["kimi-code/kimi-for-coding"] = new(0.95, 4.00),
-        ["kimi-k2.7-code-highspeed"] = new(1.90, 8.00),
-        ["kimi-for-coding-highspeed"] = new(1.90, 8.00),
-        ["kimi-code/kimi-for-coding-highspeed"] = new(1.90, 8.00),
 
         // GLM through Baseten. Read from the endpoint's own GET /v1/models pricing block rather than a docs page,
         // so these are the rates the account is actually billed at. Listed explicitly rather than left unlisted:
@@ -115,13 +103,10 @@ public static class ModelPricing
     {
         var id = Strip(modelId);
         var p = For(modelId);
-        var isKimi = id.Equals("k3", StringComparison.OrdinalIgnoreCase)
-                     || id.StartsWith("kimi", StringComparison.OrdinalIgnoreCase);
-        // Baseten publishes no cache-write price for GLM at all, so a write is charged as ordinary input - the
-        // same shape as Kimi's automatic cache rather than Anthropic's paid-write one.
+        // Cache writes use the ordinary GLM input rate.
         var isOfficialGlm = id.StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
         var isGlm = isOfficialGlm || id.StartsWith("zai-org/", StringComparison.OrdinalIgnoreCase);
-        var cacheWriteMultiplier = isKimi || isGlm ? 1.0 : CacheWriteMultiplier;
+        var cacheWriteMultiplier = isGlm ? 1.0 : CacheWriteMultiplier;
         // Frontier 5.1 reads cost $0.25/MTok; Opus 5.5 reads cost $0.20/MTok against $4 fresh input.
         var isCheapCacheRead = id.Equals("claude-fable-5-1", StringComparison.OrdinalIgnoreCase)
                                || id.Equals("claude-mythos-5-1", StringComparison.OrdinalIgnoreCase);
@@ -136,9 +121,6 @@ public static class ModelPricing
                 ? 0.05
             : id.Equals("gpt-6.1-sol", StringComparison.OrdinalIgnoreCase)
                 ? 0.05
-            : isKimi && (id.Contains("k2.7", StringComparison.OrdinalIgnoreCase)
-                         || id.Contains("for-coding", StringComparison.OrdinalIgnoreCase))
-                ? 0.20
                 // GLM's cache-hit rate is per model, read from the endpoint: 0.20x input on 4.7 and 5.3 Flash,
                 // 0.10x on the 5.2 pair (which is what CacheReadMultiplier already is).
                 : isGlm && (id.Contains("glm-4.7", StringComparison.OrdinalIgnoreCase)

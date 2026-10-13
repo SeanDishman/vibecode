@@ -28,7 +28,7 @@ internal static class Program
         _root = Path.Combine(Path.GetTempPath(), "vibecode-chat-history-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
         foreach (var (key, folder) in new[] { ("VIBECODE_DATA_DIR", "settings"), ("CLAUDE_CONFIG_DIR", "claude"),
-                     ("VIBECODE_CLAUDE_ACCOUNT_STORE", "claude-accounts"), ("KIMI_CODE_HOME", "kimi"),                      ("VIBECODE_CODEX_LEGACY_HOME", "codex"), ("VIBECODE_CODEX_ACCOUNT_STORE", "codex-accounts") })
+                     ("VIBECODE_CLAUDE_ACCOUNT_STORE", "claude-accounts"), ("GEMINI_CLI_HOME", "gemini-home"), ("VIBECODE_CODEX_LEGACY_HOME", "codex"), ("VIBECODE_CODEX_ACCOUNT_STORE", "codex-accounts") })
             Environment.SetEnvironmentVariable(key, Path.Combine(_root, folder));
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };

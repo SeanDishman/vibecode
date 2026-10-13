@@ -25,14 +25,6 @@ public sealed partial class ChatViewModel
                     DoubleOrZero(tokens?["outputTokens"]), 0, reported: true, model: model);
         }
         else LogTurnUsage(usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, cost, reported: false, model: UsageModel);
-        // Kimi's next authoritative session snapshot contains this consumption too. Advance its history
-        // baseline so that snapshot records only the later work.
-        if (IsKimi)
-        {
-            _loggedKimiUsage = new(_loggedKimiUsage.Input + usage.Input, _loggedKimiUsage.CacheWrite + usage.CacheWrite,
-                _loggedKimiUsage.CacheRead + usage.CacheRead, _loggedKimiUsage.Output + usage.Output);
-            _loggedKimiCost += cost;
-        }
         _unfinishedUsageRecorded = true;
         ResetLiveUsage();
     }

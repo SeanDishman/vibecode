@@ -9,7 +9,6 @@ public static class ProviderAsciiArt
     public static string For(string? provider) => (provider ?? "").Trim().ToLowerInvariant() switch
     {
         "codex" => Codex,
-        "kimi" => Kimi,
         "gemini" => "G E M I N I",
         _ => Claude,
     };
@@ -17,7 +16,6 @@ public static class ProviderAsciiArt
     public static string TaglineFor(string? provider) => (provider ?? "").Trim().ToLowerInvariant() switch
     {
         "codex" => "OpenAI Codex · ready when you are",
-        "kimi" => "Kimi Code · ready when you are",
         "gemini" => "Google Gemini · ready when you are",
         _ => "Claude Code · ready when you are",
     };
@@ -26,7 +24,7 @@ public static class ProviderAsciiArt
     // Every banner is the SAME width so switching provider does not resize the empty-chat surface.
     //
 
-    // center with equal left/right pad. Odd-width words (CLAUDE/CODEX/KIMI) sit at most 1 column
+    // center with equal left/right pad. Odd-width words (CLAUDE/CODEX) sit at most 1 column
 
     // left of center, which read as "the logo isn't centered".
     //
@@ -65,18 +63,4 @@ public static class ProviderAsciiArt
         """;
 
 
-    public static readonly string Kimi = """
-        ╔══════════════════════════════════════════════════════╗
-        ║                                                      ║
-        ║              ██╗  ██╗██╗███╗   ███╗██╗               ║
-        ║              ██║ ██╔╝██║████╗ ████║██║               ║
-        ║              █████╔╝ ██║██╔████╔██║██║               ║
-        ║              ██╔═██╗ ██║██║╚██╔╝██║██║               ║
-        ║              ██║  ██╗██║██║ ╚═╝ ██║██║               ║
-        ║              ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚═╝               ║
-        ║                                                      ║
-        ║                 ◐  K I M I   C O D E                 ║
-        ║                                                      ║
-        ╚══════════════════════════════════════════════════════╝
-        """;
 }

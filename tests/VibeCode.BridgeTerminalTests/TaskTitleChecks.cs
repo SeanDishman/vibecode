@@ -116,7 +116,7 @@ internal static partial class Program
         Check("advanced panes are declined with a reason, not an error", !workerTitle["applied"]!.GetValue<bool>() && !managerTitle["applied"]!.GetValue<bool>()
             && workerTitle["reason"]!.ToString().Contains("Advanced Bridge") && advanced[0].BridgeTaskName != "Coordinate search work");
 
-        foreach (var provider in new[] { "claude", "codex", "kimi", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "gemini", "glm" })
             Check(provider + " skips permission only for the exact built-in task-title tool", TitlePermission(provider, TaskTitleTool(provider), new JsonObject { ["title"] = "Fix login" }));
         Check("a lookalike third-party title tool still needs permission", !TitlePermission("claude", "mcp__untrusted__bridge_set_task_title", null));
         agent.SetMode("plan");

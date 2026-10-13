@@ -4,8 +4,8 @@ using VibeCode.Services;
 namespace VibeCode.Protocol;
 
 
-// Authentication, model/mode selection and usage stay provider-specific.
-public sealed partial class KimiSession
+// Gemini model selection and usage reconciliation for the ACP session.
+public sealed partial class GeminiAcpSession
 {
     private IReadOnlyDictionary<string, GeminiTokenRecord>? _geminiUsageBefore;
     private bool _geminiPromptSeen;
@@ -37,7 +37,7 @@ public sealed partial class KimiSession
     {
         lock (_geminiUsageGate)
         {
-            if (!_isGemini || !_geminiUsageActive || !_geminiTranscriptBaselineKnown) return null;
+            if (!_geminiUsageActive || !_geminiTranscriptBaselineKnown) return null;
             var after = GeminiSessionUsage.Read(SessionId);
             if (after is null) return null;
             var report = GeminiSessionUsage.TurnReport(_geminiUsageBefore, after, null);

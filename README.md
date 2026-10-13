@@ -1,6 +1,6 @@
 # VibeCode
 
-A Windows desktop app for Claude Code, OpenAI Codex, Gemini CLI, Kimi Code, and GLM. Run coding chats and teams of agents, share MCP tools, switch accounts, and track provider-reported usage in one place.
+A Windows desktop app for Claude Code, OpenAI Codex, Gemini CLI, and GLM. Run coding chats and teams of agents, share MCP tools, switch accounts, and track provider-reported usage in one place.
 
 This repository contains the public source. Personal accounts, credentials, chat history, downloaded tools, and compiled app payloads are not included.
 
@@ -9,7 +9,7 @@ This repository contains the public source. Personal accounts, credentials, chat
 Build the Windows app using the steps below, then open **VibeCode.exe**.
 
 1. Open the account menu in the lower-left corner and choose a provider.
-2. If its CLI is missing, click **Install Claude Code CLI**, **Install Codex CLI**, **Install Gemini CLI**, or **Install Kimi Code CLI**. Setup downloads the official CLI and required tools, verifies that the CLI starts, and continues to sign-in.
+2. If its CLI is missing, click **Install Claude Code CLI**, **Install Codex CLI**, or **Install Gemini CLI**. Setup downloads the official CLI and required tools, verifies that the CLI starts, and continues to sign-in.
 3. Complete the provider's sign-in flow, choose a project folder, and start a chat.
 
 Setup supports cancellation and retry. It installs tools for the current Windows user under `%LOCALAPPDATA%\VibeCode\runtimes`; it does not require an administrator, a global npm installation, or manual copying into native-assets folders. Existing compatible CLIs and explicit path overrides remain supported. Installation needs an internet connection. GLM connects through an API account and does not need a CLI.
@@ -21,10 +21,9 @@ Provider accounts, subscriptions, and model access are managed by the provider. 
 | Claude Code | Official Claude Code CLI | Install in the account menu, then sign in with Claude |
 | OpenAI Codex | Official Codex CLI | Install in the account menu, then sign in with ChatGPT |
 | Gemini | Official Gemini CLI, tested with 0.63.0 | Install in the account menu, then sign in with Google; Google AI Pro and Ultra account access is supported |
-| Kimi Code | Official Kimi Code CLI | Install in the account menu, then complete CLI sign-in |
 | GLM | Z.ai Coding Plan, Z.ai API, or Baseten | Add an API account in the account menu |
 
-Install sources: [Claude Code](https://code.claude.com/docs/en/setup), [Codex](https://learn.chatgpt.com/docs/codex/cli), [Gemini CLI](https://geminicli.com/docs/get-started/installation/), and [Kimi Code](https://code.kimi.com/). The managed installer obtains Node.js from nodejs.org and Git, when needed, from the Git for Windows release repository. Provider CLIs retain their own licenses.
+Install sources: [Claude Code](https://code.claude.com/docs/en/setup), [Codex](https://learn.chatgpt.com/docs/codex/cli), and [Gemini CLI](https://geminicli.com/docs/get-started/installation/). The managed installer obtains Node.js from nodejs.org. Provider CLIs retain their own licenses.
 
 ## Coding and collaboration
 
@@ -67,7 +66,7 @@ To run the development app:
 dotnet run --project VibeCode.Desktop
 ```
 
-For an optional network integration check that downloads all four CLIs into an isolated temporary directory, without signing in or making model calls:
+For an optional network integration check that downloads all three CLIs into an isolated temporary directory, without signing in or making model calls:
 
 ```powershell
 dotnet run --project tests/VibeCode.CliInstallTests -- --install
@@ -94,8 +93,8 @@ Settings and runtime data belong to the current Windows user, outside this check
 | --- | --- |
 | `VIBECODE_DATA_DIR` | Override the app's settings and data directory |
 | `VIBECODE_RUNTIME_DIR` | Override the managed CLI tools directory |
-| `VIBECODE_CLAUDE_PATH`, `VIBECODE_CODEX_PATH`, `VIBECODE_KIMI_PATH`, `VIBECODE_GEMINI_PATH` | Use a specific provider CLI |
-| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `GEMINI_CLI_HOME` | Provider configuration locations; managed accounts may select an account-specific home |
+| `VIBECODE_CLAUDE_PATH`, `VIBECODE_CODEX_PATH`, `VIBECODE_GEMINI_PATH` | Use a specific provider CLI |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME` | Provider configuration locations; managed accounts may select an account-specific home |
 
 Do not put secrets in these paths inside the repository. The source policy check rejects credentials, compiled payloads, and private feature material before the normal test run. Review staged changes and run a secret scanner before publishing.
 

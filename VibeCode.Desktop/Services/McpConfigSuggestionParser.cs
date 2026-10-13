@@ -34,7 +34,6 @@ public static class McpConfigSuggestionParser
                 ToolTimeoutSeconds = ReadInt(json["toolTimeoutSeconds"], McpCatalog.DefaultToolTimeoutSeconds),
                 UseClaude = ReadBool(json["useClaude"], true),
                 UseCodex = ReadBool(json["useCodex"], true) && transport != McpCatalog.SseTransport,
-                UseKimi = ReadBool(json["useKimi"], true),
                 Enabled = true,
             };
             suggestion = new McpConfigSuggestion

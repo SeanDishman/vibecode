@@ -19,9 +19,9 @@ recorder.Record(result, "planner", []);
 Check("a repeated completion is recorded once", UsageLog.Instance.Count == 1);
 Check("planning record includes project, model and session", entry.Project == "usage-fixture" && entry.Model == "gpt-6-luna" && entry.SessionId == "planner" && entry.CostUsd > 0);
 
-using var kimi = new BridgeSuggestionUsage("kimi", "kimi-k2.5", "usage-fixture");
-kimi.Record(new JsonObject { ["usage"] = new JsonObject(), ["session_usage"] = Usage() }, "kimi-planner", []);
-Check("fresh planning sessions accept Kimi session usage", UsageLog.Instance.Entries().Last().Total == 105);
+using var gemini = new BridgeSuggestionUsage("gemini", "gemini-3.1-pro", "usage-fixture");
+gemini.Record(new JsonObject { ["usage"] = new JsonObject(), ["session_usage"] = Usage() }, "gemini-planner", []);
+Check("fresh planning sessions accept Gemini session usage", UsageLog.Instance.Entries().Last().Total == 105);
 
 using var unknown = new BridgeSuggestionUsage("codex", "default", "usage-fixture");
 unknown.Record(result, "unknown-planner", new JsonArray

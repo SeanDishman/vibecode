@@ -6,10 +6,9 @@ namespace VibeCode.Protocol;
 /// <summary>Google's official CLI, authenticated with the user's Google subscription.</summary>
 public sealed class GeminiSession : ICodingSession, ICompactableSession
 {
-    private readonly KimiSession _acp;
-    public GeminiSession(KimiSessionOptions options) => _acp = new KimiSession(new()
+    private readonly GeminiAcpSession _acp;
+    public GeminiSession(GeminiSessionOptions options) => _acp = new GeminiAcpSession(new()
     {
-        UseGeminiProtocol = true,
         Cwd = options.Cwd,
         Resume = options.Resume,
         Model = options.Model,

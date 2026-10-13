@@ -22,7 +22,6 @@ internal static class ProviderModelCatalog
     {
         "codex" => "OpenAI Codex",
         "claude" => "Claude Code",
-        "kimi" => "Kimi Code",
         "gemini" => "Gemini",
         GlmPreset.ProviderId => GlmPreset.DisplayName,
         var value => char.ToUpperInvariant(value[0]) + value[1..],
@@ -290,11 +289,6 @@ internal static class ProviderModelCatalog
         "gemini" =>
         [
             Choice("gemini", "default", "Gemini default", "Google sign-in supplies the models available to your account."),
-        ],
-        "kimi" =>
-        [
-            Choice("kimi", "default", "Kimi Code default",
-                "The signed-in Kimi CLI supplies its live model catalog, including K3 when available."),
         ],
         // Model IDs and reasoning capabilities depend on the selected GLM service.
         GlmPreset.ProviderId =>

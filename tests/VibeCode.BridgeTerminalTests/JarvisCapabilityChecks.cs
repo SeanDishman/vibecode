@@ -67,16 +67,19 @@ internal static partial class Program
                 ["url"] = "https://example.com/mcp",
                 ["useClaude"] = false,
                 ["useCodex"] = true,
-                ["useKimi"] = false,
+                ["useGemini"] = false,
                 ["headers"] = new JsonObject { ["Authorization"] = "Bearer private-existing-secret" },
             }.ToJsonString(),
         });
         var added = Simulate(addRequest, addJson, vm);
         var original = settings.McpServers.Single();
         Check("MCP requests persist the validated shared catalog definition", added.Contains("Added MCP server 'docs'")
-            && original.Transport == "http" && original.UseCodex && !original.UseClaude && LoadJarvisSettings().McpServers.Single().Url == original.Url);
+            && original.Transport == "http" && original.UseCodex && !original.UseClaude && !original.UseGemini
+            && LoadJarvisSettings().McpServers.Single().Url == original.Url);
         var snapshot = ((IJarvisActionHost)vm).GetContext().Settings!;
-        Check("settings context exposes real preferences and a redacted server inventory", snapshot["preferences"]!.AsArray().Count >= 70
+        Check("settings context exposes real preferences and a redacted server inventory", snapshot["preferences"]!.AsArray()
+            .OfType<JsonObject>().Any(preference => preference["name"]!.ToString() == "JarvisSpeechVolume"
+                                                 && preference["value"]!.GetValue<double>() == 50)
             && snapshot["mcp_servers"]![0]!["name"]!.ToString() == "docs"
             && !snapshot.ToJsonString().Contains("private-existing-secret") && !snapshot.ToJsonString().Contains("private-proxy-credential"));
         const string patchRequest = "Disable docs and set its tool timeout to 90 seconds.";
@@ -86,7 +89,7 @@ internal static partial class Program
         var changed = settings.McpServers.Single();
         Check("partial MCP edits preserve identity, endpoint, provider targets and credentials", patched.Contains("Updated")
             && changed.Id == original.Id && !changed.Enabled && changed.ToolTimeoutSeconds == 90 && changed.Url == original.Url
-            && changed.Headers["Authorization"] == "Bearer private-existing-secret" && changed.UseCodex && !changed.UseClaude);
+            && changed.Headers["Authorization"] == "Bearer private-existing-secret" && changed.UseCodex && !changed.UseClaude && !changed.UseGemini);
         var invalidMcp = PlanJson("configure_mcp", "Change MCP", new()
         { ["target"] = "docs", ["config_json"] = "{\"url\":\"javascript:bad\",\"enabled\":true}" });
         try { Simulate("Change MCP", invalidMcp, vm); throw new Exception("Invalid endpoint accepted"); }

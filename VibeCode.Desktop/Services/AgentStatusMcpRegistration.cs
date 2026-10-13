@@ -33,7 +33,6 @@ internal static class AgentStatusMcpRegistration
             Arguments = hasAppHost ? new() { "--agent-status-mcp" } : new() { assembly, "--agent-status-mcp" },
             UseClaude = false,
             UseCodex = true,
-            UseKimi = false,
             UseGemini = false,
             StartupTimeoutSeconds = 5,
             ToolTimeoutSeconds = 10,

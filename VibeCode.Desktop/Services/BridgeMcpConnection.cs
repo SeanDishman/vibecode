@@ -85,7 +85,7 @@ internal sealed class BridgeMcpConnection : IDisposable
         definition.Id = ManagedId;
         definition.Name = "bridge";
         definition.Arguments[^1] = "--bridge-mcp";
-        definition.UseClaude = definition.UseCodex = definition.UseKimi = definition.UseGemini = true;
+        definition.UseClaude = definition.UseCodex = definition.UseGemini = true;
         definition.Environment[BridgeMcpClient.PipeEnvironment] = PipeName;
         // The helper is a second launch of the whole single-file VibeCode.exe, which unpacks its compressed bundle
         // first: ~1.6 s on an idle machine and 3-5 s when a Bridge starts several agents at once. The 5 s startup

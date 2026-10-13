@@ -239,7 +239,7 @@ internal static partial class Program
 
         const string source = "one\ntwo\n    var retries = 5;\nfoo();\nx = 1;\nfoo();\nx = 1;\n";
         var partial = Analyze("Edit", new() { ["file_path"] = "r.ts", ["old_string"] = "retries = 3", ["new_string"] = "retries = 5" }, file: source)!;
-        Check("snippet edits (Kimi, GLM) find a partial-line change in the edited file", partial.Exact && partial.Ranges.Single() == new BridgeEditRange(3, 3, 1, 1));
+        Check("snippet edits (Gemini, GLM) find a partial-line change in the edited file", partial.Exact && partial.Ranges.Single() == new BridgeEditRange(3, 3, 1, 1));
         var ambiguous = Analyze("Edit", new() { ["file_path"] = "r.ts", ["old_string"] = "x = 0;", ["new_string"] = "x = 1;" }, file: source)!;
         Check("a snippet that appears twice is marked approximate", !ambiguous.Exact && ambiguous.Ranges.Single().Start == 5
             && BridgeEditDiff.Describe(ambiguous.Change, ambiguous.Ranges, ambiguous.Exact) == "about 5");
@@ -387,8 +387,8 @@ internal static partial class Program
         });
         IngestEdit(team[2], "codex-failed", "CodexEdit", new() { ["file_path"] = "src/app.ts", ["kind"] = "update", ["diff"] = "@@ -2,1 +2,1 @@\n-a\n+b\n" }, failed: true);
         // Two back-to-back snippet edits to one file share a transcript card; each must still be logged with its own lines.
-        IngestEdit(team[1], "kimi-1", "Edit", new() { ["file_path"] = app, ["old_string"] = "const retries = 3;", ["new_string"] = "const retries = 5;" });
-        IngestEdit(team[1], "kimi-2", "Edit", new() { ["file_path"] = app, ["old_string"] = "const delay = 100;", ["new_string"] = "const delay = 250;" });
+        IngestEdit(team[1], "gemini-1", "Edit", new() { ["file_path"] = app, ["old_string"] = "const retries = 3;", ["new_string"] = "const retries = 5;" });
+        IngestEdit(team[1], "gemini-2", "Edit", new() { ["file_path"] = app, ["old_string"] = "const delay = 100;", ["new_string"] = "const delay = 250;" });
         var folded = team[1].Items.OfType<CompactToolGroupItem>().SelectMany(g => g.Tools).Where(t => t.Name == "Edit").ToArray();
         Check("three back-to-back edits to one file fold into one transcript card", folded.Length == 1 && folded[0].EditCount == 3);
         IngestEdit(team[0], "board", "Edit", new() { ["file_path"] = Path.Combine(root, ".vibecode-bridge.md"), ["old_string"] = "a", ["new_string"] = "b" },

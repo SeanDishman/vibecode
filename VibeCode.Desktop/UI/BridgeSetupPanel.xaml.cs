@@ -12,7 +12,7 @@ public partial class BridgeSetupPanel : UserControl
 {
     public sealed record ProviderChoice(string Id, string Label);
     public static IReadOnlyList<ProviderChoice> Providers { get; } =
-    [new("claude", "Claude Code"), new("codex", "OpenAI Codex"), new("kimi", "Kimi Code"), new("gemini", "Gemini"), new("glm", "GLM")];
+    [new("claude", "Claude Code"), new("codex", "OpenAI Codex"), new("gemini", "Gemini"), new("glm", "GLM")];
     private const string AutomaticCount = "Let AI choose";
     private ChatViewModel? _host;
     private int _maximum = 8;
@@ -24,7 +24,6 @@ public partial class BridgeSetupPanel : UserControl
     private bool _starting;
     private bool _advancedOnly;
     private bool _hasOtherOrchestrators;
-    private bool _includeKimiAccount;
     private IReadOnlyList<BridgeAccountChoice> _accounts = [];
     private int _micToken;
     private DateTime _transcribingSince;
@@ -59,8 +58,7 @@ public partial class BridgeSetupPanel : UserControl
     }
 
     public void Configure(ChatViewModel host, int maximumWorkers, bool advancedOnly = false,
-        bool singleTerminal = true, Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false,
-        bool includeKimiAccount = false)
+        bool singleTerminal = true, Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false)
     {
         var retainDraft = ReferenceEquals(_host, host) && _advancedOnly == advancedOnly;
         Suspend();
@@ -71,7 +69,6 @@ public partial class BridgeSetupPanel : UserControl
         _workerCapacity = workerCapacity;
         _advancedOnly = advancedOnly;
         _hasOtherOrchestrators = hasOtherOrchestrators;
-        _includeKimiAccount = includeKimiAccount || host.IsKimi;
         ModeChoices.Visibility = advancedOnly ? Visibility.Collapsed : Visibility.Visible;
         Heading.Text = advancedOnly ? "Add an orchestrator" : "Start a bridge";
         if (!retainDraft)
@@ -87,7 +84,7 @@ public partial class BridgeSetupPanel : UserControl
         }
         var previousAccount = retainDraft ? PeerAccount : null;
         var previousProvider = retainDraft ? PeerProvider?.Id : null;
-        _accounts = BridgeAccountChoice.Load(_includeKimiAccount);
+        _accounts = BridgeAccountChoice.Load();
         var providers = BridgeProviderChoice.From(_accounts);
         PeerProviderBox.ItemsSource = providers;
         // Provider first, then only its accounts. A reopened draft keeps its provider; a fresh one starts on the host's.
@@ -126,7 +123,7 @@ public partial class BridgeSetupPanel : UserControl
     public BridgeAccountChoice RequirePeerAccount()
     {
         var selected = PeerAccount;
-        if (selected is null || !BridgeAccountChoice.Load(_includeKimiAccount).Any(a => a.IsUsable &&
+        if (selected is null || !BridgeAccountChoice.Load().Any(a => a.IsUsable &&
                 a.Provider == selected.Provider && a.AccountId == selected.AccountId))
             throw new InvalidOperationException("This account is unavailable. Reopen bridge setup to choose an account, or sign in again in AI accounts.");
         return selected;

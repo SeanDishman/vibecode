@@ -200,7 +200,7 @@ internal static partial class Program
         Check("MCP headers and environment survive", sent.Any(s => s?["headers"]?.ToJsonString().Contains("X-Test") == true) && sent.Any(s => s?["env"]?.ToJsonString().Contains("TEST_ENV") == true));
         Check("saved model and plan mode use Gemini methods", requests.Any(r => r["method"]?.ToString() == "session/set_model" && r["params"]?["modelId"]?.ToString() == "gemini-test-pro")
             && requests.Any(r => r["method"]?.ToString() == "session/set_mode" && r["params"]?["modeId"]?.ToString() == "plan"));
-        Check("Gemini never receives Kimi configuration or usage probes", !requests.Any(r => r["method"]?.ToString() == "session/set_config_option" || r["params"]?["prompt"]?.ToJsonString().Contains("/usage") == true));
+        Check("Gemini uses native model selection and transcript usage without extra probes", !requests.Any(r => r["method"]?.ToString() == "session/set_config_option" || r["params"]?["prompt"]?.ToJsonString().Contains("/usage") == true));
     }
 
     private static async Task VerifyNativeSpeechLease()

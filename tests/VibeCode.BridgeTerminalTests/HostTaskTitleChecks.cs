@@ -70,13 +70,13 @@ internal static partial class Program
                 WireText(Steerable(second).Steers[0]).Contains(TaskTitleTool("codex")));
             secondVm.CloseSecondaryBridge();
 
-            // Kimi rejects any message while a turn runs, so its title waits for the next request.
-            var (kimiVm, kimi) = BridgeHost("host-title-kimi", "kimi", "Write release notes");
-            kimi.Status = "running";
-            kimiVm.ActivateBridge("codex");
+            // Gemini rejects any message while a turn runs, so its title waits for the next request.
+            var (geminiVm, gemini) = BridgeHost("host-title-gemini", "gemini", "Write release notes");
+            gemini.Status = "running";
+            geminiVm.ActivateBridge("codex");
             Settle();
-            Check("a host that cannot take a mid-turn message is not sent one", Steerable(kimi).Steers.Count == 0);
-            kimiVm.CloseBridge();
+            Check("a host that cannot take a mid-turn message is not sent one", Steerable(gemini).Steers.Count == 0);
+            geminiVm.CloseBridge();
         }
         finally { Environment.SetEnvironmentVariable("VIBECODE_CODEX_PATH", previousRuntime); }
     }

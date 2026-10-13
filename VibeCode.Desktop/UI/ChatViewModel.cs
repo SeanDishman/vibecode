@@ -139,14 +139,12 @@ public sealed partial class ChatViewModel : Observable
     public bool ForkSession { get; }
     public string Provider { get; }
     public bool IsCodex => Provider == "codex";
-    public bool IsKimi => Provider == "kimi";
     public bool IsGemini => Provider == "gemini";
     public bool IsClaude => Provider == "claude";
     public bool IsGlm => Provider == Protocol.GlmPreset.ProviderId;
     public string ProviderDisplay => Provider switch
     {
         "codex" => "OpenAI Codex",
-        "kimi" => "Kimi Code",
         "gemini" => "Gemini",
         Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.DisplayName,
         _ => "Claude Code",
@@ -154,20 +152,19 @@ public sealed partial class ChatViewModel : Observable
     public bool CanBridge => true;
     // GLM is in the no-fork set because no provider stores its conversation: VibeCode saves it (GlmTranscriptStore)
     // so the same chat can be resumed, but copying it into a second session is not implemented.
-    public bool CanFork => !IsKimi && !IsGlm && !IsGemini && SessionId is not null;
+    public bool CanFork => !IsGlm && !IsGemini && SessionId is not null;
 
     /// <summary>Subtext for the Fork row in a bridge pane's ⋮ menu. The row is always shown — disabled with the
     /// reason spelled out — because a collapsed row reads as "this build has no fork", which is what it was doing
     /// on every fresh bridge (no agent has a session id until it has taken a turn).</summary>
     public string ForkReason => CanFork
         ? "Copy this conversation into a separate chat"
-        : IsKimi || IsGlm || IsGemini
+        : IsGlm || IsGemini
             ? $"{AgentDisplay} sessions cannot be forked"
             : "Available once this agent has had a turn";
     public string AgentDisplay => Provider switch
     {
         "codex" => "Codex",
-        "kimi" => "Kimi",
         "gemini" => "Gemini",
         Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.DisplayName,
         _ => "Claude",
@@ -192,7 +189,6 @@ public sealed partial class ChatViewModel : Observable
     public string SignInButtonText => NeedsCliInstall ? $"Install {CliInstallationService.DisplayName(Provider)} CLI" : Provider switch
     {
         "codex" => "Sign in to Codex",
-        "kimi" => "Sign in to Kimi",
         "gemini" => "Sign in with Google",
         _ => "Sign in to Claude",
     };
@@ -200,7 +196,6 @@ public sealed partial class ChatViewModel : Observable
     {
         "gemini" => "Sign in with the Google account that has your Google AI Pro or Ultra subscription.",
         "codex" => "OpenAI Codex isn't signed in on this machine. Sign in once and every Codex chat works.",
-        "kimi" => "Kimi Code isn't signed in on this machine. Sign in once and every Kimi chat works.",
         _ => "Claude Code isn't signed in on this machine. Sign in once and every chat works.",
     };
 
@@ -492,7 +487,7 @@ public sealed partial class ChatViewModel : Observable
     /// The account/provider selected for new chats never changes this menu.
     /// </summary>
     public ObservableCollection<ModelPickerChoice> PickerModels { get; } = new();
-    // Provider command catalogs remain available to adapters (e.g. Kimi's internal /usage probe).
+    // Provider command catalogs remain available to adapters.
     // The IDE composer exposes /goal plus native context compaction on supported providers.
     public ObservableCollection<CommandChoice> Commands { get; } = new()
     {
@@ -525,8 +520,6 @@ public sealed partial class ChatViewModel : Observable
     private double _totalOut;          // cumulative output side (generated tokens)
     private double _estCost;           // running estimated equivalent-API cost (USD) from ModelPricing + per-turn usage
     private LiveUsage _liveTurnUsage;  // current, uncommitted turn; visible while the provider is still working
-    private LiveUsage _loggedKimiUsage;   // last Kimi whole-session snapshot written to the usage history
-    private double _loggedKimiCost;       // its estimated cost, so the next snapshot logs only the difference
     private FileArtifact? _selectedFile;
     private string _previewText = "";
     private bool _authNeeded;
@@ -1300,7 +1293,7 @@ public sealed partial class ChatViewModel : Observable
         {
             if (string.IsNullOrWhiteSpace(AccountId)) return true;   // shared / pre-isolation rows
             var active = ApiKeyAccountService.Instance.SelectedFor(Provider)?.Id ?? (IsCodex ? CodexAccountService.Instance.ActiveId
-                : IsGlm || IsKimi || IsGemini ? null
+                : IsGlm || IsGemini ? null
                 : AccountService.Instance.ActiveId);
             return active is null || string.Equals(AccountId, active, StringComparison.OrdinalIgnoreCase);
         }
@@ -1348,12 +1341,6 @@ public sealed partial class ChatViewModel : Observable
         {
             _accountLabel = keyAccount.Title;
             _showAccountLabel = true;
-            return;
-        }
-        if (IsKimi)
-        {
-            _accountLabel = "Kimi login";
-            _showAccountLabel = ApiKeyAccountService.Instance.For(Provider).Any();
             return;
         }
         if (IsGlm)
@@ -1435,7 +1422,6 @@ public sealed partial class ChatViewModel : Observable
         Provider = provider?.Trim().ToLowerInvariant() switch
         {
             "codex" => "codex",
-            "kimi" => "kimi",
             "gemini" => "gemini",
             Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
             _ => "claude",
@@ -1448,7 +1434,6 @@ public sealed partial class ChatViewModel : Observable
         _model = Provider switch
         {
             "codex" => CodexSession.NormalizeModelSelection(AppSettings.Current.DefaultCodexModel),
-            "kimi" => AppSettings.Current.DefaultKimiModel,
             "gemini" => AppSettings.Current.DefaultGeminiModel,
             Protocol.GlmPreset.ProviderId => GlmPreset.NormalizeModel(AppSettings.Current.DefaultGlmModel,
                 _glmAccount?.GlmBackend),
@@ -1460,7 +1445,6 @@ public sealed partial class ChatViewModel : Observable
         _effort = Provider switch
         {
             "codex" => AppSettings.Current.DefaultCodexEffort,
-            "kimi" => AppSettings.Current.DefaultKimiEffort,
             "gemini" => null,
             Protocol.GlmPreset.ProviderId => GlmPreset.IsZai(_glmAccount?.GlmBackend)
                 ? GlmPreset.NormalizeEffort(AppSettings.Current.DefaultGlmEffort) : null,
@@ -1776,23 +1760,11 @@ public sealed partial class ChatViewModel : Observable
                     SwarmMaxWorkers = SwarmMaxWorkers,
                     McpServers = mcpServers,
                 }),
-                "gemini" => new GeminiSession(new KimiSessionOptions
+                "gemini" => new GeminiSession(new GeminiSessionOptions
                 {
                     Cwd = Cwd,
                     Resume = ResumeSessionId,
                     Model = _model,
-                    PermissionMode = _mode,
-                    AppendSystemPrompt = sessionSystemPrompt,
-                    McpServers = mcpServers,
-                }),
-                "kimi" => new KimiSession(new KimiSessionOptions
-                {
-                    AccountId = AccountId ?? "",
-                    Cwd = Cwd,
-                    Resume = ResumeSessionId,
-                    ForkSession = ForkSession,
-                    Model = string.Equals(_model, "default", StringComparison.OrdinalIgnoreCase) ? null : _model,
-                    Effort = _effort,
                     PermissionMode = _mode,
                     AppendSystemPrompt = sessionSystemPrompt,
                     McpServers = mcpServers,
@@ -1899,9 +1871,6 @@ public sealed partial class ChatViewModel : Observable
             Raise(nameof(BridgeConfigurationDisplay));
             if (Status == "starting") Status = "idle";
             if (IsClaude) UsageService.Instance.Refresh();
-            // Kimi's access token only lives ~15 minutes; a session that just started has refreshed it on disk, so
-            // this is the moment the quota read is most likely to succeed.
-            if (IsKimi) KimiUsageService.Instance.Refresh();
             if (IsGemini) GeminiUsageService.Instance.Refresh();
             if (GlmAccount is { } glmAccount) _ = GlmUsageService.Instance.RefreshAsync(glmAccount);
         });
@@ -1927,7 +1896,7 @@ public sealed partial class ChatViewModel : Observable
             session.Dispose();
             if (!ReferenceEquals(_session, session)) return;
             Status = "error";
-            if (ex is FileNotFoundException || IsKimi || IsGemini) AuthNeeded = true;
+            if (ex is FileNotFoundException || IsGemini) AuthNeeded = true;
             Items.Add(new BannerItem { Level = "error", Text = $"Could not start {ProviderDisplay}: {ex.Message}" });
             ItemsChanged?.Invoke();
         }
@@ -2824,7 +2793,6 @@ public sealed partial class ChatViewModel : Observable
         foreach (var o in EffortOptions)
             o.IsSelected = string.Equals(o.Value, level, StringComparison.OrdinalIgnoreCase);
         if (IsCodex) AppSettings.Current.DefaultCodexEffort = level;
-        else if (IsKimi) AppSettings.Current.DefaultKimiEffort = level;
         else if (IsGlm) AppSettings.Current.DefaultGlmEffort = level;
         else AppSettings.Current.DefaultEffort = level;
         AppSettings.Current.Save();
@@ -2954,7 +2922,7 @@ public sealed partial class ChatViewModel : Observable
     /// <c>IndexOf</c> returned -1, the arithmetic landed on index 0 by accident, and because this is a deliberate
     /// pick it wrote Ask into <see cref="AppSettings.DefaultMode"/> - so a stray Shift+Tab put every future chat back
     /// on Ask with nothing on screen saying so.
-    /// <para>A mode that is not on the ring at all (Kimi's "dontAsk", the auto-accept toggle's "acceptEdits") now
+    /// <para>A mode that is not on the ring at all ("dontAsk" or "acceptEdits") now
     /// starts the ring at the beginning deliberately, rather than falling through the same -1.</para></summary>
     public void CycleMode()
     {
@@ -3036,7 +3004,6 @@ public sealed partial class ChatViewModel : Observable
         Model = string.IsNullOrEmpty(model) ? null : model;
         if (IsCodex) AppSettings.Current.DefaultCodexModel = _model;
         else if (IsGemini) AppSettings.Current.DefaultGeminiModel = _model;
-        else if (IsKimi) AppSettings.Current.DefaultKimiModel = _model;
         else if (IsGlm) AppSettings.Current.DefaultGlmModel = _model;
         else AppSettings.Current.DefaultModel = _model;
         AppSettings.Current.Save();
@@ -3166,7 +3133,7 @@ public sealed partial class ChatViewModel : Observable
         // Bypass: auto-approve everything (the CLI usually already skips prompts in bypass; this is the safety net).
         if (_mode == "bypassPermissions" && !interactive) { AutoAllow(req); return; }
 
-        // Kimi ACP does not expose Claude's "accept edits" mode. It stays in manual mode and sends requests here;
+        // Enforce "accept edits" for adapters that send individual permission requests;
         // approve only file mutation tools so choosing "accept edits" after a plan can never imply shell yolo.
         if (_mode == "acceptEdits" && !interactive && IsFileEditTool(req.ToolName))
         {
@@ -4114,7 +4081,6 @@ public sealed partial class ChatViewModel : Observable
         IsPeerNotificationTurn = false;
         if (!restartingOnOpus && !WaitingForBridgeRetry) NotificationService.NotifyTurnFinished(this, isError, interruptedByUser);
         if (IsClaude) UsageService.Instance.Refresh();
-        if (IsKimi) KimiUsageService.Instance.Refresh();
         if (IsGemini) GeminiUsageService.Instance.Refresh();
         // total_cost_usd is the session running total, so a provider-billed turn's own cost is the delta.
         var costBefore = _cost;
@@ -4122,40 +4088,10 @@ public sealed partial class ChatViewModel : Observable
         // The result's usage is the whole turn added up, so it can only be trusted for the context WINDOW
         // (via modelUsage), never for how full that window is - the per-request updates above own occupancy.
         UpdateContext(m["usage"], m["modelUsage"], aggregate: true);
-        // Kimi's local /usage command gives authoritative whole-session totals and a per-model breakdown. Replace
-        // our counters from that snapshot so resumed sessions and repeated result handling cannot double-count.
-        // Other providers report a turn delta, which still follows the incremental path below.
-        var committedKimiSnapshot = false;
-        if (IsKimi && m["session_usage"] is JsonObject kimiSessionUsage)
-        {
-            var session = UsageOf(kimiSessionUsage);
-            if (session.HasTokens)
-            {
-                TotalIn = session.TotalIn;
-                TotalOut = session.Output;
-                TotalTokens = session.Total;
-                _estCost = EstimateSessionCost(m["session_model_usage"] as JsonObject, session,
-                    CurrentModel?.ResolvedModel ?? _model);
-                Raise(nameof(CostText));
-                committedKimiSnapshot = true;
-                // The snapshot is a whole-session total, so the permanent usage history gets the delta since the
-                // last one - logging the snapshot itself would re-log every earlier turn on every turn.
-                LogTurnUsage(
-                    session.Input - _loggedKimiUsage.Input,
-                    session.CacheWrite - _loggedKimiUsage.CacheWrite,
-                    session.CacheRead - _loggedKimiUsage.CacheRead,
-                    session.Output - _loggedKimiUsage.Output,
-                    _estCost - _loggedKimiCost,
-                    reported: false);
-                _loggedKimiUsage = session;
-                _loggedKimiCost = _estCost;
-            }
-        }
-
         // Cumulative "all tokens used" + estimated cost: fold this turn's usage into the running totals.
         // Input is split into three cache tiers (fresh / cache-write / cache-read) so cost can price each
         // correctly; the token readout just sums them as the input side.
-        if (!committedKimiSnapshot && m["usage"] is JsonObject tu
+        if (m["usage"] is JsonObject tu
             && new[] { "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens" }.Any(tu.ContainsKey))
         {
             double input = DoubleOrZero(tu["input_tokens"]);
@@ -4186,7 +4122,7 @@ public sealed partial class ChatViewModel : Observable
                 else LogTurnUsage(input, cacheWrite, cacheRead, output, turnCost, reported: reported, model: UsageModel);
             }
         }
-        else if (!committedKimiSnapshot)
+        else
             CommitUnfinishedUsage();
         // The result usage above is authoritative and has now been committed once. Drop the live
         // snapshot so the persistent header does not count the just-finished turn a second time.
@@ -4241,22 +4177,6 @@ public sealed partial class ChatViewModel : Observable
             input, cacheWrite, cacheRead, output, Math.Max(0, costUsd), reported, SessionId, Cwd);
     }
 
-    private static double EstimateSessionCost(JsonObject? byModel, LiveUsage fallback, string? fallbackModel)
-    {
-        double cost = 0;
-        var pricedAny = false;
-        if (byModel is not null)
-            foreach (var (model, node) in byModel)
-            {
-                var usage = UsageOf(node);
-                if (!usage.HasTokens) continue;
-                cost += ModelPricing.TurnCost(model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output);
-                pricedAny = true;
-            }
-        return pricedAny
-            ? cost
-            : ModelPricing.TurnCost(fallbackModel, fallback.Input, fallback.CacheWrite, fallback.CacheRead, fallback.Output);
-    }
 
     /// <param name="usage">Usage for ONE model request, unless <paramref name="aggregate"/> says otherwise.</param>
     /// <param name="aggregate">True when <paramref name="usage"/> sums every model request in a turn instead of
@@ -4415,7 +4335,7 @@ public sealed partial class ChatViewModel : Observable
         }
         if (live && text.Contains("Not logged in", StringComparison.OrdinalIgnoreCase)) AuthNeeded = true;
         // Local live echoes returned above because Send already recorded them. Any remaining top-level user message is
-        // restored history (or came from another client), so include it for resumed Claude, Codex, Kimi, and Gemini chats too.
+        // restored history (or came from another client), so include it for resumed Claude, Codex, and Gemini chats too.
         if (parent is null && subagentThreadId is null) _promptHistory.Record(shown);
         AppendToContainer(Container(parent, subagentThreadId), new UserItem
         {

@@ -76,16 +76,6 @@ public static class UsagePalette
         ["gpt-6-luna"] = 5,
         ["gpt-5.6-terra"] = 5,
         ["gpt-5.6-luna"] = 5,
-        // 6 - Moonshot Kimi
-        ["k3"] = 6,
-        ["kimi-k3"] = 6,
-        ["kimi-code/k3"] = 6,
-        ["kimi-k2.7-code"] = 6,
-        ["kimi-for-coding"] = 6,
-        ["kimi-code/kimi-for-coding"] = 6,
-        ["kimi-k2.7-code-highspeed"] = 6,
-        ["kimi-for-coding-highspeed"] = 6,
-        ["kimi-code/kimi-for-coding-highspeed"] = 6,
     };
 
     /// <summary>Slots handed to ids this build doesn't know about (a model released after it shipped). Assigned
@@ -169,10 +159,6 @@ public static class UsagePalette
         "gpt-5.6-terra" => "GPT-5.6 Terra",
         "gpt-5.6-luna" => "GPT-5.6 Luna",
         "gpt-5.5" => "GPT-5.5",
-        "k3" or "kimi-k3" or "kimi-code/k3" => "Kimi K3",
-        "kimi-k2.7-code" or "kimi-for-coding" or "kimi-code/kimi-for-coding" => "Kimi K2.7",
-        "kimi-k2.7-code-highspeed" or "kimi-for-coding-highspeed" or "kimi-code/kimi-for-coding-highspeed"
-            => "Kimi K2.7 Turbo",
         // GLM on Baseten. Named explicitly rather than left to the slug title-caser below: that path happens to
         // produce the right words for these four ids today, but only because of where the hyphens fall.
         // NB this switch is ordinal, so the casing has to be the id's own.

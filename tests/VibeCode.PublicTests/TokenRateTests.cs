@@ -121,13 +121,6 @@ internal static class TokenRateTests
         Expect(tracker, 147, 147, "new turns preserve the trailing minute");
     }
 
-    private static void Chunk(KimiSession protocol, string kind, int characters) =>
-        Call(protocol, "TranslateSessionUpdate", new JsonObject
-        {
-            ["sessionUpdate"] = kind,
-            ["content"] = new JsonObject { ["type"] = "text", ["text"] = new string('x', characters) }
-        });
-
     private static object Tracker(TestClock clock) => Activator.CreateInstance(
         typeof(ChatViewModel).Assembly.GetType("VibeCode.Services.RollingTokenUsage", throwOnError: true)!,
         new object[] { clock })!;

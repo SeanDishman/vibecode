@@ -8,16 +8,6 @@ using VibeCode.Services;
 
 namespace VibeCode.UI;
 
-public sealed class KimiAccountEntry
-{
-    public string Label { get; init; } = "";
-    public string ProviderLine { get; init; } = "";
-    public string UsageDisplay { get; init; } = "";
-    public string Initial { get; init; } = "K";
-    public bool IsVibeCodeSelected { get; init; }
-    public bool Usable { get; init; }
-}
-
 /// <summary>An ObservableCollection with one-reset roster replacement for fast Bridge host switching.</summary>
 public sealed class BridgePaneCollection : ObservableCollection<ChatViewModel>
 {
@@ -87,7 +77,6 @@ public sealed partial class MainViewModel : Observable
         ChatGroups = CreateSidebarChatView();
         _sidebarCollapsed = AppSettings.Current.SidebarCollapsed;   // field, not property: restoring is not a change
         // Quota reads land on the dispatcher after each fetch; the account rows mirror them without polling.
-        KimiUsageService.Instance.PropertyChanged += OnKimiUsageChanged;
         PropertyChangedEventManager.AddHandler(GeminiUsageService.Instance, OnGeminiUsageChanged, string.Empty);
         // A restored "No directory" chat starts its provider in that folder; recreate it if the user cleared it, or
         // the chat would come back unable to launch.
@@ -95,24 +84,16 @@ public sealed partial class MainViewModel : Observable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    private void OnKimiUsageChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName is not (nameof(KimiUsageService.Summary) or nameof(KimiUsageService.Status)
-            or nameof(KimiUsageService.UpdatedText))) return;
-        Raise(nameof(KimiAccountUsage));
-        RebuildAllAccounts();   // the merged roster snapshots UsageDisplay, so it must be re-taken
-    }
 
     /// <summary>
     /// True when <paramref name="item"/> belongs to the currently selected login for its provider.
-    /// Kimi has a single shared login (always shown). Legacy rows with no AccountId stay visible so old
+    /// Legacy rows with no AccountId stay visible so old
     /// restores aren't orphaned; every new chat captures ActiveId at creation.
     /// </summary>
     private bool ChatMatchesActiveAccount(object item)
     {
         if (item is not ChatViewModel chat) return false;
         if (string.IsNullOrWhiteSpace(chat.AccountId)) return true;   // pre-isolation snapshots
-        if (chat.IsKimi) return true;
         if (chat.IsClaude) return Visible(chat.AccountId, AccountService.Instance.ActiveId, Accounts.Select(a => a.Id));
         if (chat.IsCodex) return Visible(chat.AccountId, CodexAccountService.Instance.ActiveId, CodexAccounts.Select(a => a.Id));
         return true;
@@ -226,30 +207,27 @@ public sealed partial class MainViewModel : Observable
         private set { if (Set(ref _currentAccount, value)) { Raise(nameof(AccountInitial)); Raise(nameof(AccountLabel)); Raise(nameof(AccountSub)); Raise(nameof(IsSignedIn)); Raise(nameof(HasMultipleAccounts)); } }
     }
     private bool CodexProviderSelected => string.Equals(AppSettings.Current.DefaultProvider, "codex", StringComparison.OrdinalIgnoreCase);
-    private bool KimiProviderSelected => string.Equals(AppSettings.Current.DefaultProvider, "kimi", StringComparison.OrdinalIgnoreCase);
     private bool GlmProviderSelected => Protocol.GlmPreset.Is(AppSettings.Current.DefaultProvider);
     public ApiKeyAccount? CurrentGlmAccount => GlmProviderSelected
         ? ApiKeyAccountService.Instance.SelectedFor(Protocol.GlmPreset.ProviderId) : null;
     public string AccountInitial => GeminiProviderSelected ? "G" : GlmProviderSelected ? "Z" : CodexProviderSelected
         ? CodexAccountInitial
-        : KimiProviderSelected ? KimiAccountInitial : _currentAccount?.Initial ?? "?";
+        : _currentAccount?.Initial ?? "?";
     public string AccountLabel => GeminiProviderSelected ? GeminiAccountLabel : GlmProviderSelected ? CurrentGlmAccount?.Title ?? "Connect GLM" : CodexProviderSelected
         ? CodexAccountLabel
-        : KimiProviderSelected ? KimiAccountLabel : _currentAccount?.Label ?? "Sign in";
+        : _currentAccount?.Label ?? "Sign in";
     public string AccountSub => GeminiProviderSelected ? GeminiAccountSub : GlmProviderSelected ? CurrentGlmAccount?.ConnectionDisplay ?? "GLM · Not connected" : CodexProviderSelected
         ? CodexAccountSub
-        : KimiProviderSelected
-            ? KimiAccountSub
-            : _currentAccount is { } a
+        : _currentAccount is { } a
                 ? a.ProviderLine
                 : "Claude Code · Not signed in";
     public bool IsSignedIn => GeminiProviderSelected ? IsGeminiSignedIn : GlmProviderSelected ? CurrentGlmAccount is not null : CodexProviderSelected
         ? IsCodexSignedIn
-        : KimiProviderSelected ? IsKimiSignedIn : _currentAccount is not null;
+        : _currentAccount is not null;
     public bool HasMultipleAccounts => Accounts.Count > 1;
     /// <summary>True when the shown account is just the live ~/.claude login because no selection was stored - i.e. a
     /// guess, not the user's choice. Shown as a hint so a lost selection can't pass for correct state.</summary>
-    public bool AccountIsFallback => !GeminiProviderSelected && !GlmProviderSelected && !CodexProviderSelected && !KimiProviderSelected && AccountService.Instance.ActiveIsFallback;
+    public bool AccountIsFallback => !GeminiProviderSelected && !GlmProviderSelected && !CodexProviderSelected && AccountService.Instance.ActiveIsFallback;
 
     private string? _codexAccountEmail;
     private string? _codexAccountName;
@@ -288,71 +266,6 @@ public sealed partial class MainViewModel : Observable
             ? identity[..1].ToUpperInvariant()
             : "O"
         : "O";
-
-    private bool _isKimiInstalled;
-    private bool _isKimiSignedIn;
-    private string? _kimiVersion;
-    public bool IsKimiInstalled => _isKimiInstalled;
-    public bool IsKimiSignedIn => _isKimiSignedIn;
-    public bool IsKimiSelected => KimiProviderSelected && IsKimiSignedIn;
-    public string KimiAccountLabel => !IsKimiInstalled
-        ? "Install Kimi Code CLI"
-        : IsKimiSignedIn ? "Kimi account" : "Sign in to Kimi";
-    public string KimiAccountSub
-    {
-        get
-        {
-            return !IsKimiInstalled
-                ? "Kimi Code · Not installed"
-                : IsKimiSignedIn ? "Kimi Code · Connected" : "Kimi Code · Not signed in";
-        }
-    }
-    /// <summary>Live quota from <see cref="KimiUsageService"/> ("12% quota · 3% 5h"), with the nearest reset when
-    /// Kimi reports one. Falls back to the service's status line ("Loading Kimi quota…", token-expired note, …)
-    /// until the first successful read.</summary>
-    public string KimiAccountUsage
-    {
-        get
-        {
-            if (!IsKimiSignedIn) return "";
-            var usage = KimiUsageService.Instance;
-            if (!usage.HasData) return usage.Status;
-            var reset = usage.Limits.FirstOrDefault(limit => limit.HasReset);
-            return reset is null ? usage.Summary : $"{usage.Summary} · resets {reset.ResetDisplay}";
-        }
-    }
-    public string KimiAccountInitial => "K";
-
-    public void ApplyKimiAccount(KimiAccountState state)
-    {
-        // Preserve a known-good row through transient process/network failures. Missing and signed-out states with
-        // no Error are authoritative and update immediately. A failed ACP handshake still proves that an executable
-        // was found, so retain that installation fact without incorrectly flipping a connected account to signed out.
-        if (!string.IsNullOrWhiteSpace(state.Error))
-        {
-            if (state.IsInstalled && !_isKimiInstalled)
-            {
-                _isKimiInstalled = true;
-                Raise(nameof(IsKimiInstalled));
-                Raise(nameof(KimiAccountLabel));
-                Raise(nameof(KimiAccountSub));
-                RefreshProviderPresentation();
-            }
-            return;
-        }
-        _isKimiInstalled = state.IsInstalled;
-        _isKimiSignedIn = state.IsSignedIn;
-        _kimiVersion = state.Version;
-        Raise(nameof(IsKimiInstalled));
-        Raise(nameof(IsKimiSignedIn));
-        Raise(nameof(IsKimiSelected));
-        Raise(nameof(IsGeminiSelected));
-        Raise(nameof(KimiAccountLabel));
-        Raise(nameof(KimiAccountSub));
-        Raise(nameof(KimiAccountUsage));
-        Raise(nameof(KimiAccountInitial));
-        RefreshProviderPresentation();
-    }
 
     public void ApplyCodexAccount(CodexAccountState state)
     {
@@ -419,7 +332,6 @@ public sealed partial class MainViewModel : Observable
         foreach (var chat in Chats.Concat(LiveBridgePeers).Distinct())
             chat.RefreshModelPicker();
         Raise(nameof(IsCodexSelected));
-        Raise(nameof(IsKimiSelected));
         Raise(nameof(IsGeminiSelected));
         Raise(nameof(AccountInitial));
         Raise(nameof(CurrentGlmAccount));
@@ -435,15 +347,6 @@ public sealed partial class MainViewModel : Observable
         AllAccounts.Clear();
         foreach (var a in Accounts) AllAccounts.Add(a);
         foreach (var a in CodexAccounts) AllAccounts.Add(a);
-        AllAccounts.Add(new KimiAccountEntry
-        {
-            Label = KimiAccountLabel,
-            ProviderLine = KimiAccountSub,
-            UsageDisplay = KimiAccountUsage,
-            Initial = KimiAccountInitial,
-            IsVibeCodeSelected = IsKimiSelected,
-            Usable = IsKimiInstalled && IsKimiSignedIn,
-        });
         AllAccounts.Add(new GeminiAccountEntry
         {
             Label = GeminiAccountLabel,
@@ -1780,7 +1683,7 @@ public sealed partial class MainViewModel : Observable
     /// button never looks "broken" — a click also opens a dialog that points at Settings.</summary>
     public string AddBridgeAgentToolTip =>
         CanAddBridgeAgent
-            ? $"Choose Claude Code, OpenAI Codex, Kimi Code, Gemini, or GLM (up to {AppSettings.Current.BridgeAgentLimit} agents)"
+            ? $"Choose Claude Code, OpenAI Codex, Gemini, or GLM (up to {AppSettings.Current.BridgeAgentLimit} agents)"
             : $"Bridge is full ({BridgePanes.Count} / {AppSettings.Current.BridgeAgentLimit}). Raise the limit in Settings → Bridge.";
     public bool CanAnnounceToBridge => IsBridge;
     public string BridgeSummary => SummaryOf(BridgePanes);
@@ -1790,7 +1693,6 @@ public sealed partial class MainViewModel : Observable
 
     public bool BridgeUsesClaude => BridgePanes.Any(p => p.Provider == "claude");
     public bool BridgeUsesCodex => BridgePanes.Any(p => p.Provider == "codex");
-    public bool BridgeUsesKimi => BridgePanes.Any(p => p.Provider == "kimi");
 
     // ---- the same header, computed for whichever roster a surface is showing ----
 
@@ -1813,14 +1715,13 @@ public sealed partial class MainViewModel : Observable
     public string SecondaryBridgeProjectPath => SecondaryBridgePanes.FirstOrDefault()?.Cwd ?? "";
     public bool SecondaryBridgeUsesClaude => SecondaryBridgePanes.Any(p => p.Provider == "claude");
     public bool SecondaryBridgeUsesCodex => SecondaryBridgePanes.Any(p => p.Provider == "codex");
-    public bool SecondaryBridgeUsesKimi => SecondaryBridgePanes.Any(p => p.Provider == "kimi");
     public bool SecondaryHasMinimizedBridgePanes => SecondaryBridgePanes.Any(p => p.BridgeMinimized);
 
     public bool SecondaryCanAnnounceToBridge => SecondaryIsBridge;
     public bool SecondaryCanAddBridgeAgent => BridgeAgentPolicy.CanAdd(SecondaryBridgePanes.Count, AppSettings.Current.BridgeAgentLimit);
     public string SecondaryAddBridgeAgentToolTip =>
         SecondaryCanAddBridgeAgent
-            ? $"Choose Claude Code, OpenAI Codex, Kimi Code, Gemini, or GLM (up to {AppSettings.Current.BridgeAgentLimit} agents)"
+            ? $"Choose Claude Code, OpenAI Codex, Gemini, or GLM (up to {AppSettings.Current.BridgeAgentLimit} agents)"
             : $"Bridge is full ({SecondaryBridgePanes.Count} / {AppSettings.Current.BridgeAgentLimit}). Raise the limit in Settings → Bridge.";
     public bool SecondaryCanForkBridge =>
         SecondaryIsBridge && SecondaryBridgePanes.Any(p => p.CanFork);
@@ -1849,7 +1750,6 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(SecondaryBridgeProjectPath));
         Raise(nameof(SecondaryBridgeUsesClaude));
         Raise(nameof(SecondaryBridgeUsesCodex));
-        Raise(nameof(SecondaryBridgeUsesKimi));
         Raise(nameof(SecondaryBridgeUsesGemini));
         Raise(nameof(SecondaryHasMinimizedBridgePanes));
         Raise(nameof(SecondaryCanAnnounceToBridge));
@@ -1914,11 +1814,7 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(BridgeProjectPath));
         Raise(nameof(BridgeUsesClaude));
         Raise(nameof(BridgeUsesCodex));
-        Raise(nameof(BridgeUsesKimi));
         Raise(nameof(BridgeUsesGemini));
-        // The Kimi pill is hidden until a quota read succeeds, so a resumed bridge whose Kimi agent is sitting idle
-        // would never show one. Kick a (throttled) read whenever the roster changes.
-        if (BridgeUsesKimi) KimiUsageService.Instance.Refresh();
         Raise(nameof(BridgeGridRows));
         Raise(nameof(HasMinimizedBridgePanes));
         Raise(nameof(PanelChat));
@@ -2277,7 +2173,6 @@ public sealed partial class MainViewModel : Observable
         {
             "claude" => "claude",
             "codex" => "codex",
-            "kimi" => "kimi",
             "gemini" => "gemini",
             Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
             _ => defaults.Provider,

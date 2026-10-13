@@ -64,7 +64,7 @@ internal static partial class Program
             && plan.Actions[0].Kind == "configure_mcp" && plan.Actions[0].Target == "docs");
         Check("live MCP setup uses the supplied URL and provider selection", settings.McpServers.Single().Url == "https://example.com/mcp"
             && settings.McpServers.Single().UseCodex && !settings.McpServers.Single().UseClaude
-            && !settings.McpServers.Single().UseKimi);
+            && !settings.McpServers.Single().UseGemini);
         var identity = settings.McpServers.Single().Id;
         Run("Disable the docs MCP server.", plan => plan.Actions.Count == 1 && plan.Actions[0].Kind == "configure_mcp");
         Check("live disable preserves the existing MCP endpoint", !settings.McpServers.Single().Enabled

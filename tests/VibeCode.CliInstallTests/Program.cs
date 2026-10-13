@@ -8,19 +8,14 @@ Directory.CreateDirectory(storage);
 var checks = 0;
 void Check(bool condition, string title) { if (!condition) throw new Exception(title); checks++; Console.WriteLine("PASS " + title); }
 
-if (args.Contains("--install") || args.Contains("--install-kimi"))
+if (args.Contains("--install"))
 {
     // Opt-in network integration: an empty, isolated managed-tools directory, with no provider login or model request.
-    var providers = args.Contains("--install-kimi") ? new[] { "kimi" } : new[] { "claude", "codex", "gemini", "kimi" };
+    var providers = new[] { "claude", "codex", "gemini" };
     foreach (var provider in providers)
     {
         await CliInstallationService.InstallAsync(provider, new Progress<string>(s => Console.WriteLine(provider + ": " + s)));
         Check(CliInstallationService.IsReady(provider), provider + " fresh install and version check");
-    }
-    if (args.Contains("--install-kimi"))
-    {
-        var git = Path.Combine(storage, "git", "cmd", "git.exe");
-        Check(File.Exists(git) && (await CliInstallationService.RunAsync(git, ["--version"], CancellationToken.None)).StartsWith("git version"), "fresh Git dependency starts successfully");
     }
     Console.WriteLine("Installed runtimes retained for inspection: " + storage);
     Console.WriteLine($"{checks} integration checks passed.");
@@ -29,13 +24,13 @@ if (args.Contains("--install") || args.Contains("--install-kimi"))
 
 try
 {
-    foreach (var provider in new[] { "claude", "codex", "gemini", "kimi" })
+    foreach (var provider in new[] { "claude", "codex", "gemini" })
         Check(!CliInstallationService.IsReady(provider), provider + " starts missing in an isolated tool directory");
     foreach (var (provider, relative) in new[] {
         ("claude", "node_modules/@anthropic-ai/claude-code/bin/claude.exe"),
         ("codex", "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex/codex.exe"),
         ("gemini", "node_modules/@google/gemini-cli/bundle/gemini.js"),
-        ("kimi", "bin/kimi.exe") })
+    })
     {
         var file = Path.Combine(storage, provider, relative);
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);

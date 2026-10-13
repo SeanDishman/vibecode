@@ -3,6 +3,8 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Windows;
 using VibeCode.Protocol;
+using VibeCode.Services;
+using VibeCode.UI;
 
 internal static class Program
 {
@@ -19,7 +21,7 @@ internal static class Program
         }
         var testDirectory = Path.Combine(Path.GetTempPath(), "vibecode-public-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(testDirectory);
-        foreach (var variable in new[] { "VIBECODE_DATA_DIR", "VIBECODE_CODEX_ACCOUNT_STORE", "VIBECODE_CODEX_LEGACY_HOME", "VIBECODE_CLAUDE_ACCOUNT_STORE", "CLAUDE_CONFIG_DIR", "KIMI_CODE_HOME" })
+        foreach (var variable in new[] { "VIBECODE_DATA_DIR", "VIBECODE_CODEX_ACCOUNT_STORE", "VIBECODE_CODEX_LEGACY_HOME", "VIBECODE_CLAUDE_ACCOUNT_STORE", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME" })
         {
             var path = Path.Combine(testDirectory, variable.ToLowerInvariant());
             Directory.CreateDirectory(path);
@@ -37,6 +39,7 @@ internal static class Program
         try
         {
             CatalogsFollowRuntime();
+            RetiredProviderSettings();
             ProtocolBoundaryTests.Run();
             ApkPackageTests.Run(mobileTemplate);
             TokenRateTests.Run();
@@ -83,6 +86,50 @@ internal static class Program
         Require(!luna["supportedEffortLevels"]!.AsArray().Any(level => level!.GetValue<string>() == "ultra"), "Fallback reasoning remains model-specific");
         Require(codex.Models.All(row => row!["value"]!.GetValue<string>() != "gpt-5.3-codex-spark"), "Retired models stay out of the fallback catalog");
         Console.WriteLine("PASS: live and fallback provider catalogs, reasoning levels and speed tiers");
+    }
+
+    private static void RetiredProviderSettings()
+    {
+        string[] providers = ["claude", "codex", "gemini", "glm"];
+        Require(BridgeSetupPanel.Providers.Select(provider => provider.Id).SequenceEqual(providers),
+            "Bridge setup lists exactly the supported providers");
+        Require(ApiKeyAccountService.Providers.SequenceEqual(["claude", "codex", "glm"]),
+            "API accounts list only supported key-based providers");
+        var settings = new AppSettings
+        {
+            DefaultProvider = "retired-provider",
+            JarvisProvider = "retired-provider", JarvisModel = "retired-model", JarvisEffort = "retired-effort",
+            OpenChats = providers.Select(provider => new OpenChatState { Provider = provider, SessionId = provider }).ToList(),
+            SavedBridges = [new SavedBridgeState
+            {
+                Provider = "codex", HostSessionId = "supported-host",
+                HostConfiguration = new("codex", "gpt-6-luna", "medium"),
+                HostWorkerConfiguration = new("retired-provider", "retired-model", null),
+                Peers = [new SavedBridgePane
+                         {
+                             Provider = "gemini", SessionId = "supported-peer",
+                             Configuration = new("gemini", "default", null),
+                             WorkerConfiguration = new("retired-provider", "retired-model", null),
+                         },
+                         new SavedBridgePane { Provider = "retired-provider", SessionId = "retired-peer" }],
+            }, new SavedBridgeState { Provider = "retired-provider", HostSessionId = "retired-host" }],
+        };
+        settings.OpenChats.Add(new OpenChatState { Provider = "retired-provider", SessionId = "retired-chat" });
+        Require(settings.NormalizeProviderModelSlots(), "Removed providers trigger settings migration");
+        Require(settings.DefaultProvider == "claude" && settings.OpenChats.Select(chat => chat.SessionId).SequenceEqual(providers),
+            "Migration resets a retired default and preserves supported conversations");
+        Require(settings.SavedBridges.Single().HostSessionId == "supported-host"
+                && settings.SavedBridges.Single().Peers.Single().SessionId == "supported-peer",
+            "Migration preserves supported bridges and removes retired hosts and peers");
+        Require(settings.JarvisProvider == "codex" && settings.JarvisModel == new AppSettings().JarvisModel,
+            "A retired Jarvis selection returns to the supported assistant defaults");
+        Require(settings.SavedBridges.Single().HostConfiguration?.Provider == "codex"
+                && settings.SavedBridges.Single().HostWorkerConfiguration is null
+                && settings.SavedBridges.Single().Peers.Single().Configuration?.Provider == "gemini"
+                && settings.SavedBridges.Single().Peers.Single().WorkerConfiguration is null,
+            "Saved roles preserve supported configurations and release retired launch defaults");
+        Require(!settings.NormalizeProviderModelSlots(), "Provider migration is idempotent");
+        Console.WriteLine("PASS: supported providers and retired-provider settings migration");
     }
 
     private static void Require(bool condition, string message)

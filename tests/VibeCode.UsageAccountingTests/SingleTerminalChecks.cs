@@ -175,14 +175,14 @@ internal static partial class Program
             Math.Abs(UsageLog.Instance.Entries().Single(e => e.SessionId == "planning-stream").CostUsd -
                 ModelPricing.TurnCost("claude-fable-5-1", 200, 30, 20, 10, "fast")) < 1e-10);
 
-        var kimi = Planner("kimi", "kimi-k2.5");
-        using ((IDisposable)kimi)
+        var gemini = Planner("gemini", "gemini-3.1-pro");
+        using ((IDisposable)gemini)
         {
-            Call(kimi, "Record", new JsonObject { ["session_usage"] = Usage() }, "planning-kimi", new JsonArray());
-            Call(kimi, "BeginTurn");
-            Call(kimi, "Record", new JsonObject { ["session_usage"] = Usage(2) }, "planning-kimi", new JsonArray());
-            Check("Kimi planner retries log only new consumption from cumulative snapshots",
-                UsageLog.Instance.Entries().Where(e => e.SessionId == "planning-kimi").Sum(e => e.Total) == 520);
+            Call(gemini, "Record", new JsonObject { ["session_usage"] = Usage() }, "planning-gemini", new JsonArray());
+            Call(gemini, "BeginTurn");
+            Call(gemini, "Record", new JsonObject { ["session_usage"] = Usage(2) }, "planning-gemini", new JsonArray());
+            Check("Gemini planner retries log only new consumption from cumulative snapshots",
+                UsageLog.Instance.Entries().Where(e => e.SessionId == "planning-gemini").Sum(e => e.Total) == 520);
         }
 
         var checkpoint = Planner("codex", "gpt-6-luna");

@@ -1345,7 +1345,7 @@ public sealed class PhoneBridgeService : Observable
         // The folder has to already exist. This is not a sandbox - a paired phone can already make an agent run
         // anything - but it turns a typo into a clean 400 instead of a chat spawned against a path that is not there.
         if (!Directory.Exists(cwd)) return Fail(400, "that folder does not exist on the PC");
-        if (provider.Length > 0 && provider is not ("claude" or "codex" or "kimi" or "gemini"))
+        if (provider.Length > 0 && provider is not ("claude" or "codex" or "gemini"))
             return Fail(400, "unknown provider");
 
         var id = await OnUi(vm =>

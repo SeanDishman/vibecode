@@ -81,7 +81,7 @@ internal static partial class Program
         var fixtureAccounts = BridgeSetupPanel.Providers.Select(p => new BridgeAccountChoice(p.Id,
             "fixture-" + p.Id, p.Label + " account", p.Label + " · Fixture")).ToArray();
         accountBox.ItemsSource = fixtureAccounts;
-        Check("regular dropdown lists account identities", accountBox.Items.Count == 5);
+        Check("regular dropdown lists account identities", accountBox.Items.Count == fixtureAccounts.Length);
         var starts = 0;
         regular.StartRequested += (_, _) => starts++;
         foreach (var account in fixtureAccounts)
@@ -91,7 +91,7 @@ internal static partial class Program
             Check("regular starts the selected account " + account.Provider,
                 regular.PeerAccount == account && regular.Provider == account.Provider && !regular.SingleTerminal);
         }
-        Check("regular bridge starts without an orchestrator task", starts == 5);
+        Check("regular bridge starts without an orchestrator task", starts == fixtureAccounts.Length);
         accountBox.SelectedItem = fixtureAccounts[0];
         CaptureSetup(regular, 460, "start-bridge-regular.png");
 
@@ -124,8 +124,8 @@ internal static partial class Program
         Find<RadioButton>(panel, "SeparateTerminalsChoice").IsChecked = true;
         Check("manual count and terminal choice are preserved", panel.WorkerCount == 3 && !panel.SingleTerminal &&
             Find<TextBlock>(panel, "TeamSizeText").Text == "1 orchestrator + 3 workers");
-        Find<ComboBox>(panel, "OrchestratorProviderBox").SelectedValue = "kimi";
-        Check("advanced provider determines orchestrator selection", panel.Provider == "kimi");
+        Find<ComboBox>(panel, "OrchestratorProviderBox").SelectedValue = "gemini";
+        Check("advanced provider determines orchestrator selection", panel.Provider == "gemini");
         var workerProvider = (ComboBox)options.FindName("WorkerProviderBox");
         workerProvider.SelectedValue = "claude";
         workerProvider.SelectedValue = host.Provider;
@@ -137,7 +137,7 @@ internal static partial class Program
         panel.Suspend();
         panel.Configure(host, 8);
         Check("dismissing and reopening setup preserves the unsent task", panel.Objective.StartsWith("Repair account") &&
-            panel.IsAdvanced && panel.WorkerCount == 3 && panel.Provider == "kimi");
+            panel.IsAdvanced && panel.WorkerCount == 3 && panel.Provider == "gemini");
         Check("dismissing and reopening preserves both review choices", panel.OrchestratorConfiguration.ReviewLevel == "none" &&
             panel.WorkerConfiguration.ReviewLevel == "low");
         CaptureSetup(panel, 460, "start-bridge-advanced.png");

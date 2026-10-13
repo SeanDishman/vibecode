@@ -9,7 +9,7 @@ public sealed record BridgeAgentConfiguration(string Provider, string? Model, st
 
 internal static class BridgeAgentConfigurationPolicy
 {
-    public static readonly string[] Providers = ["claude", "codex", "kimi", "gemini", GlmPreset.ProviderId];
+    public static readonly string[] Providers = ["claude", "codex", "gemini", GlmPreset.ProviderId];
 
     public static BridgeAgentConfiguration From(ChatViewModel chat) => new(chat.Provider, chat.Model, chat.Effort, chat.BridgeReviewLevel, chat.FastMode, chat.UltrafastMode);
 
@@ -21,7 +21,6 @@ internal static class BridgeAgentConfigurationPolicy
         var (model, effort) = provider switch
         {
             "codex" => (settings.DefaultCodexModel, settings.DefaultCodexEffort),
-            "kimi" => (settings.DefaultKimiModel, settings.DefaultKimiEffort),
             "gemini" => (settings.DefaultGeminiModel, (string?)null),
             GlmPreset.ProviderId => (settings.DefaultGlmModel, settings.DefaultGlmEffort),
             _ => (settings.DefaultModel, settings.DefaultEffort),

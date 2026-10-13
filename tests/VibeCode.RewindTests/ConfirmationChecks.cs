@@ -39,10 +39,10 @@ internal static partial class Program
         {
             if (bridge)
             {
-                chat = Chat("bridge-button", "kimi", true);
+                chat = Chat("bridge-button", "gemini", true);
                 vm.Chats.Add(chat);
                 vm.BridgePanes.Add(chat);
-                var other = Chat("bridge-neighbor", "kimi", true);
+                var other = Chat("bridge-neighbor", "gemini", true);
                 other.Draft = "neighbor draft";
                 vm.Chats.Add(other);
                 vm.BridgePanes.Add(other);

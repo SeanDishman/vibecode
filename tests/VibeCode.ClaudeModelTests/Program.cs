@@ -33,12 +33,11 @@ internal static partial class Program
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", Path.Combine(Root, "data"));
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", Path.Combine(Root, "empty-claude-home"));
         Environment.SetEnvironmentVariable("VIBECODE_CLAUDE_ACCOUNT_STORE", Path.Combine(Root, "empty-claude-accounts"));
-        Environment.SetEnvironmentVariable("KIMI_CODE_HOME", Path.Combine(Root, "empty-kimi-home"));
-        Environment.SetEnvironmentVariable("KIMI_SHARE_DIR", Path.Combine(Root, "empty-kimi-share"));
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Path.Combine(Root, "empty-codex-home"));
         Environment.SetEnvironmentVariable("CLAUDE_MODEL_FIXTURE", Path.Combine(Root, "wire.jsonl"));
         Environment.SetEnvironmentVariable("VIBECODE_CLAUDE_PATH", Environment.ProcessPath);
         Directory.CreateDirectory(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")!);
+        Environment.SetEnvironmentVariable("GEMINI_CLI_HOME", Path.Combine(Root, "empty-gemini-home"));
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         AppSettings.Current.AgentMemoryEnabled = false;

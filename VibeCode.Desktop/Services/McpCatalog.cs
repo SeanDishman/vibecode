@@ -21,7 +21,6 @@ public sealed class McpServerDefinition
     public bool Enabled { get; set; } = true;
     public bool UseClaude { get; set; } = true;
     public bool UseCodex { get; set; } = true;
-    public bool UseKimi { get; set; } = true;
     public bool UseGemini { get; set; } = true;
     public string Command { get; set; } = "";
     public List<string> Arguments { get; set; } = new();
@@ -51,14 +50,13 @@ public sealed class McpServerDefinition
             var targets = new List<string>();
             if (UseClaude) targets.Add("Claude");
             if (UseCodex && !IsSse) targets.Add("Codex");
-            if (UseKimi) targets.Add("Kimi");
             if (UseGemini) targets.Add("Gemini");
             return targets.Count == 0 ? "No compatible CLI selected" : string.Join(" · ", targets);
         }
     }
     [JsonIgnore]
     public string CompatibilityNote => IsSse
-        ? "Legacy SSE is sent to Claude, Kimi, and Gemini; current Codex releases do not support it."
+        ? "Legacy SSE is sent to Claude and Gemini; current Codex releases do not support it."
         : "Applied to each selected CLI when a chat next starts or reconnects.";
 
     public McpServerDefinition Clone() => new()
@@ -69,7 +67,6 @@ public sealed class McpServerDefinition
         Enabled = Enabled,
         UseClaude = UseClaude,
         UseCodex = UseCodex,
-        UseKimi = UseKimi,
         UseGemini = UseGemini,
         Command = Command,
         Arguments = new List<string>(Arguments ?? new List<string>()),
@@ -222,7 +219,7 @@ public static partial class McpCatalog
 
         if (definition.Transport is not (StdioTransport or HttpTransport or SseTransport))
             messages.Add(Error("Transport must be stdio, Streamable HTTP, or legacy SSE."));
-        if (!definition.UseClaude && !definition.UseCodex && !definition.UseKimi && !definition.UseGemini)
+        if (!definition.UseClaude && !definition.UseCodex && !definition.UseGemini)
             messages.Add(Error("Select at least one CLI."));
         if (definition.IsSse && definition.UseCodex)
             messages.Add(new McpValidationMessage(McpValidationSeverity.Warning,
@@ -245,7 +242,7 @@ public static partial class McpCatalog
                     && Path.IsPathRooted(expandedCommand) && !File.Exists(expandedCommand))
                     messages.Add(new McpValidationMessage(McpValidationSeverity.Warning,
                         "The selected MCP server executable does not currently exist."));
-                else if ((definition.UseKimi || definition.UseGemini) && !Path.IsPathRooted(expandedCommand)
+                else if (definition.UseGemini && !Path.IsPathRooted(expandedCommand)
                                                && ResolveExecutable(definition.Command ?? "") is null)
                     messages.Add(new McpValidationMessage(McpValidationSeverity.Warning,
                         "ACP asks for an absolute executable path, and this command is not currently on PATH."));
@@ -376,7 +373,7 @@ public static partial class McpCatalog
                     if (definition.Environment.Values.Select(ExpandEnvironmentTemplates).Any(value => value.Length > 8192))
                         problems.Add($"{definition.Name}: an expanded environment value exceeds 8,192 characters");
 
-                    if (provider is "kimi" or "gemini")
+                    if (provider is "gemini")
                     {
                         var executable = ResolveExecutable(definition.Command ?? "", sessionDirectory);
                         if (executable is null || !Path.IsPathRooted(executable) || !File.Exists(executable))
@@ -407,7 +404,7 @@ public static partial class McpCatalog
         var distinct = problems.Distinct(StringComparer.Ordinal).ToArray();
         if (distinct.Length > 0)
         {
-            var providerName = provider switch { "claude" => "Claude", "codex" => "Codex", "kimi" => "Kimi", "gemini" => "Gemini", _ => provider };
+            var providerName = provider switch { "claude" => "Claude", "codex" => "Codex", "gemini" => "Gemini", _ => provider };
             throw new InvalidOperationException($"Cannot launch {providerName} with the selected MCP catalog: "
                                                 + string.Join("; ", distinct) + ".");
         }
@@ -545,9 +542,6 @@ public static partial class McpCatalog
         return projection;
     }
 
-    public static JsonArray BuildKimiAcpServers(IEnumerable<McpServerDefinition>? definitions, string? sessionDirectory = null)
-        => BuildAcpServers(definitions, "kimi", sessionDirectory);
-
     public static JsonArray BuildGeminiAcpServers(IEnumerable<McpServerDefinition>? definitions, string? sessionDirectory = null)
         => BuildAcpServers(definitions, "gemini", sessionDirectory);
 
@@ -563,9 +557,7 @@ public static partial class McpCatalog
             };
             if (definition.IsStdio)
             {
-                // ACP v1's stdio union branch is the only branch without a `type` discriminator. Kimi's
-                // adapter therefore identifies stdio by the absence of `type`; sending `type: "stdio"`
-                // makes current Kimi releases treat the otherwise-valid server as unsupported and drop it.
+                // ACP v1 identifies stdio servers by the absence of a transport discriminator.
                 var command = ExpandEnvironmentTemplates(definition.Command);
                 entry["command"] = ResolveExecutable(command, sessionDirectory) ?? command;
                 entry["args"] = new JsonArray(definition.Arguments.Select(value => JsonValue.Create(ExpandEnvironmentTemplates(value))).ToArray());
@@ -688,7 +680,6 @@ public static partial class McpCatalog
     {
         "claude" => definition.UseClaude,
         "codex" => definition.UseCodex && !definition.IsSse,
-        "kimi" => definition.UseKimi,
         "gemini" => definition.UseGemini,
         _ => false,
     };

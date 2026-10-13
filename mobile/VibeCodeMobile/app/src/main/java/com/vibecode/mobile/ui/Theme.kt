@@ -48,7 +48,6 @@ object VibeColors {
     /** One colour per CLI, so a glance at the list says which agent a chat belongs to. */
     fun provider(provider: String): Color = when (provider) {
         "codex" -> Green
-        "kimi" -> Violet
         else -> Accent
     }
 }

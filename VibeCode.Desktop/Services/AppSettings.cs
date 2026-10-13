@@ -216,7 +216,7 @@ public sealed class AppSettings
     /// ones still ask), which is the mode every new chat used before any of this was remembered.</summary>
     public const string DefaultPermissionMode = "auto";
 
-    /// <summary>Every mode a chat can actually be in. "auto" is VibeCode's own client-side policy, "dontAsk" is Kimi's;
+    /// <summary>Every mode a chat can actually be in. "auto" is VibeCode's own client-side policy;
     /// the rest are CLI modes. Anything else is a hand-edited or future value that no provider would accept.</summary>
     public static bool IsKnownPermissionMode(string? mode) => mode?.Trim() is
         "default" or "auto" or "plan" or "acceptEdits" or "bypassPermissions" or "dontAsk";
@@ -226,9 +226,7 @@ public sealed class AppSettings
         IsKnownPermissionMode(mode) ? mode!.Trim() : DefaultPermissionMode;
     public string? DefaultCodexEffort { get; set; }     // null = model default
     public string? DefaultCodexModel { get; set; }      // null = Codex CLI default
-    public string? DefaultKimiEffort { get; set; }      // null = CLI default; on/off or K3 low/high/max when advertised
     public string? DefaultGeminiModel { get; set; }
-    public string? DefaultKimiModel { get; set; }       // null = Kimi CLI default
     /// <summary>GLM's own model/effort seeds. They exist for the same reason every other provider has a pair:
     /// without them GLM falls through to <see cref="DefaultModel"/>/<see cref="DefaultEffort"/> — Claude's slots —
     /// and the two providers write over each other. Picking a GLM model would put a <c>zai-org/…</c> id in Claude's
@@ -694,6 +692,14 @@ public sealed class AppSettings
             DefaultProvider = "claude";
             changed = true;
         }
+        if (!IsSupportedProvider(JarvisProvider))
+        {
+            var defaults = new AppSettings();
+            JarvisProvider = defaults.JarvisProvider;
+            JarvisModel = defaults.JarvisModel;
+            JarvisEffort = defaults.JarvisEffort;
+            changed = true;
+        }
         if (IsRetiredModelId(DefaultModel) || Protocol.CodexSession.IsRetiredModel(DefaultModel))
         {
             DefaultModel = null;   // back to "whatever the Claude CLI recommends"
@@ -725,6 +731,22 @@ public sealed class AppSettings
                 changed = true;
             }
         }
+        // Retired providers cannot be reopened as a different provider's conversation.
+        OpenChats ??= new List<OpenChatState>();
+        changed |= OpenChats.RemoveAll(chat => !IsSupportedProvider(chat.Provider)) > 0;
+        changed |= SavedBridges.RemoveAll(bridge => !IsSupportedProvider(bridge.Provider)) > 0;
+        foreach (var bridge in SavedBridges)
+        {
+            changed |= bridge.Peers.RemoveAll(peer => !string.IsNullOrWhiteSpace(peer.Provider)
+                                                      && !IsSupportedProvider(peer.Provider)) > 0;
+            bridge.HostConfiguration = KeepSupportedConfiguration(bridge.HostConfiguration, ref changed);
+            bridge.HostWorkerConfiguration = KeepSupportedConfiguration(bridge.HostWorkerConfiguration, ref changed);
+            foreach (var peer in bridge.Peers)
+            {
+                peer.Configuration = KeepSupportedConfiguration(peer.Configuration, ref changed);
+                peer.WorkerConfiguration = KeepSupportedConfiguration(peer.WorkerConfiguration, ref changed);
+            }
+        }
         // A GLM id in Claude's slot is the same failure with a live provider instead of a retired one, so it is
         // carried across rather than dropped: the GLM model the user picked stays their GLM default.
         if (Protocol.GlmPreset.IsGlmModelId(DefaultModel))
@@ -737,7 +759,18 @@ public sealed class AppSettings
     }
 
     private static readonly HashSet<string> SupportedProviders =
-        new(["claude", "codex", "kimi", "gemini", Protocol.GlmPreset.ProviderId], StringComparer.OrdinalIgnoreCase);
+        new(["claude", "codex", "gemini", Protocol.GlmPreset.ProviderId], StringComparer.OrdinalIgnoreCase);
+
+    internal static bool IsSupportedProvider(string? provider) =>
+        provider is not null && SupportedProviders.Contains(provider.Trim());
+
+    private static VibeCode.UI.BridgeAgentConfiguration? KeepSupportedConfiguration(
+        VibeCode.UI.BridgeAgentConfiguration? configuration, ref bool changed)
+    {
+        if (configuration is null || IsSupportedProvider(configuration.Provider)) return configuration;
+        changed = true;
+        return null;
+    }
 
     private static bool IsRetiredModelId(string? id) =>
     !string.IsNullOrWhiteSpace(id) && id.Contains("deepseek", StringComparison.OrdinalIgnoreCase);

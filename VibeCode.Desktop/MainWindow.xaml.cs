@@ -335,7 +335,6 @@ public partial class MainWindow : Window
         // there polling accounts behind the shell that replaced it.
         _tokenRefreshTimer?.Stop();
         _codexRefreshTimer?.Stop();
-        _kimiRefreshTimer?.Stop();
         _accountUsageTimer?.Stop();
         _spotifyTimer?.Stop();
         _weatherTimer?.Stop();
@@ -620,7 +619,6 @@ public partial class MainWindow : Window
         // one of them already ran on launch: re-skinning is not a reason to re-hit four account APIs.
         StartTokenRefresh(immediate: false);
         StartCodexAccountRefresh(immediate: false);
-        StartKimiAccountRefresh(immediate: false);
         StartAccountUsagePolling(immediate: false);
         StartSpotifyPolling(immediate: false);
         StartWeatherPolling(immediate: false);
@@ -696,7 +694,6 @@ public partial class MainWindow : Window
         ModelPopup.DataContext = active;
         UsagePopup.DataContext = active;
         if (showBridge || active?.IsClaude != true) UsagePopup.IsOpen = false;
-        if (!showBridge) BridgeKimiUsagePopup.IsOpen = false;
         SyncComposerToSurface();   // the surface decides which of a chat's two composers is the live one
     }
 
@@ -1196,7 +1193,6 @@ public partial class MainWindow : Window
             StartTokenRefresh();    // keep every account's OAuth token fresh so per-account chats don't hit the ~8h expiry
             StartCodexAccountRefresh(); // VibeCode owns this OpenAI session and refreshes it even when no Codex chat is open
             GeminiUsageService.Instance.Refresh();
-            StartKimiAccountRefresh();  // authenticate is a token-free status check and does not create a Kimi session
             StartAccountUsagePolling(); // pre-warm + periodically refresh each account's session/week usage so changes surface
             StartSpotifyPolling();  // keep the Spotify mini-menu's now-playing fresh (no-op while the extension is off)
             StartWeatherPolling();  // keep the titlebar weather chip current (no-op while the extension is off)
@@ -2386,7 +2382,6 @@ public partial class MainWindow : Window
         provider = provider?.Trim().ToLowerInvariant() switch
         {
             "codex" => "codex",
-            "kimi" => "kimi",
             "gemini" => "gemini",
             _ => "claude",
         };
@@ -2395,7 +2390,6 @@ public partial class MainWindow : Window
         var name = provider switch
         {
             "codex" => "Codex",
-            "kimi" => "Kimi",
             "gemini" => "Gemini",
             _ => "Claude",
         };
@@ -2455,21 +2449,18 @@ public partial class MainWindow : Window
         provider = provider?.Trim().ToLowerInvariant() switch
         {
             "codex" => "codex",
-            "kimi" => "kimi",
             "gemini" => "gemini",
             Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
             _ => "claude",
         };
         ClaudeProviderToggle.IsChecked = provider == "claude";
         CodexProviderToggle.IsChecked = provider == "codex";
-        KimiProviderToggle.IsChecked = provider == "kimi";
         GeminiProviderToggle.IsChecked = provider == "gemini";
         GlmProviderToggle.IsChecked = provider == Protocol.GlmPreset.ProviderId;
         CwdHint.Text = provider switch
         {
             "codex" => "AGENTS.md, skills, plugins and MCP servers load through VibeCode's managed Codex runtime.",
             "gemini" => "GEMINI.md, skills, extensions and MCP tools load through the official Gemini CLI. Sign in with Google to use your AI Pro plan.",
-            "kimi" => "AGENTS.md, skills, MCP servers and Kimi's project context load through the installed Kimi Code CLI.",
             Protocol.GlmPreset.ProviderId when !HasGlmKey =>
                 "No GLM account connected yet — open accounts and choose Add GLM account. "
                 + "Connect Z.ai Coding Plan, Z.ai API, or Baseten with its account key.",
@@ -2651,12 +2642,6 @@ public partial class MainWindow : Window
         {
             await ManageGeminiAccountAsync(signIn: true);
             if (_vm.IsGeminiSignedIn) geminiChat.RetryAfterSignIn();
-            return;
-        }
-        if (ActiveChatForWindow is { IsKimi: true } kimiChat)
-        {
-            await ManageKimiAccountAsync(selectIfReady: true);
-            if (_vm.IsKimiSignedIn) kimiChat.RetryAfterSignIn();
             return;
         }
         try
@@ -3072,8 +3057,6 @@ public partial class MainWindow : Window
         KickCodexAccountRefresh(forceRefresh: false); // refresh the OpenAI row's plan + rolling usage on every open
         _vm.RefreshGeminiAccount();
         GeminiUsageService.Instance.Refresh();
-        KickKimiAccountRefresh();                     // refresh installed/login state without creating a chat
-        KimiUsageService.Instance.Refresh();          // and the live quota behind the account row (service throttles)
         SelectAccountManagerProvider(AppSettings.Current.DefaultProvider);
         RefreshAccountManagerViews();
         AccountManagerOverlay.Visibility = Visibility.Visible;
@@ -3159,7 +3142,7 @@ public partial class MainWindow : Window
     private void UpdateAccountManagerProvider()
     {
         // SelectionChanged can fire while InitializeComponent is still constructing the controls below the picker.
-        if (AllAccountsPanel is null || ClaudeAccountsPanel is null || CodexAccountsPanel is null || KimiAccountsPanel is null || GlmAccountsPanel is null || GeminiAccountsPanel is null
+        if (AllAccountsPanel is null || ClaudeAccountsPanel is null || CodexAccountsPanel is null || GlmAccountsPanel is null || GeminiAccountsPanel is null
             || AccountManagerAddButton is null || AccountManagerAddLabel is null
             || AccountManagerFooterHint is null || AccountSortCombo is null)
             return;
@@ -3169,14 +3152,13 @@ public partial class MainWindow : Window
         AllAccountsPanel.Visibility = provider == "all" ? Visibility.Visible : Visibility.Collapsed;
         ClaudeAccountsPanel.Visibility = provider == "claude" ? Visibility.Visible : Visibility.Collapsed;
         CodexAccountsPanel.Visibility = provider == "codex" ? Visibility.Visible : Visibility.Collapsed;
-        KimiAccountsPanel.Visibility = provider == "kimi" ? Visibility.Visible : Visibility.Collapsed;
         GeminiAccountsPanel.Visibility = provider == "gemini" ? Visibility.Visible : Visibility.Collapsed;
         GlmAccountsPanel.Visibility = glm ? Visibility.Visible : Visibility.Collapsed;
         if (glm) RefreshGlmUsage();
         // Sorting and status filtering are about saved LOGINS - usage, plan, sign-in state. A key has none of
         // those, so both controls are disabled for GLM rather than left live and doing nothing. Search stays
         // enabled because it does work on the key list (see GlmKeyMatchesSearch).
-        AccountSortCombo.IsEnabled = provider != "kimi" && !glm;
+        AccountSortCombo.IsEnabled = !glm;
         if (AccountStatusCombo is not null) AccountStatusCombo.IsEnabled = !glm;
         AccountManagerAddButton.IsEnabled = provider != "all";
         AccountManagerAddButton.Visibility = Visibility.Visible;
@@ -3186,7 +3168,6 @@ public partial class MainWindow : Window
             "all" => ("Choose a provider to add", "Showing every account. Select a provider above before adding another."),
             "codex" => ("Add Codex account", "Click to switch · right-click to test or remove · saved date appears at right."),
             "gemini" => ("Sign in with Google", "Gemini uses the Google account connected through Gemini CLI. AI Pro and Ultra subscriptions are supported."),
-            "kimi" => ("Manage Kimi account", "Kimi keeps one shared OAuth login in the Kimi Code CLI."),
             _ when glm => ("Add GLM account", "Connect Z.ai Coding Plan, Z.ai API, or Baseten. Click an account to use it for new chats; key fallback stays within that service."),
             _ => ("Add Claude account", "Click to switch · right-click to test or remove · saved date appears at right."),
         };
@@ -3268,38 +3249,21 @@ public partial class MainWindow : Window
         _ => true,
     };
 
-    private bool KimiMatchesManagerFilters()
-    {
-        var account = new AccountManagerDescriptor(
-            "kimi", _vm.KimiAccountLabel, _vm.KimiAccountSub, "Kimi Code", _vm.KimiAccountUsage, "",
-            _vm.IsKimiInstalled && _vm.IsKimiSignedIn, false, _vm.IsKimiSelected, _vm.IsKimiSelected,
-            null, DateTime.MinValue);
-        if (!MatchesAccountStatus(account)) return false;
-
-        var query = AccountSearchBox?.Text?.Trim();
-        if (string.IsNullOrEmpty(query)) return true;
-        var haystack = string.Join('\n', account.Label, account.ProviderLine, account.Plan, account.UsageDisplay);
-        return query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .All(term => haystack.Contains(term, StringComparison.OrdinalIgnoreCase));
-    }
 
     private void UpdateAccountManagerResultState()
     {
         if (AccountManagerResultsText is null || AccountResetFiltersButton is null
-            || AllAccountEmptyText is null || ClaudeAccountEmptyText is null || CodexAccountEmptyText is null
-            || KimiAccountRow is null || KimiAccountEmptyText is null)
+            || AllAccountEmptyText is null || ClaudeAccountEmptyText is null || CodexAccountEmptyText is null)
             return;
 
         var provider = SelectedAccountManagerProvider;
         var allVisible = _allAccountManagerView?.Cast<object>().Count() ?? 0;
         var claudeVisible = _claudeAccountManagerView?.Cast<object>().Count() ?? 0;
         var codexVisible = _codexAccountManagerView?.Cast<object>().Count() ?? 0;
-        var kimiVisible = KimiMatchesManagerFilters();
         var (visible, total) = provider switch
         {
             "all" => (allVisible, _vm.AllAccounts.Count),
             "codex" => (codexVisible, _vm.CodexAccounts.Count),
-            "kimi" => (kimiVisible ? 1 : 0, 1),
             "gemini" => (1, 1),
             // GLM's rows are keys, not accounts. Without this it fell through to Claude's branch and the header
             // read "3 accounts" over a panel listing one key.
@@ -3326,8 +3290,6 @@ public partial class MainWindow : Window
         AllAccountEmptyText.Visibility = allVisible == 0 ? Visibility.Visible : Visibility.Collapsed;
         ClaudeAccountEmptyText.Visibility = claudeVisible == 0 ? Visibility.Visible : Visibility.Collapsed;
         CodexAccountEmptyText.Visibility = codexVisible == 0 ? Visibility.Visible : Visibility.Collapsed;
-        KimiAccountRow.Visibility = kimiVisible ? Visibility.Visible : Visibility.Collapsed;
-        KimiAccountEmptyText.Visibility = kimiVisible ? Visibility.Collapsed : Visibility.Visible;
         AccountResetFiltersButton.Visibility = hasSearchOrStatusFilter || SelectedAccountManagerSort != "active"
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -3352,12 +3314,6 @@ public partial class MainWindow : Window
             case GeminiAccountEntry gemini:
                 account = new AccountManagerDescriptor("gemini", gemini.Label, gemini.ProviderLine, "Gemini", gemini.UsageDisplay,
                     "", gemini.Usable, false, gemini.IsVibeCodeSelected, gemini.IsVibeCodeSelected, null, DateTime.MinValue);
-                return true;
-            case KimiAccountEntry kimi:
-                account = new AccountManagerDescriptor(
-                    "kimi", kimi.Label, kimi.ProviderLine, "Kimi Code", kimi.UsageDisplay,
-                    "", kimi.Usable, false, kimi.IsVibeCodeSelected, kimi.IsVibeCodeSelected,
-                    null, DateTime.MinValue);
                 return true;
             default:
                 account = default;
@@ -3429,7 +3385,6 @@ public partial class MainWindow : Window
         {
             AccountInfo => 0,
             CodexAccountInfo => 1,
-            KimiAccountEntry => 2,
             GeminiAccountEntry => 5,
             _ => 4,
         };
@@ -3660,35 +3615,6 @@ public partial class MainWindow : Window
         finally { Interlocked.Exchange(ref _codexRefreshRunning, 0); }
     }
 
-    // Kimi's ACP authenticate method only validates the cached token; it creates no session and makes no model call.
-    private System.Windows.Threading.DispatcherTimer? _kimiRefreshTimer;
-    private int _kimiRefreshRunning;
-    private void StartKimiAccountRefresh(bool immediate = true)
-    {
-        if (immediate) KickKimiAccountRefresh();
-        _kimiRefreshTimer ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
-        _kimiRefreshTimer.Tick -= OnKimiRefreshTick;
-        _kimiRefreshTimer.Tick += OnKimiRefreshTick;
-        _kimiRefreshTimer.Start();
-    }
-    private void OnKimiRefreshTick(object? sender, EventArgs e) => KickKimiAccountRefresh();
-    private void KickKimiAccountRefresh()
-    {
-        if (Interlocked.Exchange(ref _kimiRefreshRunning, 1) != 0) return;
-        _ = RefreshKimiAccountAsync();
-    }
-    private async Task<KimiAccountState> RefreshKimiAccountAsync()
-    {
-        try
-        {
-            var state = await KimiAccountLoginService.ReadAsync();
-            _vm.ApplyKimiAccount(state);
-            if (state.IsSignedIn) KimiUsageService.Instance.Refresh();   // startup + 30-min tick keep the quota fresh
-            ScheduleAccountManagerRefresh();
-            return state;
-        }
-        finally { Interlocked.Exchange(ref _kimiRefreshRunning, 0); }
-    }
 
     // Per-account usage polling: probe every saved account's session/week /usage in the background and flag changes on
     // its row. Task.Run keeps the probe's file I/O off the UI thread (RefreshAccountUsageAsync marshals its UI updates).
@@ -3843,11 +3769,6 @@ public partial class MainWindow : Window
             await ManageGeminiAccountAsync(signIn: true);
             return;
         }
-        if (provider == "kimi")
-        {
-            await ManageKimiAccountAsync(selectIfReady: true);
-            return;
-        }
         if (Protocol.GlmPreset.Is(provider))
         {
             // Z.ai connects coding tools through an account key, including subscription accounts.
@@ -3915,91 +3836,9 @@ public partial class MainWindow : Window
 #endif
     }
 
-    private async void OnManageKimiAccount(object sender, RoutedEventArgs e)
-    {
-        CloseAccountManager();
-        await ManageKimiAccountAsync(selectIfReady: true);
-    }
 
-    private async Task ManageKimiAccountAsync(bool selectIfReady)
-    {
-        if (!await EnsureCliInstalledAsync("kimi")) return;
-        var state = await RefreshKimiAccountAsync();
-        if (ShowKimiAccountProbeError(state)) return;
-        if (state.IsSignedIn)
-        {
-            if (selectIfReady) SetNewChatProvider("kimi", persist: true);
-            return;
-        }
-        await SignInToKimiAsync();
-    }
 
-    private bool ShowKimiAccountProbeError(KimiAccountState state)
-    {
-        if (string.IsNullOrWhiteSpace(state.Error)) return false;
-        MessageBox.Show(this,
-            "VibeCode found the Kimi Code CLI but could not verify its account.\n\n" + state.Error +
-            "\n\nRun `kimi doctor` in a terminal for the CLI's own diagnostics.",
-            "Couldn't check Kimi Code", MessageBoxButton.OK, MessageBoxImage.Warning);
-        return true;
-    }
 
-    private async Task SignInToKimiAsync()
-    {
-        using var cancellation = new CancellationTokenSource();
-        var status = new TextBlock
-        {
-            Text = "Starting Kimi's device-code sign-in…\nYour browser will open when Kimi returns the verification link.",
-            Foreground = (Brush)FindResource("Muted"),
-            FontSize = 13,
-            TextWrapping = TextWrapping.Wrap,
-        };
-        var cancel = new Button { Content = "Cancel", HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0), Padding = new Thickness(14, 6, 14, 6) };
-        cancel.SetResourceReference(StyleProperty, "GhostButton");
-        var panel = new StackPanel { Margin = new Thickness(18) };
-        panel.Children.Add(status);
-        panel.Children.Add(cancel);
-        var progress = CreateThemedDialog("Sign in to Kimi", panel, 430);
-        var closingForResult = false;
-        cancel.Click += (_, _) => cancellation.Cancel();
-        progress.Closing += (_, _) => { if (!closingForResult) cancellation.Cancel(); };
-        progress.Show();
-
-        var browserOpened = true;
-        var result = await KimiAccountLoginService.LoginAsync(
-            url => Dispatcher.BeginInvoke(() => browserOpened = ShowSignInLink(panel, status, url,
-                "Finish signing in to Kimi in your browser.\nVibeCode will detect it automatically.")),
-            line => Dispatcher.BeginInvoke(() =>
-            {
-                // Kimi echoes the verification URL itself; ShowSignInLink already presents it properly. Once the
-                // user has been told to open the link by hand, CLI chatter must not overwrite that instruction.
-                if (browserOpened && !line.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-                    status.Text = line.Length > 240 ? line[..240] + "…" : line;
-            }),
-            cancellation.Token);
-
-        closingForResult = true;
-        if (progress.IsVisible) progress.Close();
-        if (!result.Success)
-        {
-            if (!cancellation.IsCancellationRequested)
-                MessageBox.Show(this, result.Error ?? "Kimi sign-in failed.", "Kimi account not added",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        // LoginAsync already performs the supported ACP authenticate check before returning success. Apply that
-        // authoritative result directly instead of spawning a second ACP process that could transiently disagree.
-        _vm.ApplyKimiAccount(new KimiAccountState
-        {
-            IsInstalled = true,
-            IsSignedIn = true,
-            Version = result.Version,
-        });
-        SetNewChatProvider("kimi", persist: true);
-        MessageBox.Show(this,
-            "Kimi Code is ready. New Kimi chats and Kimi Bridge agents use the shared login stored by the official CLI under ~/.kimi-code.",
-            "Kimi account ready", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
 
     /// <summary>
     /// Hand the provider's sign-in URL to a browser and leave the link on screen either way.
@@ -4284,7 +4123,7 @@ public partial class MainWindow : Window
         // The draft remains open until Close, Escape, or a successful start.
         if (chat is null) return;
         BridgeSetup.Configure(chat, _vm.MaximumFreshOrchestratorWorkers,
-            workerCapacity: _ => _vm.MaximumFreshOrchestratorWorkers, includeKimiAccount: _vm.IsKimiSignedIn);
+            workerCapacity: _ => _vm.MaximumFreshOrchestratorWorkers);
         BridgePeerPopup.PlacementTarget = this;
         BridgeSetup.MaxWidth = Math.Max(640, Math.Min(960, ActualWidth - 64));
         BridgeSetup.MaxHeight = Math.Max(300, Math.Min(SystemParameters.WorkArea.Height - 100, ActualHeight - 80));
@@ -4354,7 +4193,7 @@ public partial class MainWindow : Window
         }
         if (sender is not Button { ContextMenu: { } menu } button) return;
         // Accounts can be added or signed out between opens, so each provider's account submenu is rebuilt here.
-        var accounts = BridgeAccountChoice.Load(_vm.IsKimiSignedIn);
+        var accounts = BridgeAccountChoice.Load();
         foreach (var item in menu.Items.OfType<MenuItem>())
             AttachBridgeAccountMenu(item, accounts, account => AddBridgeAgentForWindow(account.Provider, account.AccountId));
         menu.PlacementTarget = button;
@@ -4368,7 +4207,6 @@ public partial class MainWindow : Window
     {
         BridgeUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = false;
         BridgeAnnouncePopup.IsOpen = false;
         BridgeMorePopup.IsOpen = true;
     }
@@ -4402,7 +4240,7 @@ public partial class MainWindow : Window
         // A provider with several signed-in accounts adds from its account submenu instead.
         if (sender is not MenuItem { Tag: string provider, HasItems: false }) return;
         AddBridgeAgentForWindow(provider,
-            BridgeAccountChoice.OnlyUsable(BridgeAccountChoice.For(provider, _vm.IsKimiSignedIn))?.AccountId);
+            BridgeAccountChoice.OnlyUsable(BridgeAccountChoice.For(provider))?.AccountId);
     }
 
     private void AddBridgeAgentForWindow(string provider, string? accountId)
@@ -4899,7 +4737,6 @@ public partial class MainWindow : Window
             return;
         }
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = false;
         UsagePopup.IsOpen = true;
         UsageService.Instance.Refresh(force: true);   // always fetch fresh numbers when the panel opens
     }
@@ -4917,7 +4754,6 @@ public partial class MainWindow : Window
         }
         UsagePopup.IsOpen = false;
         BridgeUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.PlacementTarget = CodexUsageToggle;
         BridgeCodexUsagePopup.Placement = PlacementMode.Top;
@@ -4935,7 +4771,6 @@ public partial class MainWindow : Window
     private void OnBridgeUsageChecked(object sender, RoutedEventArgs e)
     {
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = false;
         BridgeUsagePopup.IsOpen = true;
         UsageService.Instance.Refresh(force: true);
     }
@@ -4948,7 +4783,6 @@ public partial class MainWindow : Window
     {
         BridgeUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = false;
         BridgeAnnouncePopup.IsOpen = true;
         // Focus the field once the popup has realized its content.
         Dispatcher.BeginInvoke(new Action(() => AnnounceInput.Focus()),
@@ -4990,7 +4824,6 @@ public partial class MainWindow : Window
     private void OnBridgeCodexUsageChecked(object sender, RoutedEventArgs e)
     {
         BridgeUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.IsOpen = false;
         BridgeCodexUsagePopup.PlacementTarget = BridgeCodexUsageToggle;
         BridgeCodexUsagePopup.Placement = PlacementMode.Bottom;
@@ -5012,22 +4845,6 @@ public partial class MainWindow : Window
     }
     private void OnBridgeCodexUsageRefresh(object sender, RoutedEventArgs e) => KickCodexAccountRefresh(forceRefresh: true);
 
-    private void OnBridgeKimiUsageChecked(object sender, RoutedEventArgs e)
-    {
-        if (!_vm.BridgeUsesKimi)
-        {
-            BridgeKimiUsageToggle.IsChecked = false;
-            return;
-        }
-        UsagePopup.IsOpen = false;
-        BridgeUsagePopup.IsOpen = false;
-        BridgeCodexUsagePopup.IsOpen = false;
-        BridgeKimiUsagePopup.IsOpen = true;
-        KimiUsageService.Instance.Refresh(force: true);
-    }
-    private void OnBridgeKimiUsageUnchecked(object sender, RoutedEventArgs e) => BridgeKimiUsagePopup.IsOpen = false;
-    private void OnBridgeKimiUsagePopupClosed(object? sender, EventArgs e) => BridgeKimiUsageToggle.IsChecked = false;
-    private void OnBridgeKimiUsageRefresh(object sender, RoutedEventArgs e) => KimiUsageService.Instance.Refresh(force: true);
     private void OnClosePreview(object sender, RoutedEventArgs e)
     {
         if (PanelChatForWindow is { } chat) chat.SelectedFile = null;

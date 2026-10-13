@@ -122,7 +122,7 @@ internal sealed class BridgeSuggestionUsage : IDisposable
             var usage = result["usage"];
             var session = Tokens.Read(result["session_usage"]);
             UsageEntry entry;
-            if (session.Total > 0 && (_provider == "kimi" || !HasBuckets(usage)))
+            if (session.Total > 0 && !HasBuckets(usage))
                 entry = Entry((session - _sessionTokens).Json(), ResolveModel(result), UsagePricing.Tier(result) ?? _tier);
             else if (HasBuckets(usage))
             {

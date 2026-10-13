@@ -16,7 +16,6 @@ public static partial class UsageLimitRecovery
             return text is null ? UsageRecoverySnapshot.Unknown : UsageService.RecoverySnapshot(text, model);
         }
         if (provider == "codex" && session is CodexSession codex) return await codex.ReadRecoveryUsageAsync();
-        if (provider == "kimi") return await KimiUsageService.Instance.ReadRecoveryUsageAsync();
         if (provider == "glm")
         {
             var account = ApiKeyAccountService.Instance.For(GlmPreset.ProviderId).FirstOrDefault(a => a.Id == accountId);

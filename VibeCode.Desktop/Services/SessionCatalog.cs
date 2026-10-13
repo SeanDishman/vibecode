@@ -10,7 +10,7 @@ namespace VibeCode.Services;
 public sealed record SessionEntry(string SessionId, string Title, string Cwd, DateTime LastModified, string? GitBranch,
     string Provider = "claude", string? AccountId = null, DateTimeOffset? LastAssistantAt = null)
 {
-    public string ProviderBadge => Provider switch { "kimi" => "Kimi", "gemini" => "Gemini", "glm" => "GLM", _ => "" };
+    public string ProviderBadge => Provider switch { "gemini" => "Gemini", "glm" => "GLM", _ => "" };
 }
 public sealed record ProjectEntry(string Cwd, string Name, DateTime LastModified, List<SessionEntry> Sessions);
 public sealed record TranscriptMessage(string Type, JsonNode Message, string? ParentToolUseId);
@@ -21,10 +21,6 @@ public static partial class SessionCatalog
     public static string ClaudeDir =>
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
-
-    public static string KimiDir =>
-        Environment.GetEnvironmentVariable("KIMI_CODE_HOME")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".kimi-code");
 
     /// <summary>
     /// Every Claude home whose transcripts belong to this user: the shared <c>~/.claude</c> plus each saved
@@ -114,7 +110,6 @@ public static partial class SessionCatalog
             }
         }
 
-        AddKimiSessions(byCwd, allowedSessionIds);
         AddGeminiSessions(byCwd, allowedSessionIds);
         AddGlmSessions(byCwd, allowedSessionIds);
         AddCodexSessions(byCwd, allowedSessionIds);
@@ -146,59 +141,6 @@ public static partial class SessionCatalog
         }
     }
 
-    /// <summary>Merge Kimi Code's documented session index into the same project browser as Claude history.</summary>
-    private static void AddKimiSessions(Dictionary<string, List<SessionEntry>> byCwd,
-        IReadOnlySet<string>? allowedSessionIds)
-    {
-        var index = Path.Combine(KimiDir, "session_index.jsonl");
-        if (!File.Exists(index)) return;
-        var rows = new Dictionary<string, (string Dir, string Cwd)>(StringComparer.Ordinal);
-        try
-        {
-            foreach (var line in File.ReadLines(index))
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
-                {
-                    var row = JsonNode.Parse(line);
-                    var id = row?["sessionId"]?.GetValue<string>();
-                    if (string.IsNullOrWhiteSpace(id)) continue;
-                    if (allowedSessionIds is not null && !allowedSessionIds.Contains(id)) continue;
-                    if (row?["deleted"]?.GetValue<bool>() == true) { rows.Remove(id); continue; }
-                    var dir = row?["sessionDir"]?.GetValue<string>();
-                    var cwd = row?["workDir"]?.GetValue<string>();
-                    if (string.IsNullOrWhiteSpace(dir) || string.IsNullOrWhiteSpace(cwd)) continue;
-                    if (!Path.IsPathRooted(dir)) dir = Path.GetFullPath(Path.Combine(KimiDir, dir));
-                    rows[id] = (dir, cwd);
-                }
-                catch { /* append-only index may contain a partial last line while Kimi is writing */ }
-            }
-        }
-        catch { return; }
-
-        foreach (var (id, row) in rows)
-        {
-            try
-            {
-                if (!Directory.Exists(row.Dir)) continue;
-                JsonNode? state = null;
-                var statePath = Path.Combine(row.Dir, "state.json");
-                if (File.Exists(statePath)) state = JsonNode.Parse(File.ReadAllText(statePath));
-                if (state?["custom"]?["archived"]?.GetValue<bool>() == true) continue;
-                var title = state?["customTitle"]?.GetValue<string>()
-                            ?? state?["title"]?.GetValue<string>()
-                            ?? state?["lastPrompt"]?.GetValue<string>()
-                            ?? (id.Length > 8 ? id[..8] : id);
-                title = title.Replace('\n', ' ').Trim();
-                if (title.Length > 80) title = title[..80] + "…";
-                var updated = ParseDate(state?["updatedAt"]?.GetValue<string>())
-                              ?? File.GetLastWriteTime(row.Dir);
-                if (!byCwd.TryGetValue(row.Cwd, out var list)) byCwd[row.Cwd] = list = new();
-                list.Add(new SessionEntry(id, title, row.Cwd, updated, null, "kimi"));
-            }
-            catch { /* one corrupt session must not hide the rest of the project list */ }
-        }
-    }
 
     private static DateTime? ParseDate(string? value) =>
         DateTime.TryParse(value, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)

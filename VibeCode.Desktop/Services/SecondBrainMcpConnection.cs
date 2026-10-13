@@ -26,7 +26,7 @@ internal sealed class SecondBrainMcpConnection : IDisposable
         definition.Id = AgentMemoryService.ManagedMcpId;
         definition.Name = "agentmemory";
         definition.Arguments[^1] = "--second-brain-mcp";
-        definition.UseClaude = definition.UseCodex = definition.UseKimi = true;
+        definition.UseClaude = definition.UseCodex = true;
         definition.StartupTimeoutSeconds = 15;
         definition.ToolTimeoutSeconds = 75;
         return definition;

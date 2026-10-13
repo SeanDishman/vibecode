@@ -19,7 +19,7 @@ public static class JarvisSettingsCatalog
     private static IReadOnlyDictionary<string, Setting> Build()
     {
         var result = new Dictionary<string, Setting>(StringComparer.OrdinalIgnoreCase);
-        Add("General", "RunInBackground ContinueAfterLimitResets DefaultProvider DefaultMode DefaultModel DefaultEffort DefaultCodexModel DefaultCodexEffort DefaultKimiModel DefaultKimiEffort DefaultGlmModel DefaultGlmEffort FastMode");
+        Add("General", "RunInBackground ContinueAfterLimitResets DefaultProvider DefaultMode DefaultModel DefaultEffort DefaultCodexModel DefaultCodexEffort DefaultGlmModel DefaultGlmEffort FastMode");
         Add("Appearance", "UiMode Borderless ThinkingOrbStyle CompactMode Backgrounds ActiveBackground RandomBackground BackgroundVisibility");
         Add("Notifications", "NotifyOnTurnEnd NotifyOnAwaitingInput NotificationSound");
         Add("Bridge", "BridgeOrchestratorCount BridgeOrchestratorWorkerCounts DualMonitorBridge DualMonitorDoubleSessions BridgeAgentLimit BridgePeerMessaging ShowAgentMessageDividers SwarmMaxWorkers AgentSupervisionEnabled SupervisionStaleSeconds SupervisionIdleSeconds SupervisionInterventionGraceSeconds SupervisionMaxTaskSeconds SupervisionMaxInterventions SupervisionMaxRestarts SupervisionLoopRepeatThreshold");
@@ -95,7 +95,6 @@ public static class JarvisSettingsCatalog
         ["toolTimeoutSeconds"] = server.ToolTimeoutSeconds,
         ["useClaude"] = server.UseClaude,
         ["useCodex"] = server.UseCodex,
-        ["useKimi"] = server.UseKimi,
         ["useGemini"] = server.UseGemini,
     };
 
@@ -184,14 +183,13 @@ public static class JarvisSettingsCatalog
     private static IReadOnlyList<string> Choices(string name) => name switch
     {
         nameof(AppSettings.UiMode) => ["background", "cli"],
-        nameof(AppSettings.DefaultProvider) or nameof(AppSettings.JarvisProvider) => ["claude", "codex", "kimi", "glm", "gemini"],
+        nameof(AppSettings.DefaultProvider) or nameof(AppSettings.JarvisProvider) => ["claude", "codex", "glm", "gemini"],
         nameof(AppSettings.DefaultMode) => ["default", "auto", "plan", "acceptEdits", "bypassPermissions", "dontAsk"],
         nameof(AppSettings.ThinkingOrbStyle) => ThinkingOrbStyles.All.Select(orb => orb.Id).ToArray(),
         nameof(AppSettings.NotificationSound) => NotificationSounds.All.Select(sound => sound.Id).ToArray(),
         nameof(AppSettings.JarvisVoiceId) => JarvisSpeechService.GetVoices().Select(voice => voice.Id).ToArray(),
         nameof(AppSettings.JarvisEffort) or nameof(AppSettings.DefaultEffort) or nameof(AppSettings.DefaultCodexEffort) or nameof(AppSettings.DefaultGlmEffort)
             => ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode"],
-        nameof(AppSettings.DefaultKimiEffort) => ["on", "off", "low", "high", "max"],
         _ => [],
     };
 }

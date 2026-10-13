@@ -31,7 +31,6 @@ public static class McpConfigAssistantService
           "toolTimeoutSeconds": 60,
           "useClaude": true,
           "useCodex": true,
-          "useKimi": true,
           "useGemini": true,
           "notes": "Brief prerequisites and the official source URL used, if one was found."
         }
@@ -133,21 +132,13 @@ public static class McpConfigAssistantService
             AppendSystemPrompt = SystemPrompt,
             McpServers = Array.Empty<McpServerDefinition>(),
         }),
-        "gemini" => new GeminiSession(new KimiSessionOptions
+        "gemini" => new GeminiSession(new GeminiSessionOptions
         {
             Cwd = cwd,
             Model = model,
             PermissionMode = "default",
             AppendSystemPrompt = SystemPrompt,
             McpServers = [],
-        }),
-        "kimi" => new KimiSession(new KimiSessionOptions
-        {
-            Cwd = cwd,
-            Model = model,
-            PermissionMode = "default",
-            AppendSystemPrompt = SystemPrompt,
-            McpServers = Array.Empty<McpServerDefinition>(),
         }),
         _ => new ClaudeSession(new ClaudeSessionOptions
         {
@@ -177,7 +168,6 @@ public static class McpConfigAssistantService
     private static string ProviderName(string provider) => provider switch
     {
         "codex" => "OpenAI Codex",
-        "kimi" => "Kimi Code",
         "gemini" => "Gemini",
         _ => "Claude Code",
     };

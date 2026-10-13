@@ -58,7 +58,6 @@ import com.vibecode.mobile.NewChatState
 private val Providers = listOf(
     "claude" to "Claude",
     "codex" to "Codex",
-    "kimi" to "Kimi",
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)

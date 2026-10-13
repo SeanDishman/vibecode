@@ -27,8 +27,8 @@ internal static partial class Program
         {
             ("VIBECODE_DATA_DIR", "data"), ("VIBECODE_CLAUDE_ACCOUNT_STORE", "claude-accounts"),
             ("CLAUDE_CONFIG_DIR", "claude-home"), ("VIBECODE_CODEX_ACCOUNT_STORE", "codex-accounts"),
-            ("VIBECODE_CODEX_LEGACY_HOME", "codex-home"), ("KIMI_CODE_HOME", "kimi-home"),
-            ("KIMI_SHARE_DIR", "kimi-share"),
+            ("VIBECODE_CODEX_LEGACY_HOME", "codex-home"),
+            ("GEMINI_CLI_HOME", "gemini-home"),
         }) Environment.SetEnvironmentVariable(name, Path.Combine(Root, folder));
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
@@ -42,7 +42,6 @@ internal static partial class Program
             VerifyLiveViewsAndCompletion();
             VerifyActualModelAndUnfinishedUsage();
             VerifyHudLifecycle();
-            VerifyKimiInterruptedBaseline();
             VerifySingleTerminalTeamUsage();
             VerifyPlanningUsage();
             VerifyUltrafastUsage();
@@ -213,24 +212,6 @@ internal static partial class Program
         Check("closing compact telemetry releases its watcher", !LiveTurnTelemetry.Instance.IsWatched);
     }
 
-    private static void VerifyKimiInterruptedBaseline()
-    {
-        var chat = new ChatViewModel(Root, resume: Guid.NewGuid().ToString(), provider: "kimi")
-        {
-            Model = "kimi-k2.7-code",
-            Status = "running",
-            BridgeLabel = "Kimi worker",
-            ExcludeFromMemory = true,
-        };
-        Chats.Add(chat); Call(chat, "BeginTurnPricing");
-        var before = UsageLog.Instance.Entries().Sum(e => e.Total);
-        Call(chat, "ApplySystem", new JsonObject { ["subtype"] = "usage_update", ["usage"] = Usage() }, null);
-        Call(chat, "ApplyResult", new JsonObject { ["is_error"] = true, ["result"] = "Fixture interruption" });
-        Call(chat, "BeginTurnPricing"); chat.Status = "running";
-        Call(chat, "ApplyResult", new JsonObject { ["usage"] = Usage(), ["session_usage"] = Usage(2) });
-        Check("Kimi's next session snapshot excludes usage already saved after interruption",
-            UsageLog.Instance.Entries().Sum(e => e.Total) - before == 520);
-    }
 
     private sealed class FixtureSession : ICodingSession, ICompactableSession
     {
