@@ -15,9 +15,9 @@ namespace VibeCode.UI;
 /// </summary>
 public sealed class BridgeHeaderStrip : Panel
 {
-    /// <summary>Always: identity. Title: trims first. Wide: the full readout. Status: compact-only, dropped when
+    /// <summary>Always: identity. Account: trims after the task title. Title: trims first. Wide: the full readout. Status: compact-only, dropped when
     /// there is no room. Compact: compact-only and kept (the info icon).</summary>
-    public enum Slot { Always, Title, Wide, Status, Compact }
+    public enum Slot { Always, Title, Wide, Status, Compact, Account }
 
     public static readonly DependencyProperty SlotProperty = DependencyProperty.RegisterAttached(
         "Slot", typeof(Slot), typeof(BridgeHeaderStrip),
@@ -50,13 +50,14 @@ public sealed class BridgeHeaderStrip : Panel
     protected override Size MeasureOverride(Size available)
     {
         var unbounded = new Size(double.PositiveInfinity, available.Height);
-        double always = 0, title = 0, wide = 0, status = 0, compact = 0;
+        double always = 0, account = 0, title = 0, wide = 0, status = 0, compact = 0;
         foreach (UIElement child in InternalChildren)
         {
             child.Measure(unbounded);
             var width = child.DesiredSize.Width;
             switch (GetSlot(child))
             {
+                case Slot.Account: account += width; break;
                 case Slot.Title: title += width; break;
                 case Slot.Wide: wide += width; break;
                 case Slot.Status: status += width; break;
@@ -65,7 +66,7 @@ public sealed class BridgeHeaderStrip : Panel
             }
         }
 
-        var full = always + title + wide;
+        var full = always + account + title + wide;
         var compactForm = !double.IsPositiveInfinity(available.Width)
             && full > available.Width - (IsCompact ? Hysteresis : 0);
         // Only focusability binds to this, so changing it here cannot invalidate this measure pass.
@@ -74,8 +75,15 @@ public sealed class BridgeHeaderStrip : Panel
 
         if (compactForm)
         {
-            // Identity and the info icon are fixed; the status word outranks the title, which takes what is left.
+            // Keep identity and the info icon whole. Account names take priority over task titles and stats,
+            // but can ellipsize with their full name available in the tooltip.
             var room = Math.Max(0, available.Width - always - compact);
+            foreach (UIElement child in InternalChildren)
+            {
+                if (GetSlot(child) != Slot.Account) continue;
+                if (child.DesiredSize.Width > room) child.Measure(new Size(room, available.Height));
+                room = Math.Max(0, room - child.DesiredSize.Width);
+            }
             _statusFits = status <= room;
             if (_statusFits) room -= status;
             foreach (UIElement child in InternalChildren)

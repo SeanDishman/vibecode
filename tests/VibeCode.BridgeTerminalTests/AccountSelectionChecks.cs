@@ -76,15 +76,16 @@ internal static partial class Program
 
         panel.Configure(host, 8, includeKimiAccount: true);
         var providers = providerBox.Items.OfType<BridgeProviderChoice>().ToArray();
-        Check("provider picker lists all five providers in order", providers.Select(p => p.Id)
-            .SequenceEqual(BridgeSetupPanel.Providers.Select(p => p.Id)) && providers.All(p => p.IsUsable) && providerBox.IsEnabled);
+        Check("provider picker lists every provider and enables only signed-in choices", providers.Select(p => p.Id)
+            .SequenceEqual(BridgeSetupPanel.Providers.Select(p => p.Id))
+            && providers.All(p => p.IsUsable == (p.Id != "gemini")) && providerBox.IsEnabled);
         Check("provider picker starts on the host's provider and counts its accounts",
             panel.PeerProvider?.Id == "codex" && providers.Single(p => p.Id == "codex").Detail == "5 accounts" &&
             providers.Single(p => p.Id == "kimi").Detail == "2 accounts" && providers.Single(p => p.Id == "glm").Detail == "1 account");
         var choices = box.Items.OfType<BridgeAccountChoice>().ToArray();
         Check("account picker lists only the chosen provider's accounts", choices.Length == 5 && choices.All(a => a.Provider == "codex"));
-        Check("every saved account is still reachable through its provider", BridgeAccountChoice.Load(true).Count == 10 &&
-            providers.All(p => BridgeAccountChoice.For(p.Id, true).Count > 0));
+        Check("every saved account is still reachable through its provider", BridgeAccountChoice.Load(true).Count == fixtures.Count + 5 &&
+            providers.Where(p => p.IsUsable).All(p => BridgeAccountChoice.For(p.Id, true).Count > 0));
         Check("host account is initially selected even when an API key is the default", panel.PeerAccount?.AccountId == "personal");
         Check("unusable accounts are identified", choices.Single(a => a.AccountId == "expired") is { IsUsable: false } unavailable && unavailable.Detail.Contains("Sign in"));
         Check("account picker has an accessible name", AutomationProperties.GetName(box) == "Bridge partner AI account");
@@ -178,6 +179,8 @@ internal static partial class Program
         foreach (var secondary in new[] { false, true })
             VerifyBridgeAddAgentAccounts(secondary, chooseFromSubmenu: true);
         Check("adding agents leaves global account selections unchanged", CodexAccountService.Instance.ActiveId == "personal" && keys.SelectedId("codex") == secondKey.Id);
+
+        VerifyBridgeAccountHeaderLabels(fixtures["claude"]);
 
         box.SelectedItem = box.Items.OfType<BridgeAccountChoice>().Single(a => a.AccountId == secondKey.Id);
         keys.Remove(secondKey.Id);
@@ -306,6 +309,8 @@ internal static partial class Program
         var panes = secondary ? vm.SecondaryBridgePanes : vm.BridgePanes;
         Check($"{hostProvider} to Codex bridge starts on {(secondary ? "secondary" : "primary")} shell", panes.Count == 2);
         var peer = panes[1]; Chats.Add(peer);
+        Check("only same-provider peers on different accounts gain header names",
+            panes.All(p => p.ShowBridgeAccountLabel == (hostProvider == "codex")));
         Check("the new peer uses the chosen account and the host keeps its identity", peer.AccountId == peerId && host.AccountId == "personal" && peer.Mode == host.Mode);
         PumpUntil(() => peer.Status is "idle" or "error");
         Check("the selected peer starts through the local Codex adapter", peer.Status == "idle");
@@ -313,6 +318,80 @@ internal static partial class Program
         var options = (CodexSessionOptions)typeof(CodexSession).GetField("_options", Flags)!.GetValue(session)!;
         Check("the account reaches session options and its isolated home", options.AccountId == peerId && options.HomeDirectory == CodexAccountService.Instance.HomeFor(peerId));
         peer.Close(); host.Close(); setup.Suspend();
+    }
+
+    private static void VerifyBridgeAccountHeaderLabels(ApiKeyAccount firstClaude)
+    {
+        firstClaude.Label = "Aaron";
+        var otherClaude = ApiKeyAccountService.Instance.Add("claude", "header-fixture-key", "Blake");
+        var vm = new MainViewModel();
+        ChatViewModel Pane(string provider, string account, int number)
+        {
+            var chat = new ChatViewModel(_root, provider: provider, accountId: account)
+            { BridgeLabel = (provider == "claude" ? "Claude " : "Codex ") + number, Status = "idle" };
+            typeof(ChatViewModel).GetField("_session", Flags)!.SetValue(chat, new FakeSession());
+            Property(chat, "BridgeTaskName", "Check account names");
+            Call(vm, "Track", chat);
+            Chats.Add(chat);
+            return chat;
+        }
+        var a = Pane("claude", firstClaude.Id, 1);
+        var a2 = Pane("claude", firstClaude.Id, 2);
+        var c = Pane("codex", "personal", 3);
+        var c2 = Pane("codex", "personal", 4);
+        foreach (var pane in new[] { a, a2, c, c2 }) vm.BridgePanes.Add(pane);
+        vm.Chats.Add(a); vm.ActiveChat = a;
+        Property(vm, "ShowBridge", true);
+        Call(vm, "RaiseBridgeUi");
+        Check("multiple saved accounts do not add header labels to a single-account provider",
+            vm.BridgePanes.All(p => !p.ShowBridgeAccountLabel));
+        var d = Pane("codex", "work", 4);
+        Call(vm, "ReplaceLivePane", c2, d);
+        Check("an account move labels only the provider with distinct accounts",
+            c.ShowBridgeAccountLabel && d.ShowBridgeAccountLabel && !a.ShowBridgeAccountLabel && !a2.ShowBridgeAccountLabel);
+        var b = Pane("claude", otherClaude.Id, 2);
+        Call(vm, "ReplaceLivePane", a2, b);
+        Check("each same-provider account is named using its own login",
+            vm.BridgePanes.All(p => p.ShowBridgeAccountLabel) && a.AccountLabel == "Aaron" && b.AccountLabel == "Blake"
+            && c.AccountLabel == "Personal workspace" && d.AccountLabel == "Work workspace");
+
+        var secondaryHost = Pane("codex", "personal", 1);
+        vm.Chats.Add(secondaryHost);
+        AppSettings.Current.DualMonitorDoubleSessions = true;
+        Property(vm, "SecondaryActiveChat", secondaryHost);
+        Check("a second Bridge can use the same provider on one account",
+            vm.ActivateBridgeOnSecondary(secondaryHost, "codex", "personal"));
+        foreach (var pane in vm.SecondaryBridgePanes.Where(p => !Chats.Contains(p))) Chats.Add(pane);
+        Check("account labels are scoped to their own Bridge",
+            vm.BridgePanes.All(p => p.ShowBridgeAccountLabel) && vm.SecondaryBridgePanes.All(p => !p.ShowBridgeAccountLabel));
+
+        var shell = (MainWindow)typeof(MainWindow).GetConstructors(Flags)
+            .Single(ctor => ctor.GetParameters().Length == 3).Invoke([vm, null, true]);
+        try
+        {
+            foreach (var width in new[] { 1640, 1000 })
+            {
+                CaptureShell(shell, width, 900, $"bridge-account-headers-{width}.png");
+                foreach (var pane in vm.BridgePanes)
+                {
+                    var strip = CheckHeader(shell, pane, $"account header {width} {pane.BridgeLabel}");
+                    var label = strip.Children.OfType<TextBlock>().Single(t => t.Name == "PaneAccountLabel");
+                    Check("account name stays visible beside its agent", label.Visibility == Visibility.Visible
+                        && label.Text == "\u00b7 " + pane.AccountLabel && Shown(label));
+                }
+                RenderHeader(CheckHeader(shell, a, "account header capture"), $"bridge-account-strip-{width}.png");
+            }
+            vm.RemoveBridgePane(b);
+            Check("closing the other Claude account removes only Claude's label",
+                !a.ShowBridgeAccountLabel && c.ShowBridgeAccountLabel && d.ShowBridgeAccountLabel);
+            vm.RemoveBridgePane(d);
+            Check("one account per provider hides all header names again", vm.BridgePanes.All(p => !p.ShowBridgeAccountLabel));
+        }
+        finally { shell.Close(); }
+        foreach (var pane in vm.BridgePanes.ToArray()) pane.Close();
+        foreach (var pane in vm.SecondaryBridgePanes.ToArray()) pane.Close();
+        a2.Close(); c2.Close();
+        ApiKeyAccountService.Instance.Remove(otherClaude.Id);
     }
 
     private static void CaptureAccountSetup(BridgeSetupPanel panel, string name)

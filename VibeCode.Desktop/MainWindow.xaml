@@ -3549,6 +3549,12 @@
                                                          </Viewbox>
                                                      </Grid>
                                                     <TextBlock Text="{Binding BridgeLabel}" FontWeight="SemiBold" FontSize="12.5" Margin="7,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock x:Name="PaneAccountLabel" ui:BridgeHeaderStrip.Slot="Account" Text="{Binding AccountLabel, StringFormat=· {0}}"
+                                                               FontSize="11.5" Foreground="{StaticResource Muted}" MaxWidth="180"
+                                                               Margin="6,0,0,0" VerticalAlignment="Center"
+                                                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding AccountLabel}"
+                                                               Visibility="{Binding ShowBridgeAccountLabel, Converter={StaticResource BoolVis}}" />
                                                     <!-- The agent's own short title of its overall task: bridge_set_task_title in regular bridges, the
                                                          assignment name in Advanced Bridges. It is the first thing to trim when the pane gets narrow. -->
                                                     <TextBlock ui:BridgeHeaderStrip.Slot="Title" FontSize="12" Foreground="{StaticResource Muted}" Margin="6,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding BridgeHeaderTaskTitle}" Visibility="{Binding BridgeHeaderTaskTitle, Converter={StaticResource ShowIf}}"><Run Text="· " Foreground="{StaticResource Faint}"/><Run Text="{Binding BridgeHeaderTaskTitle, Mode=OneWay}"/></TextBlock>

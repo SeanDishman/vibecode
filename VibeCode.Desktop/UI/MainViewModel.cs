@@ -1041,6 +1041,8 @@ public sealed partial class MainViewModel : Observable
         c.TurnCompleted += c.RecordTurnActivity;
         c.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName == nameof(ChatViewModel.AccountLabel) && TryGetLiveBridge(c, out var accountBridge))
+                RefreshBridgeAccountLabels(accountBridge.Panes);
             if (e.PropertyName == nameof(ChatViewModel.SidebarActivityAt))
             {
                 if (SidebarChatFor(c) is { } host && !ReferenceEquals(host, c))
@@ -1830,6 +1832,7 @@ public sealed partial class MainViewModel : Observable
     /// roster change, and every one of these is a trivial projection of the roster.</summary>
     private void RaiseSecondaryBridgeUi()
     {
+        RefreshBridgeAccountLabels(SecondaryBridgePanes);
         Raise(nameof(SecondaryCentralPlanner));
         Raise(nameof(SecondaryHasCentralPlanner));
         ReconcileBridgeTerminals(SecondaryBridgePanes);
@@ -1879,8 +1882,19 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(ForkBridgeToolTip));
     }
 
+    private static void RefreshBridgeAccountLabels(IEnumerable<ChatViewModel> panes)
+    {
+        foreach (var provider in panes.GroupBy(p => p.Provider, StringComparer.OrdinalIgnoreCase))
+        {
+            var multipleAccounts = provider.Select(p => p.AccountId ?? "")
+                .Distinct(StringComparer.OrdinalIgnoreCase).Skip(1).Any();
+            foreach (var pane in provider) pane.ShowBridgeAccountLabel = multipleAccounts;
+        }
+    }
+
     private void RaiseBridgeUi()
     {
+        RefreshBridgeAccountLabels(BridgePanes);
         Raise(nameof(CentralPlanner));
         Raise(nameof(HasCentralPlanner));
         ReconcileBridgeTerminals(BridgePanes);

@@ -35,6 +35,7 @@ try {
     Invoke-Regression VibeCode.BridgeTerminalTests @('--cli-setup-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--gemini-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--ultrafast-only')
+    Invoke-Regression VibeCode.BridgeTerminalTests @('--bridge-accounts-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--jarvis-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--jarvis-capabilities-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--jarvis-desktop-only')

@@ -51,7 +51,7 @@ internal static partial class Program
     {
         var observed = Requests(chat).First(n => n["fixture_user_received"]?.GetValue<bool>() == true);
         Check(label + " first task observes applied model AND effort", EffectiveAtFirstUser(chat) == Config(chat));
-        Check(label + " first task follows every pending adapter ACK", observed["pending_controls"]!.GetValue<int>() == 0);
+        Check(label + " first task follows every pending configuration ACK", observed["pending_controls"]!.GetValue<int>() == 0);
     }
 
     static BridgeAgentConfiguration EffectiveAtFirstUser(ChatViewModel chat)
@@ -112,7 +112,9 @@ internal static partial class Program
                 if (node["type"]?.ToString() == "control_request")
                 {
                     var request = node["request"]!.AsObject(); var requestId = node["request_id"]!.ToString();
-                    var subtype = request["subtype"]?.ToString(); pending.Add(requestId);
+                    var subtype = request["subtype"]?.ToString();
+                    // The background MCP status query is read-only and does not gate model configuration.
+                    if (subtype != "mcp_status") pending.Add(requestId);
                     var response = new JsonObject();
                     if (subtype == "initialize")
                     {

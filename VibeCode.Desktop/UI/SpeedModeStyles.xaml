@@ -14,7 +14,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ToggleButton">
-                    <Border x:Name="Surface" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="{DynamicResource SpeedModeCornerRadius}" Padding="{TemplateBinding Padding}">
+                    <Border x:Name="Surface" Background="Transparent" BorderThickness="0" CornerRadius="{DynamicResource SpeedModeCornerRadius}" Padding="{TemplateBinding Padding}">
                         <TextBlock Text="{TemplateBinding Content}" FontFamily="{TemplateBinding FontFamily}" FontSize="{TemplateBinding FontSize}" Foreground="{TemplateBinding Foreground}" TextWrapping="NoWrap" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
@@ -22,12 +22,10 @@
                             <Setter TargetName="Surface" Property="Background" Value="{DynamicResource Bg3}"/>
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource AccentSoft}"/>
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource Amber}"/>
                             <Setter Property="Foreground" Value="{DynamicResource Amber}"/>
                         </Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
-                            <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                            <Setter TargetName="Surface" Property="Background" Value="{DynamicResource AccentSoft}"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.45"/>

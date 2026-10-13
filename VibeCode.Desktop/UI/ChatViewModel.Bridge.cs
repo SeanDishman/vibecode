@@ -57,6 +57,13 @@ public sealed partial class ChatViewModel
     /// <summary>The task shown after the agent's name in its pane header ("Claude 6 · Fix login redirect"). Empty
     /// until the agent, or an Advanced Bridge assignment, names one: the "Ready" placeholder is never shown there.</summary>
     public string BridgeHeaderTaskTitle => _bridgeTaskName is { Length: > 0 } name && name != DefaultBridgeTaskName ? name : "";
+    private bool _showBridgeAccountLabel;
+    /// <summary>Only show account names when this Bridge uses different accounts for the same provider.</summary>
+    public bool ShowBridgeAccountLabel
+    {
+        get => _showBridgeAccountLabel;
+        internal set => Set(ref _showBridgeAccountLabel, value);
+    }
     /// <summary>Regular bridges only. Advanced Bridge orchestrators and workers take their task names from
     /// assignments, so they are never asked to title themselves.</summary>
     internal bool UsesBridgeTaskTitle => IsBridgeAgent && !IsBridgeManager && !BridgeCoordinatesOnly && BridgeCoordinatorAgentId is null;
