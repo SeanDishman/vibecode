@@ -731,9 +731,10 @@ public partial class MainWindow : Window
     }
 
     private ChatViewModel NewChatForWindow(string cwd, string? resume = null, bool fork = false,
-        string? title = null, string? provider = null, Action<ChatViewModel>? configure = null)
+        string? title = null, string? provider = null, Action<ChatViewModel>? configure = null, string? accountId = null)
     {
-        var chat = _vm.NewChat(cwd, resume, fork, title, provider, activatePrimary: !IsDoubleSessionCompanion, configure: configure);
+        var chat = _vm.NewChat(cwd, resume, fork, title, provider, accountId: accountId,
+            activatePrimary: !IsDoubleSessionCompanion, configure: configure);
         if (IsDoubleSessionCompanion) _vm.OpenSecondaryChat(chat);
         return chat;
     }
@@ -2348,7 +2349,7 @@ public partial class MainWindow : Window
                 CwdHint.Foreground = (Brush)FindResource("Red");
                 return;
             }
-            NewChatForWindow(folder, provider: AppSettings.Current.DefaultProvider);
+            PromptNewChatForWindow(folder);
             return;
         }
         // Canonicalise before anything downstream sees it. A pasted "C:/proj" or "C:\\proj" would otherwise become
@@ -2362,7 +2363,7 @@ public partial class MainWindow : Window
         }
         CwdBox.Text = path;   // show the path actually being used, not the one that was pasted
         // Starting a chat also unhides the folder if it was previously "Hide this project"ed.
-        NewChatForWindow(path, provider: AppSettings.Current.DefaultProvider);
+        PromptNewChatForWindow(path);
     }
 
     private void OnProviderPick(object sender, RoutedEventArgs e)
@@ -2379,24 +2380,10 @@ public partial class MainWindow : Window
     /// Offer a fresh chat in the same project so the switch immediately yields the new provider's models.</summary>
     private void MaybeOfferProviderChat(string provider)
     {
-        provider = provider?.Trim().ToLowerInvariant() switch
-        {
-            "codex" => "codex",
-            "gemini" => "gemini",
-            _ => "claude",
-        };
+        provider = ProviderModelCatalog.Normalize(provider);
         if (ActiveChatForWindow is not { } chat
             || string.Equals(chat.Provider, provider, StringComparison.OrdinalIgnoreCase)) return;
-        var name = provider switch
-        {
-            "codex" => "Codex",
-            "gemini" => "Gemini",
-            _ => "Claude",
-        };
-        if (MessageBox.Show(this,
-                $"The open chat keeps running on {chat.AgentDisplay} with its own models. Start a new {name} chat in this project so your next message uses {name} models?",
-                $"Start a {name} chat?", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
-            NewChatForWindow(chat.Cwd, provider: provider);
+        PromptNewChatForWindow(chat.Cwd);
     }
 
     /// <summary>After the active AI changes, chats that are already open keep running the AI they started on — which
@@ -2619,8 +2606,7 @@ public partial class MainWindow : Window
     private void OnNewChatInProject(object sender, RoutedEventArgs e)
     {
         var cwd = Ctx<ProjectVm>(sender)?.Cwd ?? Ctx<SidebarDirectory>(sender)?.Cwd;
-        if (cwd is null || !NoDirectoryWorkspace.DirectoryExists(cwd)) return;
-        NewChatForWindow(cwd);
+        if (cwd is not null) PromptNewChatForWindow(cwd);
     }
 
     private void OnForkChat(object sender, RoutedEventArgs e)

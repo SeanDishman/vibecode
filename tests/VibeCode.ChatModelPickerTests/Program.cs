@@ -11,8 +11,10 @@ internal static partial class Program
     private static int Checks;
 
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
+        // The folder-chat regression launches this inert CLI fixture instead of a real provider.
+        if (args.FirstOrDefault() is "app-server" or "--version") return 0;
         Root = Path.Combine(Environment.CurrentDirectory, "artifacts", "chat-model-picker",
             "checks-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff"));
         Directory.CreateDirectory(Root);
@@ -31,7 +33,8 @@ internal static partial class Program
             VerifyChatIsolation();
             VerifySparkRetirement();
             VerifyLiveCatalogAndSelections();
-            Console.WriteLine($"PASS: {Checks} chat model picker checks. No provider sessions started. Evidence: {Root}");
+            VerifyFolderNewChats();
+            Console.WriteLine($"PASS: {Checks} chat model picker checks. No live model calls. Evidence: {Root}");
             return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }

@@ -26,6 +26,7 @@ try {
         if ($result -ne 0) { throw "$ProjectName failed (exit $result)." }
     }
     Invoke-Regression VibeCode.PublicTests
+    Invoke-Regression VibeCode.ChatModelPickerTests
     Invoke-Regression VibeCode.CliInstallTests
     Invoke-Regression VibeCode.GeminiTests @('--fixtures-only')
     Invoke-Regression VibeCode.UsageAccountingTests
