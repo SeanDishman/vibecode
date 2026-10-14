@@ -6,7 +6,7 @@ This repository contains the public source. Personal accounts, credentials, chat
 
 ## Getting started
 
-Build the Windows app using the steps below, then open **VibeCode.exe**.
+Download the Windows executable from the [latest release](https://github.com/SeanDishman/vibecode/releases/latest) and open it. The .NET Desktop Runtime is included. To build from source, use the steps below.
 
 1. Open the account menu in the lower-left corner and choose a provider.
 2. If its CLI is missing, click **Install Claude Code CLI**, **Install Codex CLI**, or **Install Gemini CLI**. Setup downloads the official CLI and required tools, verifies that the CLI starts, and continues to sign-in.

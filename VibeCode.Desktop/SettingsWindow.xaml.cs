@@ -72,6 +72,9 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
+        AboutVersionText.Text = AppVersion.Current.IsKnown
+            ? $"Version {AppVersion.Current}"
+            : "Version unknown";
         // Test hook: keep the dialog off every monitor when the app is launched hidden, so automated
         // verification never pops it onto the user's screen (CenterOwner would otherwise fall back on-screen).
         if (Environment.GetEnvironmentVariable("VIBECODE_HIDDEN") == "1")
@@ -110,9 +113,6 @@ public partial class SettingsWindow : Window
             SupervisionRestartsSlider.Value = Math.Clamp(s.SupervisionMaxRestarts, 0, 3);
             TelemetryCompanionDisplayToggle.IsChecked = s.TelemetryOnCompanionDisplay;
             TelemetryAnimationToggle.IsChecked = s.TelemetryLiveAnimation;
-            AboutVersionText.Text = AppVersion.Current.IsKnown
-                ? $"Version {AppVersion.Current}"
-                : "Version unknown";
             RebuildNotificationSounds();
             InitializeThinkingOrbPicker();
             InitializeJarvisSettings();

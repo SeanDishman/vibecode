@@ -826,8 +826,8 @@
                         </ui:SettingGroup>
 
                         <ui:SettingGroup x:Name="SectionAbout" Header="About" Keywords="version build application">
-                            <ui:SettingCard Glyph="✦" GlyphFont="{StaticResource Ui}" Tint="White" TintSoft="{StaticResource BrandGradient}" Title="VibeCode" Description="A fresh coat of paint for Claude Code.&#10;&#10;Spotify is a trademark of Spotify AB. Playback control requires a Spotify Premium account and the Spotify Web API.">
-                                <TextBlock x:Name="AboutVersionText" Text="Version 1.0.0" FontSize="12" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Muted}" TextWrapping="NoWrap" VerticalAlignment="Center"/>
+                            <ui:SettingCard Glyph="✦" GlyphFont="{StaticResource Ui}" Tint="White" TintSoft="{StaticResource BrandGradient}" Title="VibeCode" Description="A Windows desktop app for Claude Code, OpenAI Codex, Gemini CLI, and GLM. Run coding chats and agent teams, share MCP tools, switch accounts, and track provider-reported usage.&#10;&#10;Spotify is a trademark of Spotify AB. Playback control requires a Spotify Premium account and the Spotify Web API.">
+                                <TextBlock x:Name="AboutVersionText" Text="Version" FontSize="12" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Muted}" TextWrapping="NoWrap" VerticalAlignment="Center"/>
                             </ui:SettingCard>
                         </ui:SettingGroup>
                     </ui:SettingPage>
