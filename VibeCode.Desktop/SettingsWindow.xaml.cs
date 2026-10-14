@@ -836,7 +836,7 @@ public partial class SettingsWindow : Window
     {
         if ((sender as FrameworkElement)?.DataContext is not McpServerDefinition existing) return;
         if (MessageBox.Show(this,
-                $"Remove the VibeCode MCP definition '{existing.Name}'?\n\nThis does not alter MCP servers configured directly in Claude, Codex, Gemini, or GLM.",
+                $"Remove the VibeCode MCP definition '{existing.Name}'?\n\nThis does not alter MCP servers configured directly in Claude, Codex, or GLM.",
                 "Remove MCP server", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         AppSettings.Current.McpServers.RemoveAll(server =>
             string.Equals(server.Id, existing.Id, StringComparison.OrdinalIgnoreCase));

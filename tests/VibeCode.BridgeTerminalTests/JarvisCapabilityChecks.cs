@@ -74,7 +74,7 @@ internal static partial class Program
         var added = Simulate(addRequest, addJson, vm);
         var original = settings.McpServers.Single();
         Check("MCP requests persist the validated shared catalog definition", added.Contains("Added MCP server 'docs'")
-            && original.Transport == "http" && original.UseCodex && !original.UseClaude && !original.UseGemini
+            && original.Transport == "http" && original.UseCodex && !original.UseClaude
             && LoadJarvisSettings().McpServers.Single().Url == original.Url);
         var snapshot = ((IJarvisActionHost)vm).GetContext().Settings!;
         Check("settings context exposes real preferences and a redacted server inventory", snapshot["preferences"]!.AsArray()
@@ -89,7 +89,7 @@ internal static partial class Program
         var changed = settings.McpServers.Single();
         Check("partial MCP edits preserve identity, endpoint, provider targets and credentials", patched.Contains("Updated")
             && changed.Id == original.Id && !changed.Enabled && changed.ToolTimeoutSeconds == 90 && changed.Url == original.Url
-            && changed.Headers["Authorization"] == "Bearer private-existing-secret" && changed.UseCodex && !changed.UseClaude && !changed.UseGemini);
+            && changed.Headers["Authorization"] == "Bearer private-existing-secret" && changed.UseCodex && !changed.UseClaude);
         var invalidMcp = PlanJson("configure_mcp", "Change MCP", new()
         { ["target"] = "docs", ["config_json"] = "{\"url\":\"javascript:bad\",\"enabled\":true}" });
         try { Simulate("Change MCP", invalidMcp, vm); throw new Exception("Invalid endpoint accepted"); }

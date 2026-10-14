@@ -12,7 +12,7 @@ public partial class BridgeSetupPanel : UserControl
 {
     public sealed record ProviderChoice(string Id, string Label);
     public static IReadOnlyList<ProviderChoice> Providers { get; } =
-    [new("claude", "Claude Code"), new("codex", "OpenAI Codex"), new("gemini", "Gemini"), new("glm", "GLM")];
+    [new("claude", "Claude Code"), new("codex", "OpenAI Codex"), new("glm", "GLM")];
     private const string AutomaticCount = "Let AI choose";
     private ChatViewModel? _host;
     private int _maximum = 8;

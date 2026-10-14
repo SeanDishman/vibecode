@@ -20,7 +20,7 @@ internal static partial class Program
             foreach (var enabled in new[] { true, false })
             {
                 AppSettings.Current.BridgePeerMessaging = enabled;
-                foreach (var provider in new[] { "claude", "codex", "gemini", "glm" })
+                foreach (var provider in new[] { "claude", "codex", "glm" })
                 {
                     var pane = new ChatViewModel(team[0].Cwd, provider: provider);
                     Chats.Add(pane);

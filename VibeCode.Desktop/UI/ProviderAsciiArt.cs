@@ -16,7 +16,7 @@ public static class ProviderAsciiArt
     public static string TaglineFor(string? provider) => (provider ?? "").Trim().ToLowerInvariant() switch
     {
         "codex" => "OpenAI Codex · ready when you are",
-        "gemini" => "Google Gemini · ready when you are",
+        "gemini" => "Saved Gemini chat · read-only",
         _ => "Claude Code · ready when you are",
     };
 

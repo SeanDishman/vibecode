@@ -182,19 +182,18 @@ public sealed partial class ChatViewModel : Observable
     public string RemoveBridgeAgentToolTip => $"Close this {AgentDisplay} bridge agent";
     public string ExpandBridgeAgentToolTip => $"Expand this {AgentDisplay} agent (fill the bridge)";
     public string ExpandBridgeAgentAutomationName => $"Expand this {AgentDisplay} agent";
-    public string ComposerPlaceholder => $"Message {AgentDisplay}…";
+    public bool CanCompose => !IsGemini;
+    public string ComposerPlaceholder => IsGemini ? "Saved chat — read-only" : $"Message {AgentDisplay}…";
     public string ArtifactsEmptyText => $"Files {AgentDisplay} creates or edits show up here.";
     public string TodosEmptyText => $"{AgentDisplay}'s task list appears here once it starts planning.";
     public bool NeedsCliInstall => CliInstallationService.Supports(Provider) && !CliInstallationService.IsReady(Provider);
     public string SignInButtonText => NeedsCliInstall ? $"Install {CliInstallationService.DisplayName(Provider)} CLI" : Provider switch
     {
         "codex" => "Sign in to Codex",
-        "gemini" => "Sign in with Google",
         _ => "Sign in to Claude",
     };
     public string AuthMessage => NeedsCliInstall ? "Set up the official CLI here, then sign in to start chatting." : Provider switch
     {
-        "gemini" => "Sign in with the Google account that has your Google AI Pro or Ultra subscription.",
         "codex" => "OpenAI Codex isn't signed in on this machine. Sign in once and every Codex chat works.",
         _ => "Claude Code isn't signed in on this machine. Sign in once and every chat works.",
     };
@@ -1336,7 +1335,7 @@ public sealed partial class ChatViewModel : Observable
     // and hold it until the account set actually changes.
     private void ResolveAccountChip()
     {
-        if (IsGemini) { _accountLabel = "Google login"; _showAccountLabel = false; return; }
+        if (IsGemini) { _accountLabel = "Removed provider"; _showAccountLabel = false; return; }
         if (ApiKeyAccountService.Instance.For(Provider).FirstOrDefault(a => a.Id == AccountId) is { } keyAccount && !IsGlm)
         {
             _accountLabel = keyAccount.Title;
@@ -1434,7 +1433,7 @@ public sealed partial class ChatViewModel : Observable
         _model = Provider switch
         {
             "codex" => CodexSession.NormalizeModelSelection(AppSettings.Current.DefaultCodexModel),
-            "gemini" => AppSettings.Current.DefaultGeminiModel,
+            "gemini" => null,
             Protocol.GlmPreset.ProviderId => GlmPreset.NormalizeModel(AppSettings.Current.DefaultGlmModel,
                 _glmAccount?.GlmBackend),
             _ => AppSettings.Current.DefaultModel,
@@ -1593,7 +1592,7 @@ public sealed partial class ChatViewModel : Observable
     {
         var version = Interlocked.Increment(ref _startVersion);
         // The other CLIs replay their own history when they resume; Claude's and GLM's is read back from disk here.
-        if ((IsClaude || IsGlm) && ResumeSessionId is not null && !_transcriptLoaded)
+        if ((IsClaude || IsGlm || IsGemini) && ResumeSessionId is not null && !_transcriptLoaded)
         {
             _ = ReplayTranscriptAndStartAsync(version, ResumeSessionId);
             return;
@@ -1612,7 +1611,9 @@ public sealed partial class ChatViewModel : Observable
         List<TranscriptMessage> transcript;
         try
         {
-            transcript = await Task.Run(() => IsGlm
+            transcript = await Task.Run(() => IsGemini
+                ? LegacyGeminiHistory.LoadTranscript(sessionId)
+                : IsGlm
                 ? GlmTranscriptStore.LoadTranscript(GlmTranscriptStore.Directory, sessionId)
                 : SessionCatalog.LoadTranscript(Cwd, sessionId, maxMessages: int.MaxValue)).ConfigureAwait(false);
         }
@@ -1697,6 +1698,14 @@ public sealed partial class ChatViewModel : Observable
 
     private void StartCore(string? codexResumeSessionId = null)
     {
+        if (IsGemini)
+        {
+            Status = "idle";
+            AuthNeeded = false;
+            if (!Items.OfType<BannerItem>().Any(item => item.Text == LegacyGeminiHistory.RemovalNotice))
+                Items.Add(new BannerItem { Level = "info", Text = LegacyGeminiHistory.RemovalNotice });
+            return;
+        }
         _bridgeSessionInitialized = false;
         _bridgeRuntimeConfigurationTask = Task.CompletedTask;
         if (_bridgeLaunchConfiguration is null) _bridgeConfigurationApplication = Task.CompletedTask;
@@ -1758,15 +1767,6 @@ public sealed partial class ChatViewModel : Observable
                     AppendSystemPrompt = sessionSystemPrompt,
                     SwarmsEnabled = swarmsEnabled,
                     SwarmMaxWorkers = SwarmMaxWorkers,
-                    McpServers = mcpServers,
-                }),
-                "gemini" => new GeminiSession(new GeminiSessionOptions
-                {
-                    Cwd = Cwd,
-                    Resume = ResumeSessionId,
-                    Model = _model,
-                    PermissionMode = _mode,
-                    AppendSystemPrompt = sessionSystemPrompt,
                     McpServers = mcpServers,
                 }),
                 Protocol.GlmPreset.ProviderId => CreateGlmSession(sessionSystemPrompt),
@@ -1871,7 +1871,6 @@ public sealed partial class ChatViewModel : Observable
             Raise(nameof(BridgeConfigurationDisplay));
             if (Status == "starting") Status = "idle";
             if (IsClaude) UsageService.Instance.Refresh();
-            if (IsGemini) GeminiUsageService.Instance.Refresh();
             if (GlmAccount is { } glmAccount) _ = GlmUsageService.Instance.RefreshAsync(glmAccount);
         });
         session.Exited += (code, stderr) => Post(() =>
@@ -2789,6 +2788,7 @@ public sealed partial class ChatViewModel : Observable
 
     public void SetEffort(string? level)
     {
+        if (IsGemini) return; // Archived conversations cannot change live-provider defaults.
         Effort = level;
         foreach (var o in EffortOptions)
             o.IsSelected = string.Equals(o.Value, level, StringComparison.OrdinalIgnoreCase);
@@ -2995,6 +2995,7 @@ public sealed partial class ChatViewModel : Observable
 
     public void SetModel(string? model)
     {
+        if (IsGemini) return; // Archived conversations cannot change live-provider defaults.
         // A vibecode: preset belongs to exactly one provider, and handing one to a different CLI does lasting
         // damage rather than nothing: Claude Code took another provider's preset id, cached it in its .claude.json,
         // and listed it as a custom model in the picker from then on. SetPickerModel already refuses a foreign
@@ -3003,7 +3004,6 @@ public sealed partial class ChatViewModel : Observable
         CancelBridgeErrorRecovery();
         Model = string.IsNullOrEmpty(model) ? null : model;
         if (IsCodex) AppSettings.Current.DefaultCodexModel = _model;
-        else if (IsGemini) AppSettings.Current.DefaultGeminiModel = _model;
         else if (IsGlm) AppSettings.Current.DefaultGlmModel = _model;
         else AppSettings.Current.DefaultModel = _model;
         AppSettings.Current.Save();
@@ -4081,7 +4081,6 @@ public sealed partial class ChatViewModel : Observable
         IsPeerNotificationTurn = false;
         if (!restartingOnOpus && !WaitingForBridgeRetry) NotificationService.NotifyTurnFinished(this, isError, interruptedByUser);
         if (IsClaude) UsageService.Instance.Refresh();
-        if (IsGemini) GeminiUsageService.Instance.Refresh();
         // total_cost_usd is the session running total, so a provider-billed turn's own cost is the delta.
         var costBefore = _cost;
         Cost = DoubleOrNull(m["total_cost_usd"]) ?? _cost;

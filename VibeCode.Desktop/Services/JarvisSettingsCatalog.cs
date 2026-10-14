@@ -95,7 +95,6 @@ public static class JarvisSettingsCatalog
         ["toolTimeoutSeconds"] = server.ToolTimeoutSeconds,
         ["useClaude"] = server.UseClaude,
         ["useCodex"] = server.UseCodex,
-        ["useGemini"] = server.UseGemini,
     };
 
     private static string PublicUrl(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
@@ -183,7 +182,7 @@ public static class JarvisSettingsCatalog
     private static IReadOnlyList<string> Choices(string name) => name switch
     {
         nameof(AppSettings.UiMode) => ["background", "cli"],
-        nameof(AppSettings.DefaultProvider) or nameof(AppSettings.JarvisProvider) => ["claude", "codex", "glm", "gemini"],
+        nameof(AppSettings.DefaultProvider) or nameof(AppSettings.JarvisProvider) => ["claude", "codex", "glm"],
         nameof(AppSettings.DefaultMode) => ["default", "auto", "plan", "acceptEdits", "bypassPermissions", "dontAsk"],
         nameof(AppSettings.ThinkingOrbStyle) => ThinkingOrbStyles.All.Select(orb => orb.Id).ToArray(),
         nameof(AppSettings.NotificationSound) => NotificationSounds.All.Select(sound => sound.Id).ToArray(),

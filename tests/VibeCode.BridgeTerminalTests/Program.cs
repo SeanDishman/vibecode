@@ -56,10 +56,10 @@ internal static partial class Program
                 Console.WriteLine($"PASS: {_checks} CLI setup UI and missing prerequisite checks.");
                 return 0;
             }
-            if (args.Contains("--gemini-only"))
+            if (args.Contains("--removed-gemini-only"))
             {
-                VerifyGeminiUi();
-                Console.WriteLine($"PASS: {_checks} Gemini provider, account, usage, Bridge and theme checks.");
+                VerifyRemovedGemini();
+                Console.WriteLine($"PASS: {_checks} removed Gemini provider and saved history checks.");
                 return 0;
             }
             if (args.Contains("--ultrafast-only"))
@@ -490,7 +490,7 @@ internal static partial class Program
         var (_, team) = Team("registration", 1);
         var endpoint = Call(team[0], "EnsureBridgeMcp")!;
         var registration = (McpServerDefinition)Call(endpoint, "Registration")!;
-        Check("built-in helper is enabled for every CLI provider", registration.UseClaude && registration.UseCodex && registration.UseGemini);
+        Check("built-in helper is enabled for every CLI provider", registration.UseClaude && registration.UseCodex);
         Check("Codex projection approves only known bridge tools", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides.Any(c => c.Contains("bridge_dispatch_task") && c.Contains("bridge_read_chat") && c.Contains("approval_mode")));
         Check("Claude receives built-in endpoint", McpCatalog.BuildClaudeConfig([registration]).ToJsonString().Contains("--bridge-mcp"));
         using var glm = new GlmSession(new GlmSessionOptions { Cwd = _root, ApiKeys = ["offline-fixture"], BridgeMcpPipe = (string)Property(endpoint, "PipeName")! });

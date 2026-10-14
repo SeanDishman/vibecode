@@ -77,7 +77,6 @@ public sealed partial class MainViewModel : Observable
         ChatGroups = CreateSidebarChatView();
         _sidebarCollapsed = AppSettings.Current.SidebarCollapsed;   // field, not property: restoring is not a change
         // Quota reads land on the dispatcher after each fetch; the account rows mirror them without polling.
-        PropertyChangedEventManager.AddHandler(GeminiUsageService.Instance, OnGeminiUsageChanged, string.Empty);
         // A restored "No directory" chat starts its provider in that folder; recreate it if the user cleared it, or
         // the chat would come back unable to launch.
         try { NoDirectoryWorkspace.Ensure(); }
@@ -210,24 +209,24 @@ public sealed partial class MainViewModel : Observable
     private bool GlmProviderSelected => Protocol.GlmPreset.Is(AppSettings.Current.DefaultProvider);
     public ApiKeyAccount? CurrentGlmAccount => GlmProviderSelected
         ? ApiKeyAccountService.Instance.SelectedFor(Protocol.GlmPreset.ProviderId) : null;
-    public string AccountInitial => GeminiProviderSelected ? "G" : GlmProviderSelected ? "Z" : CodexProviderSelected
+    public string AccountInitial => GlmProviderSelected ? "Z" : CodexProviderSelected
         ? CodexAccountInitial
         : _currentAccount?.Initial ?? "?";
-    public string AccountLabel => GeminiProviderSelected ? GeminiAccountLabel : GlmProviderSelected ? CurrentGlmAccount?.Title ?? "Connect GLM" : CodexProviderSelected
+    public string AccountLabel => GlmProviderSelected ? CurrentGlmAccount?.Title ?? "Connect GLM" : CodexProviderSelected
         ? CodexAccountLabel
         : _currentAccount?.Label ?? "Sign in";
-    public string AccountSub => GeminiProviderSelected ? GeminiAccountSub : GlmProviderSelected ? CurrentGlmAccount?.ConnectionDisplay ?? "GLM · Not connected" : CodexProviderSelected
+    public string AccountSub => GlmProviderSelected ? CurrentGlmAccount?.ConnectionDisplay ?? "GLM · Not connected" : CodexProviderSelected
         ? CodexAccountSub
         : _currentAccount is { } a
                 ? a.ProviderLine
                 : "Claude Code · Not signed in";
-    public bool IsSignedIn => GeminiProviderSelected ? IsGeminiSignedIn : GlmProviderSelected ? CurrentGlmAccount is not null : CodexProviderSelected
+    public bool IsSignedIn => GlmProviderSelected ? CurrentGlmAccount is not null : CodexProviderSelected
         ? IsCodexSignedIn
         : _currentAccount is not null;
     public bool HasMultipleAccounts => Accounts.Count > 1;
     /// <summary>True when the shown account is just the live ~/.claude login because no selection was stored - i.e. a
     /// guess, not the user's choice. Shown as a hint so a lost selection can't pass for correct state.</summary>
-    public bool AccountIsFallback => !GeminiProviderSelected && !GlmProviderSelected && !CodexProviderSelected && AccountService.Instance.ActiveIsFallback;
+    public bool AccountIsFallback => !GlmProviderSelected && !CodexProviderSelected && AccountService.Instance.ActiveIsFallback;
 
     private string? _codexAccountEmail;
     private string? _codexAccountName;
@@ -332,7 +331,6 @@ public sealed partial class MainViewModel : Observable
         foreach (var chat in Chats.Concat(LiveBridgePeers).Distinct())
             chat.RefreshModelPicker();
         Raise(nameof(IsCodexSelected));
-        Raise(nameof(IsGeminiSelected));
         Raise(nameof(AccountInitial));
         Raise(nameof(CurrentGlmAccount));
         Raise(nameof(AccountLabel));
@@ -347,14 +345,6 @@ public sealed partial class MainViewModel : Observable
         AllAccounts.Clear();
         foreach (var a in Accounts) AllAccounts.Add(a);
         foreach (var a in CodexAccounts) AllAccounts.Add(a);
-        AllAccounts.Add(new GeminiAccountEntry
-        {
-            Label = GeminiAccountLabel,
-            ProviderLine = GeminiAccountSub,
-            UsageDisplay = GeminiUsageService.Instance.Summary,
-            Usable = IsGeminiSignedIn,
-            IsVibeCodeSelected = IsGeminiSelected
-        });
     }
 
     private static string FormatPlan(string? plan)
@@ -1750,7 +1740,6 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(SecondaryBridgeProjectPath));
         Raise(nameof(SecondaryBridgeUsesClaude));
         Raise(nameof(SecondaryBridgeUsesCodex));
-        Raise(nameof(SecondaryBridgeUsesGemini));
         Raise(nameof(SecondaryHasMinimizedBridgePanes));
         Raise(nameof(SecondaryCanAnnounceToBridge));
         Raise(nameof(SecondaryCanAddBridgeAgent));
@@ -1814,7 +1803,6 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(BridgeProjectPath));
         Raise(nameof(BridgeUsesClaude));
         Raise(nameof(BridgeUsesCodex));
-        Raise(nameof(BridgeUsesGemini));
         Raise(nameof(BridgeGridRows));
         Raise(nameof(HasMinimizedBridgePanes));
         Raise(nameof(PanelChat));

@@ -557,25 +557,6 @@
         </DataTemplate>
 
 
-        <DataTemplate DataType="{x:Type ui:GeminiAccountEntry}">
-            <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1" Click="OnManageGeminiAccount" ToolTip="Connect or use the Gemini CLI account" AutomationProperties.Name="{Binding Label}">
-                <DockPanel>
-                    <TextBlock DockPanel.Dock="Right" Text="" FontFamily="{StaticResource Icons}" FontSize="13" Foreground="{StaticResource Green}" VerticalAlignment="Center" Margin="12,0,2,0" Visibility="{Binding IsVibeCodeSelected, Converter={StaticResource BoolVis}}"/>
-                    <TextBlock DockPanel.Dock="Right" Text="shared login" Width="68" Margin="12,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Faint}" FontSize="10" TextAlignment="Right"/>
-                    <Border DockPanel.Dock="Left" Width="32" Height="32" CornerRadius="{StaticResource Rad8}" Background="{StaticResource BrandGradient}" Margin="0,0,10,0">
-                        <TextBlock Text="{Binding Initial}" Foreground="White" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <Border DockPanel.Dock="Left" Background="{StaticResource BlueSoft}" CornerRadius="{StaticResource Rad6}" Padding="7,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="52">
-                        <TextBlock Text="Gemini" FontSize="9.5" FontWeight="SemiBold" Foreground="{StaticResource Blue}" HorizontalAlignment="Center"/>
-                    </Border>
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Label}" FontSize="12.5" Foreground="{StaticResource Text}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                        <TextBlock Text="{Binding ProviderLine}" FontSize="10" Foreground="{StaticResource Faint}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                        <TextBlock Text="{Binding UsageDisplay}" FontSize="9.5" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}" Margin="0,2,0,0" Visibility="{Binding UsageDisplay, Converter={StaticResource ShowIf}}"/>
-                    </StackPanel>
-                </DockPanel>
-            </Button>
-        </DataTemplate>
 
         <!-- diff line row (shared by tool + permission cards) -->
         <DataTemplate x:Key="DiffRow" DataType="{x:Type ui:DiffLine}">
@@ -1798,7 +1779,7 @@
                     <!-- input row -->
                     <DockPanel>
 
-                        <Button DockPanel.Dock="Right" Style="{StaticResource SendButton}" Margin="6,0,0,0" VerticalAlignment="Bottom" Click="OnBridgePaneSend"/>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource SendButton}" Margin="6,0,0,0" VerticalAlignment="Bottom" Click="OnBridgePaneSend" IsEnabled="{Binding CanCompose}"/>
                         <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Click="OnBridgeAttachClick" VerticalAlignment="Bottom" Padding="6,5" Margin="0,0,4,0" ToolTip="Attach image or file (or paste / drag-drop)" AutomationProperties.Name="Attach file">
                             <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="13" VerticalAlignment="Center" TextWrapping="NoWrap"/>
                         </Button>
@@ -1809,7 +1790,7 @@
 
                         <StackPanel>
                             <Grid>
-                                <TextBox x:Name="PaneInput" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" Style="{x:Null}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}" CaretBrush="{StaticResource Accent}" FontSize="13" Padding="8,7" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnBridgeInputKeyDown" DataObject.Pasting="OnComposerPasting" TextChanged="OnBridgeInputChanged" LostKeyboardFocus="OnInputLostFocus" AutomationProperties.Name="Bridge message input"/>
+                                <TextBox IsReadOnly="{Binding IsGemini}" x:Name="PaneInput" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" Style="{x:Null}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}" CaretBrush="{StaticResource Accent}" FontSize="13" Padding="8,7" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnBridgeInputKeyDown" DataObject.Pasting="OnComposerPasting" TextChanged="OnBridgeInputChanged" LostKeyboardFocus="OnInputLostFocus" AutomationProperties.Name="Bridge message input"/>
                                 <!-- ElementName resolves per-pane inside this DataTemplate's namescope -->
                                 <TextBlock Text="{Binding ComposerPlaceholder}" Foreground="{StaticResource Faint}" FontSize="13" Margin="9,7,0,0" IsHitTestVisible="False" VerticalAlignment="Top">
                                     <TextBlock.Visibility>
@@ -2092,7 +2073,7 @@
                         <Border x:Name="AccountFooter" DockPanel.Dock="Bottom" BorderBrush="{StaticResource SurfaceOutline}" BorderThickness="0,1,0,0" Padding="8,8">
                             <StackPanel>
                                 <!-- account switcher: a full-width sidebar-footer row (not a floating pill) -->
-                                <ToggleButton x:Name="AccountToggle" Cursor="Hand" HorizontalAlignment="Stretch" Checked="OnAccountChecked" Unchecked="OnAccountUnchecked" AutomationProperties.Name="Account manager" ToolTip="Manage Claude, Codex, Gemini, and GLM accounts">
+                                <ToggleButton x:Name="AccountToggle" Cursor="Hand" HorizontalAlignment="Stretch" Checked="OnAccountChecked" Unchecked="OnAccountUnchecked" AutomationProperties.Name="Account manager" ToolTip="Manage Claude, Codex, and GLM accounts">
                                     <ToggleButton.Template>
                                         <ControlTemplate TargetType="ToggleButton">
                                             <Border x:Name="bd" CornerRadius="{StaticResource Rad10}" Padding="7,6" Background="Transparent" BorderBrush="Transparent" BorderThickness="1">
@@ -2348,7 +2329,7 @@
                         <Image Width="76" Height="76" HorizontalAlignment="Center" Source="pack://application:,,,/VibeCode;component/Assets/logo.png" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" Effect="{StaticResource BrandGlow}"/>
 
                         <TextBlock Text="What are we vibing on?" FontFamily="{StaticResource Display}" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,20,0,6"/>
-                        <TextBlock Text="Choose Claude Code, OpenAI Codex, Gemini, or GLM, then work with its connected account and your project tools." Foreground="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,28"/>
+                        <TextBlock Text="Choose Claude Code, OpenAI Codex, or GLM, then work with its connected account and your project tools." Foreground="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,28"/>
 
                         <Border Style="{StaticResource Card}" Padding="14" CornerRadius="{StaticResource Rad16}">
                             <StackPanel>
@@ -2364,12 +2345,6 @@
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="◎" FontSize="12" Margin="0,0,6,0"/>
                                                 <TextBlock Text="OpenAI Codex"/>
-                                            </StackPanel>
-                                        </ToggleButton>
-                                        <ToggleButton x:Name="GeminiProviderToggle" Style="{StaticResource PillTab}" Tag="gemini" Click="OnProviderPick" AutomationProperties.Name="Use Gemini">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="K" FontSize="11" FontWeight="SemiBold" Margin="0,0,6,0"/>
-                                                <TextBlock Text="Gemini"/>
                                             </StackPanel>
                                         </ToggleButton>
                                         <!-- GLM. Tag is the provider id the rest of the app already speaks
@@ -2758,7 +2733,7 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBox x:Name="InputBox" Grid.Column="0" Style="{x:Null}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}" CaretBrush="{StaticResource Accent}" SelectionBrush="{StaticResource AccentDim}" FontSize="14" Padding="16,13,6,14" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="220" VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKeyDown" DataObject.Pasting="OnComposerPasting" TextChanged="OnInputChanged" LostKeyboardFocus="OnInputLostFocus" AutomationProperties.Name="Message input"/>
+                                        <TextBox IsReadOnly="{Binding IsGemini}" x:Name="InputBox" Grid.Column="0" Style="{x:Null}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}" CaretBrush="{StaticResource Accent}" SelectionBrush="{StaticResource AccentDim}" FontSize="14" Padding="16,13,6,14" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="220" VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKeyDown" DataObject.Pasting="OnComposerPasting" TextChanged="OnInputChanged" LostKeyboardFocus="OnInputLostFocus" AutomationProperties.Name="Message input"/>
                                         <TextBlock Grid.Column="0" Text="{Binding ComposerPlaceholder}" Foreground="{StaticResource Faint}" FontSize="14" Margin="17,13,0,0" IsHitTestVisible="False" VerticalAlignment="Top">
                                             <TextBlock.Visibility>
                                                 <MultiBinding Converter="{StaticResource HintVis}">
@@ -2768,7 +2743,7 @@
                                             </TextBlock.Visibility>
                                         </TextBlock>
                                         <!-- Submit normally; Codex follow-up actions belong to the queued message in the transcript. -->
-                                        <Button Grid.Column="1" Style="{StaticResource SendButton}" Click="OnSendClick" VerticalAlignment="Bottom" Margin="0,0,8,8"/>
+                                        <Button Grid.Column="1" Style="{StaticResource SendButton}" Click="OnSendClick" IsEnabled="{Binding CanCompose}" VerticalAlignment="Bottom" Margin="0,0,8,8"/>
                                     </Grid>
                                     <ui:MicLevelMeter x:Name="MainMicTimeline" RecordingOwner="{Binding ElementName=MicButton}" Margin="16,0,16,10"/>
                                     <!-- staged attachments (images / files) sent with the next message -->
@@ -2904,10 +2879,6 @@
                                 <!-- Read/input and write/output stay separate for every provider. -->
                                 <TextBlock Text="{Binding TokensText}" Foreground="{StaticResource Muted}" FontSize="11" FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,14,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding TokensToolTip}" Visibility="{Binding HasTokens, Converter={StaticResource BoolVis}}"/>
                                 <TextBlock Text="{Binding TokenRatesText}" Foreground="{StaticResource Muted}" FontSize="11" FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,14,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding TokenRatesToolTip}" Visibility="{Binding HasTokenRates, Converter={StaticResource BoolVis}}"/>
-                                <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Padding="7,3" Margin="0,0,5,0" Click="OnRefreshGeminiUsage" Visibility="{Binding IsGemini, Converter={StaticResource BoolVis}}" AutomationProperties.Name="Gemini plan usage" ToolTip="{Binding Detail, Source={x:Static svc:GeminiUsageService.Instance}}">
-                                        <StackPanel Orientation="Horizontal"><TextBlock Text="Gemini" Foreground="{StaticResource Blue}" FontSize="10" Margin="0,0,5,0"/>
-                                            <TextBlock Text="{Binding Summary, Source={x:Static svc:GeminiUsageService.Instance}}" Foreground="{StaticResource Muted}" FontSize="10"/></StackPanel>
-                                    </Button>
                                 <Button x:Name="GlmAccountUsageButton" DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Padding="7,1" Margin="0,0,10,0" Click="OnShowGlmUsage" Visibility="{Binding HasGlmPlanUsage, Converter={StaticResource BoolVis}}" ToolTip="Z.ai Coding Plan usage and reset times" AutomationProperties.Name="Z.ai account usage">
                                     <TextBlock Text="{Binding GlmUsage.Summary}" FontSize="10.5" Foreground="{StaticResource Muted}"/>
                                 </Button>
@@ -3114,10 +3085,6 @@
                                         </ControlTemplate>
                                     </ToggleButton.Template>
                                 </ToggleButton>
-                                <Button Style="{StaticResource GhostButton}" Padding="7,3" Margin="0,0,5,0" Click="OnRefreshGeminiUsage" Visibility="{Binding BridgeUsesGemini, Converter={StaticResource BoolVis}}" AutomationProperties.Name="Gemini plan usage" ToolTip="{Binding Detail, Source={x:Static svc:GeminiUsageService.Instance}}">
-                                        <StackPanel Orientation="Horizontal"><TextBlock Text="Gemini" Foreground="{StaticResource Blue}" FontSize="10" Margin="0,0,5,0"/>
-                                            <TextBlock Text="{Binding Summary, Source={x:Static svc:GeminiUsageService.Instance}}" Foreground="{StaticResource Muted}" FontSize="10"/></StackPanel>
-                                    </Button>
                                 <!-- Announce: icon-only megaphone; hover tooltip says "Announce". Pause every agent
                                      on this bridge and hand them one broadcast, then they carry on. Left of Add agent. -->
                                 <ToggleButton x:Name="BridgeAnnounceToggle" Style="{StaticResource GhostToggle}" Padding="7,5" Margin="0,0,7,0" VerticalAlignment="Center" MinWidth="30" Checked="OnBridgeAnnounceChecked" Unchecked="OnBridgeAnnounceUnchecked" IsEnabled="{Binding CanAnnounceToBridge}" ToolTip="Announce" AutomationProperties.Name="Announce">
@@ -3177,17 +3144,6 @@
                                                         <StackPanel>
                                                             <TextBlock Text="OpenAI Codex"/>
                                                             <TextBlock Text="Add a Codex agent to this bridge" FontSize="11.5" Foreground="{StaticResource MenuSecondary}"/>
-                                                        </StackPanel>
-                                                    </StackPanel>
-                                                </MenuItem.Header>
-                                            </MenuItem>
-<MenuItem Tag="gemini" Click="OnAddBridgeProvider" AutomationProperties.Name="Add Gemini agent">
-                                                <MenuItem.Header>
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <TextBlock Text="K" FontSize="11" FontWeight="SemiBold" Width="22" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
-                                                        <StackPanel>
-                                                            <TextBlock Text="Gemini"/>
-                                                            <TextBlock Text="Add a Gemini agent to this bridge" FontSize="11.5" Foreground="{StaticResource MenuSecondary}"/>
                                                         </StackPanel>
                                                     </StackPanel>
                                                 </MenuItem.Header>
@@ -4213,7 +4169,6 @@
                                         <ComboBoxItem Tag="claude" Content="Claude Code"/>
                                         <ComboBoxItem Tag="codex" Content="OpenAI Codex"/>
                                         <ComboBoxItem Tag="glm" Content="GLM"/>
-                                        <ComboBoxItem Tag="gemini" Content="Gemini"/>
                                     </ComboBox>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
@@ -4376,26 +4331,6 @@
                                         </ListBox>
                                     </Grid>
 
-                                    <StackPanel x:Name="GeminiAccountsPanel" Visibility="Collapsed" Margin="8,4">
-                                        <TextBlock Text="Gemini account" Foreground="{StaticResource Text}" FontSize="14" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Use Google sign-in for your AI Pro, Ultra, or free plan." Foreground="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,5,0,14"/>
-                                        <Button Style="{StaticResource GhostButton}" Click="OnManageGeminiAccount" HorizontalContentAlignment="Left" Padding="10,8" AutomationProperties.Name="Manage Gemini account">
-                                            <StackPanel>
-                                                <TextBlock Text="{Binding GeminiAccountLabel}" Foreground="{StaticResource Text}" FontWeight="SemiBold"/>
-                                                <TextBlock Text="{Binding GeminiAccountSub}" Foreground="{StaticResource Muted}" Margin="0,3,0,0"/>
-                                            </StackPanel>
-                                        </Button>
-                                        <TextBlock Text="Plan usage" Foreground="{StaticResource Text}" FontWeight="SemiBold" Margin="0,20,0,8"/>
-                                        <TextBlock Text="{Binding Status, Source={x:Static svc:GeminiUsageService.Instance}}" Foreground="{StaticResource Muted}" TextWrapping="Wrap"/>
-                                        <ItemsControl ItemsSource="{Binding Limits, Source={x:Static svc:GeminiUsageService.Instance}}">
-                                            <ItemsControl.ItemTemplate><DataTemplate><StackPanel Margin="0,5,0,6">
-                                                <TextBlock Text="{Binding Model}" Foreground="{StaticResource Text}"/>
-                                                <TextBlock Text="{Binding Detail}" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,3,0,0"/>
-                                            </StackPanel></DataTemplate></ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                        <TextBlock Text="{Binding UpdatedText, Source={x:Static svc:GeminiUsageService.Instance}}" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,6,0,8"/>
-                                        <Button Content="Refresh usage" Style="{StaticResource GhostButton}" Click="OnRefreshGeminiUsage" HorizontalAlignment="Left" Padding="10,6"/>
-                                    </StackPanel>
 
                                     <!-- GLM accounts retain their service so subscription and API routes stay distinct. -->
                                     <Grid x:Name="GlmAccountsPanel" Visibility="Collapsed">

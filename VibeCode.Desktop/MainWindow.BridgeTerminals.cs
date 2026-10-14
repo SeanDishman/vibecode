@@ -113,7 +113,7 @@ public partial class MainWindow
         if (!CanAddBridgeAgentForWindow) { ShowBridgeAgentLimitReached(); return; }
         var menu = CreateBridgeMenu(anchor);
         var accounts = BridgeAccountChoice.Load();
-        foreach (var (provider, label) in new[] { ("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini"), ("glm", "GLM") })
+        foreach (var (provider, label) in new[] { ("claude", "Claude Code"), ("codex", "Codex"), ("glm", "GLM") })
         {
             var item = new MenuItem { Header = label, Tag = provider };
             AttachBridgeAccountMenu(item, accounts, account => LaunchWorker(account.Provider, account.AccountId));

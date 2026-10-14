@@ -125,7 +125,7 @@ internal static partial class Program
         Check("native compaction failure releases working state and reports the error", !failed.IsWorking && !failed.WaitingForLimitReset
             && failed.Items.OfType<BannerItem>().Any(b => b.Text.Contains("Native compaction request failed")));
         failed.Close();
-        foreach (var provider in new[] { "gemini", "glm" })
+        foreach (var provider in new[] { "glm" })
         {
             var (chat, _) = NewChat("unsupported-compact-" + provider, provider);
             Field(chat, "_session", new NonCompactSession());

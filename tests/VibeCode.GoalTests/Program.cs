@@ -54,7 +54,7 @@ internal static partial class Program
 
     private static void RunOffline()
     {
-        foreach (var provider in new[] { "codex", "claude", "glm", "gemini" })
+        foreach (var provider in new[] { "codex", "claude", "glm" })
         {
             var menu = new ChatViewModel(_root, provider: provider) { ExcludeFromMemory = true };
             Chats.Add(menu);

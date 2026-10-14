@@ -93,7 +93,7 @@ internal static partial class Program
             }
             toggle.IsChecked = true;
         }
-        ((ComboBox)options.FindName("CentralProviderBox")).SelectedValue = "gemini";
+        ((ComboBox)options.FindName("CentralProviderBox")).SelectedValue = "glm";
         Check("unsupported central providers hide and clear speed", toggle.Visibility == Visibility.Collapsed && panel.CentralConfiguration.FastMode == false);
         ((ComboBox)options.FindName("CentralProviderBox")).SelectedValue = "codex";
         Check("central provider changes retain each provider's speed choice", toggle.IsChecked == true && panel.CentralConfiguration.FastMode == true);
@@ -148,7 +148,7 @@ internal static partial class Program
             && AutomationProperties.GetName(toggle) == "Orchestrator fast mode");
         Check("speed toggle preserves model and worker settings", panel.OrchestratorConfiguration.FastMode == true &&
             panel.OrchestratorConfiguration.Model == model && panel.WorkerConfiguration == worker && !host.FastMode);
-        ((ComboBox)panel.FindName("OrchestratorProviderBox")).SelectedValue = "gemini";
+        ((ComboBox)panel.FindName("OrchestratorProviderBox")).SelectedValue = "glm";
         Check("other providers hide the speed toggle", toggle.Visibility == Visibility.Collapsed && panel.OrchestratorConfiguration.FastMode == false);
         ((ComboBox)panel.FindName("OrchestratorProviderBox")).SelectedValue = "codex";
         Check("returning to provider restores its speed choice", toggle.IsChecked == true && panel.OrchestratorConfiguration.FastMode == true);

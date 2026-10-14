@@ -16,14 +16,13 @@ internal static partial class Program
         var originalResources = resources.ToArray();
         try
         {
-            // Even if a global Gemini script exists, Node is absent in this fresh-machine scenario.
+            // Missing-CLI detection is also tested with isolated native CLI resolvers in CliInstallTests.
             Environment.SetEnvironmentVariable("PATH", Environment.GetFolderPath(Environment.SpecialFolder.System));
             Environment.SetEnvironmentVariable("VIBECODE_RUNTIME_DIR", Path.Combine(_root, "missing-cli-tools"));
-            Check("a missing prerequisite offers Gemini setup", !CliInstallationService.IsReady("gemini"));
-            var chat = new ChatViewModel(_root, provider: "gemini"); Chats.Add(chat);
+            var codexMissing = !CliInstallationService.IsReady("codex");
+            var chat = new ChatViewModel(_root, provider: "codex"); Chats.Add(chat);
             chat.AuthNeeded = true;
-            Check("chat's recovery button offers installation directly", chat.SignInButtonText == "Install Gemini CLI"
-                && chat.AuthMessage.Contains("official CLI"));
+            Check("chat's recovery button offers installation directly", chat.SignInButtonText == (codexMissing ? "Install Codex CLI" : "Sign in to Codex"));
             foreach (var theme in new[] { "Dark", "Borderless", "Cli" })
             {
                 resources.Clear();
@@ -35,7 +34,8 @@ internal static partial class Program
                 try
                 {
                     shell.Show(); shell.UpdateLayout();
-                    foreach (var provider in new[] { "claude", "codex", "gemini", "gemini" })
+                    Check(theme + " has no Gemini account or provider UI", shell.FindName("GeminiAccountsPanel") is null && shell.FindName("GeminiProviderToggle") is null);
+                    foreach (var provider in new[] { "claude", "codex" })
                     {
                         Call(shell, "SelectAccountManagerProvider", provider);
                         var label = ((TextBlock)shell.FindName("AccountManagerAddLabel")).Text;

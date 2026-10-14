@@ -184,7 +184,7 @@ public partial class MainWindow
             hint.Text = account is not { IsUsable: true }
                 ? account?.Provider == "glm" ? "Add or reconnect a GLM account in AI accounts, then create your chat."
                     : "Sign in again in AI accounts, then choose an account for this chat."
-                : account.AccountId.Length == 0 && account.Provider != "gemini"
+                : account.AccountId.Length == 0
                     ? "You can install the CLI or sign in after creating this chat."
                     : model?.Description ?? "Your choices apply to this new chat.";
         }

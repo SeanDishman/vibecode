@@ -90,7 +90,7 @@ internal static class Program
 
     private static void RetiredProviderSettings()
     {
-        string[] providers = ["claude", "codex", "gemini", "glm"];
+        string[] providers = ["claude", "codex", "glm"];
         Require(BridgeSetupPanel.Providers.Select(provider => provider.Id).SequenceEqual(providers),
             "Bridge setup lists exactly the supported providers");
         Require(ApiKeyAccountService.Providers.SequenceEqual(["claude", "codex", "glm"]),
@@ -107,8 +107,8 @@ internal static class Program
                 HostWorkerConfiguration = new("retired-provider", "retired-model", null),
                 Peers = [new SavedBridgePane
                          {
-                             Provider = "gemini", SessionId = "supported-peer",
-                             Configuration = new("gemini", "default", null),
+                             Provider = "glm", SessionId = "supported-peer",
+                             Configuration = new("glm", "default", null),
                              WorkerConfiguration = new("retired-provider", "retired-model", null),
                          },
                          new SavedBridgePane { Provider = "retired-provider", SessionId = "retired-peer" }],
@@ -125,7 +125,7 @@ internal static class Program
             "A retired Jarvis selection returns to the supported assistant defaults");
         Require(settings.SavedBridges.Single().HostConfiguration?.Provider == "codex"
                 && settings.SavedBridges.Single().HostWorkerConfiguration is null
-                && settings.SavedBridges.Single().Peers.Single().Configuration?.Provider == "gemini"
+                && settings.SavedBridges.Single().Peers.Single().Configuration?.Provider == "glm"
                 && settings.SavedBridges.Single().Peers.Single().WorkerConfiguration is null,
             "Saved roles preserve supported configurations and release retired launch defaults");
         Require(!settings.NormalizeProviderModelSlots(), "Provider migration is idempotent");

@@ -151,7 +151,7 @@ public sealed class JarvisDialogueService : IJarvisPlanner
         {"kind":"configure_mcp|remove_mcp","target":"existing server name or ID, or new name",
          "config_json":"JSON object encoded as a string, or empty for removal","request_quote":"exact quote"}
         configure_mcp adds a server or PATCHES the matching existing server, preserving omitted fields and its ID.
-        Configuration keys: name, transport (stdio/http/sse), enabled, useClaude, useCodex, useGemini,
+        Configuration keys: name, transport (stdio/http/sse), enabled, useClaude, useCodex,
         command, arguments (array), url, environment (object), headers (object), bearerTokenEnvironmentVariable,
         startupTimeoutSeconds and toolTimeoutSeconds. Use native JSON value types INSIDE config_json.
         Remote servers need a full http/https URL; local stdio servers need the exact executable and argument array.
@@ -340,7 +340,7 @@ public sealed class JarvisDialogueService : IJarvisPlanner
 
     public static void ValidateSelection(JarvisSelection selection)
     {
-        if (selection.Provider is not ("codex" or "claude" or "glm" or "gemini"))
+        if (selection.Provider is not ("codex" or "claude" or "glm"))
             throw new InvalidOperationException("Choose an available Jarvis provider in Settings > Jarvis.");
         if (!ProviderModelCatalog.ModelBelongsTo(selection.Model, selection.Provider))
             throw new InvalidOperationException("The selected Jarvis model belongs to another provider or is retired.");
@@ -385,14 +385,6 @@ public sealed class JarvisDialogueService : IJarvisPlanner
                 AppendSystemPrompt = Instructions,
                 McpServers = [],
                 DialogueOnly = true,
-            }),
-            "gemini" => new GeminiSession(new GeminiSessionOptions
-            {
-                Cwd = workspace,
-                Model = model,
-                PermissionMode = "plan",
-                AppendSystemPrompt = Instructions,
-                McpServers = [],
             }),
             "glm" => new GlmSession(new GlmSessionOptions
             {

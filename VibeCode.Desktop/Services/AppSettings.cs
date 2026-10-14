@@ -226,7 +226,6 @@ public sealed class AppSettings
         IsKnownPermissionMode(mode) ? mode!.Trim() : DefaultPermissionMode;
     public string? DefaultCodexEffort { get; set; }     // null = model default
     public string? DefaultCodexModel { get; set; }      // null = Codex CLI default
-    public string? DefaultGeminiModel { get; set; }
     /// <summary>GLM's own model/effort seeds. They exist for the same reason every other provider has a pair:
     /// without them GLM falls through to <see cref="DefaultModel"/>/<see cref="DefaultEffort"/> — Claude's slots —
     /// and the two providers write over each other. Picking a GLM model would put a <c>zai-org/…</c> id in Claude's
@@ -733,12 +732,12 @@ public sealed class AppSettings
         }
         // Retired providers cannot be reopened as a different provider's conversation.
         OpenChats ??= new List<OpenChatState>();
-        changed |= OpenChats.RemoveAll(chat => !IsSupportedProvider(chat.Provider)) > 0;
-        changed |= SavedBridges.RemoveAll(bridge => !IsSupportedProvider(bridge.Provider)) > 0;
+        changed |= OpenChats.RemoveAll(chat => !IsSupportedProvider(chat.Provider) && chat.Provider != "gemini") > 0;
+        changed |= SavedBridges.RemoveAll(bridge => !IsSupportedProvider(bridge.Provider) && bridge.Provider != "gemini") > 0;
         foreach (var bridge in SavedBridges)
         {
             changed |= bridge.Peers.RemoveAll(peer => !string.IsNullOrWhiteSpace(peer.Provider)
-                                                      && !IsSupportedProvider(peer.Provider)) > 0;
+                                                      && !IsSupportedProvider(peer.Provider) && peer.Provider != "gemini") > 0;
             bridge.HostConfiguration = KeepSupportedConfiguration(bridge.HostConfiguration, ref changed);
             bridge.HostWorkerConfiguration = KeepSupportedConfiguration(bridge.HostWorkerConfiguration, ref changed);
             foreach (var peer in bridge.Peers)
@@ -759,7 +758,7 @@ public sealed class AppSettings
     }
 
     private static readonly HashSet<string> SupportedProviders =
-        new(["claude", "codex", "gemini", Protocol.GlmPreset.ProviderId], StringComparer.OrdinalIgnoreCase);
+        new(["claude", "codex", Protocol.GlmPreset.ProviderId], StringComparer.OrdinalIgnoreCase);
 
     internal static bool IsSupportedProvider(string? provider) =>
         provider is not null && SupportedProviders.Contains(provider.Trim());

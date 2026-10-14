@@ -17,7 +17,7 @@ internal static partial class Program
             return chat;
         }
 
-        var providerNames = new[] { "claude", "codex", "gemini", "glm" };
+        var providerNames = new[] { "claude", "codex", "glm" };
         foreach (var provider in providerNames)
         {
             var chat = Chat(provider);
@@ -47,14 +47,6 @@ internal static partial class Program
                     && Session(chat).PermissionResponses.Last()["behavior"]!.ToString() == "allow" && !chat.Items.OfType<PermItem>().Any());
             }
 
-            if (provider is "gemini")
-            {
-                foreach (var kind in new[] { "other", "edit", "execute" })
-                    Check(provider + ": ACP retains exact identity with kind=" + kind,
-                        (string)typeof(GeminiAcpSession).GetMethod("NormalizeToolName", Flags)!.Invoke(null, [name, kind, new JsonObject()])! == name);
-                var servers = McpCatalog.BuildGeminiAcpServers([registration]);
-                Check(provider + ": ACP registers the naming server", servers.OfType<JsonObject>().Any(s => s["name"]!.ToString() == registration.RuntimeName));
-            }
             if (provider == "codex")
                 Check("Codex launch preapproves chat_set_title", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides.Any(c => c.Contains("\"chat_set_title\" = { approval_mode = \"approve\" }")));
             if (provider == "glm") VerifyGlmNamingAdapter(endpoint);

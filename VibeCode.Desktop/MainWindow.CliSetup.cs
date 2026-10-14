@@ -68,7 +68,6 @@ public partial class MainWindow
         {
             dialog.ShowDialog();
             if (work is not null) await work;
-            if (installed) { _vm.RefreshGeminiAccount(); }
             return installed;
         }
         finally { _cliSetupOpen = false; UpdateAccountManagerProvider(); }

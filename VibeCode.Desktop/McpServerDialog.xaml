@@ -36,7 +36,6 @@
                                 <ComboBox x:Name="AiProviderBox" SelectedValuePath="Tag" SelectionChanged="OnAiProviderChanged" AutomationProperties.Name="MCP setup AI provider">
                                     <ComboBoxItem Content="Claude Code" Tag="claude"/>
                                     <ComboBoxItem Content="OpenAI Codex" Tag="codex"/>
-                                    <ComboBoxItem Content="Gemini" Tag="gemini"/>
                                     </ComboBox>
                             </StackPanel>
                             <StackPanel Grid.Column="2">
@@ -100,7 +99,6 @@
                 <WrapPanel>
                     <CheckBox x:Name="ClaudeCheck" Content="Claude" IsChecked="True" Margin="0,0,22,8"/>
                     <CheckBox x:Name="CodexCheck" Content="Codex" IsChecked="True" Margin="0,0,22,8"/>
-                    <CheckBox x:Name="GeminiCheck" Content="Gemini" IsChecked="True" Margin="0,0,22,8"/>
                     </WrapPanel>
                 <TextBlock x:Name="TransportCompatibility" Foreground="{StaticResource Amber}" FontSize="10.5" TextWrapping="Wrap" Visibility="Collapsed"/>
 
@@ -119,7 +117,6 @@
                         <TextBox x:Name="ToolTimeoutBox" Text="60" AutomationProperties.Name="MCP tool timeout"/>
                     </StackPanel>
                 </Grid>
-                <TextBlock Text="ACP handoff does not carry per-server timeouts; Gemini keeps its native defaults." Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="2,6,0,0"/>
 
                 <CheckBox x:Name="EnabledCheck" Content="Enable this server for new chats" IsChecked="True" Margin="0,18,0,0"/>
 

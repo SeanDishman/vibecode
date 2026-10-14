@@ -18,14 +18,13 @@ public static class CliInstallationService
     static CliInstallationService() => Http.DefaultRequestHeaders.UserAgent.ParseAdd("VibeCode/1.1.4");
     public static string Root => Path.GetFullPath(Environment.GetEnvironmentVariable("VIBECODE_RUNTIME_DIR") is { Length: > 0 } custom
         ? custom : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VibeCode", "runtimes"));
-    public static bool Supports(string provider) => provider is "claude" or "codex" or "gemini";
+    public static bool Supports(string provider) => provider is "claude" or "codex";
     public static string DisplayName(string provider) => provider switch
-    { "claude" => "Claude Code", "codex" => "Codex", "gemini" => "Gemini", _ => provider };
+    { "claude" => "Claude Code", "codex" => "Codex", _ => provider };
 
     public static string? ManagedPath(string provider) => FindInDirectory(provider, Path.Combine(Root, provider));
     internal static string? FindInDirectory(string provider, string directory)
     {
-        if (provider == "gemini") return Existing(Path.Combine(directory, "node_modules", "@google", "gemini-cli", "bundle", "gemini.js"));
         if (provider == "claude") return Existing(Path.Combine(directory, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"));
         if (provider == "codex")
         {
@@ -39,7 +38,7 @@ public static class CliInstallationService
         .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Select(directory => Path.Combine(directory.Trim('"'), name)).FirstOrDefault(File.Exists);
     public static string NodePath => CompatibleNode(Path.Combine(Root, "node", "node.exe")) ?? CompatibleNode(FindOnPath("node.exe"))
-        ?? throw new FileNotFoundException("A supported Node.js version is missing. Choose Install Gemini CLI in the account manager to set it up.");
+        ?? throw new FileNotFoundException("A supported Node.js version is missing. Choose Install CLI in AI accounts to set it up.");
 
     private static string? CompatibleNode(string? path)
     {
@@ -57,9 +56,8 @@ public static class CliInstallationService
             {
                 "claude" => ClaudeSession.ResolveCliPath(),
                 "codex" => CodexSession.ResolveCliPath(),
-                _ => GeminiRuntime.ResolveCliPath(),
+                _ => throw new ArgumentException("Unsupported CLI provider.", nameof(provider)),
             };
-            if (provider == "gemini") _ = NodePath;
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
@@ -95,7 +93,7 @@ public static class CliInstallationService
                 {
                     "claude" => "@anthropic-ai/claude-code@latest",
                     "codex" => "@openai/codex@latest",
-                    _ => $"@google/gemini-cli@{GeminiRuntime.SupportedVersion}",
+                    _ => throw new ArgumentException("Unsupported CLI provider.", nameof(provider)),
                 };
                 var npm = Path.Combine(Path.GetDirectoryName(NodePath)!, "node_modules", "npm", "bin", "npm-cli.js");
                 await RunAsync(NodePath, [npm, "install", "--prefix", staging, package, "--include=optional", "--no-audit", "--no-fund",
@@ -104,8 +102,7 @@ public static class CliInstallationService
                 progress?.Report($"Checking {DisplayName(provider)} CLI…");
                 using var check = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 check.CancelAfter(TimeSpan.FromSeconds(45));
-                if (provider == "gemini") await RunAsync(NodePath, [cli, "--version"], check.Token).ConfigureAwait(false);
-                else await RunAsync(cli, ["--version"], check.Token).ConfigureAwait(false);
+                await RunAsync(cli, ["--version"], check.Token).ConfigureAwait(false);
                 Promote(staging, Path.Combine(Root, provider));
                 ConfigureEnvironment();
                 if (!IsReady(provider)) throw new IOException("The CLI was installed but is not available. Close setup and retry.");

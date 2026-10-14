@@ -43,7 +43,7 @@ internal static partial class Program
         var settings = AppSettings.Current;
         settings.DefaultProvider = "codex";
         var defaults = (settings.DefaultProvider, settings.DefaultCodexModel, settings.DefaultModel,
-            settings.DefaultGeminiModel, settings.DefaultGlmModel, CodexAccountService.Instance.ActiveId);
+            settings.DefaultGlmModel, CodexAccountService.Instance.ActiveId);
         var shell = (MainWindow)typeof(MainWindow).GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
             .Single(c => c.GetParameters().Length == 3).Invoke([vm, null, true]);
         shell.Left = 6100; shell.Top = 300; shell.ShowActivated = shell.ShowInTaskbar = false;
@@ -58,7 +58,7 @@ internal static partial class Program
             var create = Control<Button>(picker.Dialog, "CreateNewChat");
             Check("opening the folder picker creates no chat and keeps the current chat", vm.Chats.Count == 2 && vm.ActiveChat == original);
             Check("folder picker offers every supported provider", provider.Items.Cast<BridgeSetupPanel.ProviderChoice>()
-                .Select(p => p.Id).SequenceEqual(new[] { "claude", "codex", "gemini", "glm" }));
+                .Select(p => p.Id).SequenceEqual(new[] { "claude", "codex", "glm" }));
             Check("folder picker shows both Codex accounts and an expired account", account.Items.Count == 3);
             account.SelectedItem = account.Items.Cast<BridgeAccountChoice>().Single(a => a.AccountId == "personal-picker");
             Check("personal account uses its own live model catalog", model.Items.Cast<ModelChoice>().Single().Value == "personal-model");
@@ -125,7 +125,7 @@ internal static partial class Program
                 Check("the new chat receives the chosen provider, account and model before launch",
                     created.Provider == "codex" && created.AccountId == "work-picker" && created.Model == "work-model");
                 Check("confirming the picker preserves global provider, account and model defaults", defaults ==
-                    (settings.DefaultProvider, settings.DefaultCodexModel, settings.DefaultModel, settings.DefaultGeminiModel,
+                    (settings.DefaultProvider, settings.DefaultCodexModel, settings.DefaultModel,
                         settings.DefaultGlmModel, CodexAccountService.Instance.ActiveId));
                 vm.CloseChat(created);
             }

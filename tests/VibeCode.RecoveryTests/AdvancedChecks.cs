@@ -13,7 +13,7 @@ internal static partial class Program
 {
     private static void SubagentOrbChecks()
     {
-        foreach (var provider in new[] { "claude", "codex", "gemini", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "glm" })
         {
             var (chat, session) = NewChat("orb-" + provider, provider);
             var child = new SubagentItem { ThreadId = "child", Status = "running" };
@@ -125,7 +125,7 @@ internal static partial class Program
             && panel.CentralConfiguration == new BridgeAgentConfiguration("codex", "gpt-6.1-sol", "high", FastMode: false));
         Check("multiple orchestrators expose central planner", ((FrameworkElement)options.FindName("CentralFields")).Visibility == Visibility.Visible);
         var choice = panel.CentralConfiguration;
-        central.SelectedValue = "gemini"; central.SelectedValue = "codex";
+        central.SelectedValue = "glm"; central.SelectedValue = "codex";
         Check("central planner retains its provider-specific model and effort", panel.CentralConfiguration == choice);
         ((ComboBox)panel.FindName("OrchestratorCountBox")).SelectedItem = 1;
         Check("single orchestrator hides unused central planner", ((FrameworkElement)options.FindName("CentralFields")).Visibility == Visibility.Collapsed);
@@ -149,16 +149,8 @@ internal static partial class Program
         VerifyGlmWorkerTeam();
 
         var factory = typeof(BridgeTeamSuggestionService).GetMethod("CreateSession", Flags)!;
-        var previousGeminiPath = Environment.GetEnvironmentVariable("VIBECODE_GEMINI_PATH");
-        Environment.SetEnvironmentVariable("VIBECODE_GEMINI_PATH", Environment.ProcessPath);
-        typeof(ChatViewModel).Assembly.GetType("VibeCode.UI.ProviderModelCatalog")!.GetMethod("Remember")!
-            .Invoke(null, ["gemini", new[] { new ModelChoice
-            {
-                Provider = "gemini", Value = "gemini-fixture-model", Display = "Fixture Gemini model",
-            } }]);
-        try
         {
-            foreach (var provider in new[] { "claude", "codex", "gemini", "glm" })
+            foreach (var provider in new[] { "claude", "codex", "glm" })
             {
                 central.SelectedValue = provider;
                 var models = (ComboBox)options.FindName("CentralModelBox");
@@ -170,7 +162,7 @@ internal static partial class Program
                 var configuration = options.CentralConfiguration;
                 using var session = (ICodingSession)factory.Invoke(null, new object?[] { host, null, configuration, true, null, null })!;
                 Check(provider + " planner uses its own native adapter", session.GetType().Name.Equals(provider + "Session", StringComparison.OrdinalIgnoreCase));
-                var inner = session is GeminiSession ? (ICodingSession)typeof(GeminiSession).GetField("_acp", Flags)!.GetValue(session)! : session;
+                var inner = session;
                 var field = inner.GetType().GetFields(Flags).First(f => f.FieldType.Name.EndsWith("SessionOptions"));
                 var actual = field.GetValue(inner)!;
                 var model = actual.GetType().GetProperty("Model")!.GetValue(actual) as string;
@@ -179,7 +171,6 @@ internal static partial class Program
                 Check(provider + " planner receives the selected effort", actualEffort == effort?.Value);
             }
         }
-        finally { Environment.SetEnvironmentVariable("VIBECODE_GEMINI_PATH", previousGeminiPath); }
     }
 
     private static void SelectRoleModel(BridgeAgentOptionsPanel panel, string name, string model)

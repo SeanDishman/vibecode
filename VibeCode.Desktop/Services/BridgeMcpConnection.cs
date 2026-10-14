@@ -20,7 +20,6 @@ internal sealed class BridgeMcpConnection : IDisposable
     internal static readonly string ChatTitleToolName = "mcp__" + ServerName + "__chat_set_title";
     internal static string ChatTitleToolNameFor(string provider) => provider switch
     {
-        "gemini" => ServerName + "_chat_set_title",
         "glm" => "chat_set_title",
         _ => ChatTitleToolName,
     };
@@ -29,7 +28,6 @@ internal sealed class BridgeMcpConnection : IDisposable
     internal static readonly string TaskTitleToolName = "mcp__" + ServerName + "__" + TaskTitleTool;
     internal static string TaskTitleToolNameFor(string provider) => provider switch
     {
-        "gemini" => ServerName + "_" + TaskTitleTool,
         "glm" => TaskTitleTool,
         _ => TaskTitleToolName,
     };
@@ -46,7 +44,6 @@ internal sealed class BridgeMcpConnection : IDisposable
 
     private static string TitleToolCall(string provider, string name, string function) => provider switch
     {
-        "gemini" => $"Its exact tool name is {name}. Call it directly with the title argument. ",
         "glm" => $"Its exact function name is {function}; call it directly with the title argument. ",
         _ => $"Its full MCP name is {name}. If it is deferred, discover it with tool search and then call it. ",
     };
@@ -61,11 +58,11 @@ internal sealed class BridgeMcpConnection : IDisposable
         return false;
     }
 
-    internal static bool IsChatTitleMcpName(string name) => name == ChatTitleToolName || name == ChatTitleToolNameFor("gemini")
-        || name == TaskTitleToolName || name == TaskTitleToolNameFor("gemini");
+    internal static bool IsChatTitleMcpName(string name) => name == ChatTitleToolName
+        || name == TaskTitleToolName;
 
     internal static bool IsTaskTitleToolName(string name) =>
-    name == TaskTitleToolName || name == TaskTitleToolNameFor("gemini") || name == TaskTitleTool;
+    name == TaskTitleToolName || name == TaskTitleTool;
     private readonly CancellationTokenSource _stop = new();
     private readonly Dispatcher _dispatcher;
     private readonly Func<string, JsonObject, JsonObject> _invoke;
@@ -85,7 +82,7 @@ internal sealed class BridgeMcpConnection : IDisposable
         definition.Id = ManagedId;
         definition.Name = "bridge";
         definition.Arguments[^1] = "--bridge-mcp";
-        definition.UseClaude = definition.UseCodex = definition.UseGemini = true;
+        definition.UseClaude = definition.UseCodex = true;
         definition.Environment[BridgeMcpClient.PipeEnvironment] = PipeName;
         // The helper is a second launch of the whole single-file VibeCode.exe, which unpacks its compressed bundle
         // first: ~1.6 s on an idle machine and 3-5 s when a Bridge starts several agents at once. The 5 s startup

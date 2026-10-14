@@ -286,10 +286,7 @@ internal static class ProviderModelCatalog
         "claude" => ClaudeFallback(),
 
         "codex" => CodexFallback(),
-        "gemini" =>
-        [
-            Choice("gemini", "default", "Gemini default", "Google sign-in supplies the models available to your account."),
-        ],
+        "gemini" => [], // Saved chats remain read-only; no launchable models.
         // Model IDs and reasoning capabilities depend on the selected GLM service.
         GlmPreset.ProviderId =>
             GlmPreset.ModelsFor(ApiKeyAccountService.Instance.SelectedGlmBackend).Select(m => (Value: m.Value, Display: m.Display, Description: m.Description, Resolved: m.Value))

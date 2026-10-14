@@ -9,7 +9,7 @@ public static partial class SessionCatalog
     {
         try
         {
-            if (!File.Exists(GeminiSessionUsage.IndexPath) || JsonNode.Parse(File.ReadAllText(GeminiSessionUsage.IndexPath)) is not JsonObject index) return;
+            if (!File.Exists(LegacyGeminiHistory.IndexPath) || JsonNode.Parse(File.ReadAllText(LegacyGeminiHistory.IndexPath)) is not JsonObject index) return;
             foreach (var (id, value) in index)
             {
                 if (allowedSessionIds is not null && !allowedSessionIds.Contains(id)) continue;

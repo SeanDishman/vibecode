@@ -45,7 +45,7 @@ internal static partial class Program
         { ["is_error"] = false, ["result"] = "Falling back from WebSockets to HTTPS: 503 Service Unavailable" }));
 
         AppSettings.Current.ContinueAfterLimitResets = false;
-        foreach (var provider in new[] { "codex", "claude", "gemini", "glm" })
+        foreach (var provider in new[] { "codex", "claude", "glm" })
             foreach (var manager in new[] { false, true })
             {
                 var (chat, session) = AdvancedRetryChat(provider + "-retry-" + manager, manager, provider);

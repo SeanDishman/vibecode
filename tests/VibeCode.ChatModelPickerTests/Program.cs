@@ -65,7 +65,7 @@ internal static partial class Program
     private static void VerifyChatIsolation()
     {
         var vm = new MainViewModel();
-        foreach (var provider in new[] { "codex", "claude", "gemini", "glm" })
+        foreach (var provider in new[] { "codex", "claude", "glm" })
         {
             AppSettings.Current.DefaultProvider = provider == "claude" ? "codex" : "claude";
             foreach (var bridge in new[] { false, true })
@@ -77,7 +77,7 @@ internal static partial class Program
         }
         vm.ActiveChat = vm.Chats.First(c => c.IsCodex && !c.IsBridgeAgent);
         vm.SecondaryActiveChat = vm.Chats.First(c => c.IsClaude && !c.IsBridgeAgent);
-        foreach (var selectedProvider in new[] { "claude", "codex", "gemini", "glm" })
+        foreach (var selectedProvider in new[] { "claude", "codex", "glm" })
         {
             AppSettings.Current.DefaultProvider = selectedProvider;
             AppSettings.Current.ActiveAccountId = "claude-other";

@@ -9,8 +9,6 @@ public sealed partial class ChatViewModel
     private void CommitUnfinishedUsage()
     {
         if (_unfinishedUsageRecorded) return;
-        var geminiReport = (_session as VibeCode.Protocol.GeminiSession)?.UsageSnapshot();
-        if (geminiReport is not null) SetLiveUsage(UsageOf(geminiReport["usage"]));
         if (!_liveTurnUsage.HasTokens) return;
         var usage = _liveTurnUsage;
         var cost = LiveEstimatedCost;
@@ -18,13 +16,7 @@ public sealed partial class ChatViewModel
         TotalOut = _totalOut + usage.Output;
         TotalTokens = _totalTokens + usage.Total;
         _estCost += cost;
-        if (geminiReport?["modelUsage"] is System.Text.Json.Nodes.JsonObject geminiModels && geminiModels.Count > 0)
-        {
-            foreach (var (model, tokens) in geminiModels)
-                LogTurnUsage(DoubleOrZero(tokens?["inputTokens"]), 0, DoubleOrZero(tokens?["cacheReadInputTokens"]),
-                    DoubleOrZero(tokens?["outputTokens"]), 0, reported: true, model: model);
-        }
-        else LogTurnUsage(usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, cost, reported: false, model: UsageModel);
+        LogTurnUsage(usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, cost, reported: false, model: UsageModel);
         _unfinishedUsageRecorded = true;
         ResetLiveUsage();
     }

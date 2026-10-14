@@ -204,7 +204,7 @@ public partial class MemoryMapWindow : Window, INotifyPropertyChanged
             : $"Delete all {remembered:N0} remembered items across {sessions:N0} chat sessions?";
         if (MessageBox.Show(this,
                 $"{scale}\n\nThis erases every memory, session, and observation from the shared brain that "
-                + "Claude, Codex, and Gemini all read from — plus the cached map and any queued writes.\n\n"
+                + "Claude and Codex read from — plus the cached map and any queued writes.\n\n"
                 + "It cannot be undone.",
                 "Delete all memories", MessageBoxButton.YesNo, MessageBoxImage.Warning,
                 MessageBoxResult.No) != MessageBoxResult.Yes) return;

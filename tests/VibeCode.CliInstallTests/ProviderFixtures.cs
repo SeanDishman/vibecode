@@ -10,9 +10,4 @@ namespace VibeCode.Protocol
 }
 namespace VibeCode.Services
 {
-    public static class GeminiRuntime
-    {
-        public const string SupportedVersion = "0.63.0";
-        public static string ResolveCliPath() => CliInstallationService.ManagedPath("gemini") ?? throw new FileNotFoundException();
-    }
 }

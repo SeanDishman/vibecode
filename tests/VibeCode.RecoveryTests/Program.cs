@@ -153,7 +153,7 @@ internal static partial class Program
     private static void ChatChecks()
     {
         AppSettings.Current.ContinueAfterLimitResets = true;
-        foreach (var provider in new[] { "claude", "codex", "gemini", "glm" })
+        foreach (var provider in new[] { "claude", "codex", "glm" })
             foreach (var role in new[] { "chat", "bridge", "advanced-worker", "advanced-orchestrator" })
             {
                 var (chat, session) = NewChat(provider + "-" + role, provider);

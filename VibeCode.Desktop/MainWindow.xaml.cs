@@ -1193,7 +1193,6 @@ public partial class MainWindow : Window
             await ShowStartupStepAsync("Starting background services…", 88, 4);
             StartTokenRefresh();    // keep every account's OAuth token fresh so per-account chats don't hit the ~8h expiry
             StartCodexAccountRefresh(); // VibeCode owns this OpenAI session and refreshes it even when no Codex chat is open
-            GeminiUsageService.Instance.Refresh();
             StartAccountUsagePolling(); // pre-warm + periodically refresh each account's session/week usage so changes surface
             StartSpotifyPolling();  // keep the Spotify mini-menu's now-playing fresh (no-op while the extension is off)
             StartWeatherPolling();  // keep the titlebar weather chip current (no-op while the extension is off)
@@ -2436,18 +2435,15 @@ public partial class MainWindow : Window
         provider = provider?.Trim().ToLowerInvariant() switch
         {
             "codex" => "codex",
-            "gemini" => "gemini",
             Protocol.GlmPreset.ProviderId => Protocol.GlmPreset.ProviderId,
             _ => "claude",
         };
         ClaudeProviderToggle.IsChecked = provider == "claude";
         CodexProviderToggle.IsChecked = provider == "codex";
-        GeminiProviderToggle.IsChecked = provider == "gemini";
         GlmProviderToggle.IsChecked = provider == Protocol.GlmPreset.ProviderId;
         CwdHint.Text = provider switch
         {
             "codex" => "AGENTS.md, skills, plugins and MCP servers load through VibeCode's managed Codex runtime.",
-            "gemini" => "GEMINI.md, skills, extensions and MCP tools load through the official Gemini CLI. Sign in with Google to use your AI Pro plan.",
             Protocol.GlmPreset.ProviderId when !HasGlmKey =>
                 "No GLM account connected yet — open accounts and choose Add GLM account. "
                 + "Connect Z.ai Coding Plan, Z.ai API, or Baseten with its account key.",
@@ -2622,12 +2618,6 @@ public partial class MainWindow : Window
         {
             await SignInToCodexAsync();
             if (_vm.IsCodexSignedIn) codexChat.RetryAfterSignIn();
-            return;
-        }
-        if (ActiveChatForWindow is { IsGemini: true } geminiChat)
-        {
-            await ManageGeminiAccountAsync(signIn: true);
-            if (_vm.IsGeminiSignedIn) geminiChat.RetryAfterSignIn();
             return;
         }
         try
@@ -3041,8 +3031,6 @@ public partial class MainWindow : Window
         _vm.ApplyCodexAccounts(CodexAccountService.Instance.List());
         KickAccountUsage();
         KickCodexAccountRefresh(forceRefresh: false); // refresh the OpenAI row's plan + rolling usage on every open
-        _vm.RefreshGeminiAccount();
-        GeminiUsageService.Instance.Refresh();
         SelectAccountManagerProvider(AppSettings.Current.DefaultProvider);
         RefreshAccountManagerViews();
         AccountManagerOverlay.Visibility = Visibility.Visible;
@@ -3128,7 +3116,7 @@ public partial class MainWindow : Window
     private void UpdateAccountManagerProvider()
     {
         // SelectionChanged can fire while InitializeComponent is still constructing the controls below the picker.
-        if (AllAccountsPanel is null || ClaudeAccountsPanel is null || CodexAccountsPanel is null || GlmAccountsPanel is null || GeminiAccountsPanel is null
+        if (AllAccountsPanel is null || ClaudeAccountsPanel is null || CodexAccountsPanel is null || GlmAccountsPanel is null
             || AccountManagerAddButton is null || AccountManagerAddLabel is null
             || AccountManagerFooterHint is null || AccountSortCombo is null)
             return;
@@ -3138,7 +3126,6 @@ public partial class MainWindow : Window
         AllAccountsPanel.Visibility = provider == "all" ? Visibility.Visible : Visibility.Collapsed;
         ClaudeAccountsPanel.Visibility = provider == "claude" ? Visibility.Visible : Visibility.Collapsed;
         CodexAccountsPanel.Visibility = provider == "codex" ? Visibility.Visible : Visibility.Collapsed;
-        GeminiAccountsPanel.Visibility = provider == "gemini" ? Visibility.Visible : Visibility.Collapsed;
         GlmAccountsPanel.Visibility = glm ? Visibility.Visible : Visibility.Collapsed;
         if (glm) RefreshGlmUsage();
         // Sorting and status filtering are about saved LOGINS - usage, plan, sign-in state. A key has none of
@@ -3153,7 +3140,6 @@ public partial class MainWindow : Window
         {
             "all" => ("Choose a provider to add", "Showing every account. Select a provider above before adding another."),
             "codex" => ("Add Codex account", "Click to switch · right-click to test or remove · saved date appears at right."),
-            "gemini" => ("Sign in with Google", "Gemini uses the Google account connected through Gemini CLI. AI Pro and Ultra subscriptions are supported."),
             _ when glm => ("Add GLM account", "Connect Z.ai Coding Plan, Z.ai API, or Baseten. Click an account to use it for new chats; key fallback stays within that service."),
             _ => ("Add Claude account", "Click to switch · right-click to test or remove · saved date appears at right."),
         };
@@ -3250,7 +3236,6 @@ public partial class MainWindow : Window
         {
             "all" => (allVisible, _vm.AllAccounts.Count),
             "codex" => (codexVisible, _vm.CodexAccounts.Count),
-            "gemini" => (1, 1),
             // GLM's rows are keys, not accounts. Without this it fell through to Claude's branch and the header
             // read "3 accounts" over a panel listing one key.
             _ when Protocol.GlmPreset.Is(provider) => GlmKeyCounts(),
@@ -3296,10 +3281,6 @@ public partial class MainWindow : Window
                     codex.Id, codex.Label, codex.ProviderLine, codex.PlanDisplay, codex.UsageDisplay,
                     codex.Email, codex.Usable, codex.AtLimit, codex.IsVibeCodeSelected, codex.IsCurrent,
                     AccountUsageScore(codex.SessionPercent, codex.WeekPercent, codex.AtLimit), codex.SavedAt);
-                return true;
-            case GeminiAccountEntry gemini:
-                account = new AccountManagerDescriptor("gemini", gemini.Label, gemini.ProviderLine, "Gemini", gemini.UsageDisplay,
-                    "", gemini.Usable, false, gemini.IsVibeCodeSelected, gemini.IsVibeCodeSelected, null, DateTime.MinValue);
                 return true;
             default:
                 account = default;
@@ -3371,7 +3352,6 @@ public partial class MainWindow : Window
         {
             AccountInfo => 0,
             CodexAccountInfo => 1,
-            GeminiAccountEntry => 5,
             _ => 4,
         };
 
@@ -3748,11 +3728,6 @@ public partial class MainWindow : Window
         if (provider == "codex")
         {
             await SignInToCodexAsync();
-            return;
-        }
-        if (provider == "gemini")
-        {
-            await ManageGeminiAccountAsync(signIn: true);
             return;
         }
         if (Protocol.GlmPreset.Is(provider))

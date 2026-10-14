@@ -34,7 +34,6 @@ public partial class McpServerDialog : Window
             BearerBox.Text = value.BearerTokenEnvironmentVariable ?? "";
             ClaudeCheck.IsChecked = value.UseClaude;
             CodexCheck.IsChecked = value.UseCodex;
-            GeminiCheck.IsChecked = value.UseGemini;
             EnabledCheck.IsChecked = value.Enabled;
             StartupTimeoutBox.Text = value.StartupTimeoutSeconds.ToString();
             ToolTimeoutBox.Text = value.ToolTimeoutSeconds.ToString();
@@ -72,7 +71,7 @@ public partial class McpServerDialog : Window
         if (sse) CodexCheck.IsChecked = false;
         CodexCheck.IsEnabled = !sse;
         TransportCompatibility.Text = sse
-            ? "Current Codex releases do not support legacy SSE. Claude and Gemini remain available; use Streamable HTTP when the server offers it."
+            ? "Current Codex releases do not support legacy SSE. Claude remains available; use Streamable HTTP when the server offers it."
             : "";
         TransportCompatibility.Visibility = sse ? Visibility.Visible : Visibility.Collapsed;
         HideValidation();
@@ -154,7 +153,6 @@ public partial class McpServerDialog : Window
         BearerBox.Text = value.BearerTokenEnvironmentVariable ?? "";
         ClaudeCheck.IsChecked = value.UseClaude;
         CodexCheck.IsChecked = value.UseCodex && value.Transport != McpCatalog.SseTransport;
-        GeminiCheck.IsChecked = value.UseGemini;
         EnabledCheck.IsChecked = true;
         StartupTimeoutBox.Text = value.StartupTimeoutSeconds.ToString();
         ToolTimeoutBox.Text = value.ToolTimeoutSeconds.ToString();
@@ -237,7 +235,6 @@ public partial class McpServerDialog : Window
             Enabled = EnabledCheck.IsChecked == true,
             UseClaude = ClaudeCheck.IsChecked == true,
             UseCodex = CodexCheck.IsChecked == true && transport != McpCatalog.SseTransport,
-            UseGemini = GeminiCheck.IsChecked == true,
             Command = CommandBox.Text.Trim(),
             Arguments = ArgumentsBox.Text.Replace("\r\n", "\n").Split('\n')
                 .Where(argument => argument.Length > 0).ToList(),

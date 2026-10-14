@@ -79,7 +79,7 @@ internal static partial class Program
         var providers = providerBox.Items.OfType<BridgeProviderChoice>().ToArray();
         Check("provider picker lists every provider and enables only signed-in choices", providers.Select(p => p.Id)
             .SequenceEqual(BridgeSetupPanel.Providers.Select(p => p.Id))
-            && providers.All(p => p.IsUsable == (p.Id != "gemini")) && providerBox.IsEnabled);
+            && providers.All(p => p.IsUsable) && providerBox.IsEnabled);
         Check("provider picker starts on the host's provider and counts its accounts",
             panel.PeerProvider?.Id == "codex" && providers.Single(p => p.Id == "codex").Detail == "5 accounts" &&
             providers.Single(p => p.Id == "claude").Detail == "1 account" && providers.Single(p => p.Id == "glm").Detail == "1 account");

@@ -16,8 +16,6 @@ public sealed record BridgeAccountChoice(string Provider, string AccountId, stri
             "claude", a.Id, a.Label, a.ProviderLine, a.Usable, a.IsCurrent && keys.SelectedFor("claude") is null)));
         choices.AddRange(CodexAccountService.Instance.List().Select(a => new BridgeAccountChoice(
             "codex", a.Id, a.Label, a.ProviderLine, a.Usable, a.IsCurrent && keys.SelectedFor("codex") is null)));
-        if (GeminiRuntime.HasLogin)
-            choices.Add(new("gemini", "", GeminiRuntime.AccountEmail ?? "Google account", "Gemini · Google sign-in", GeminiRuntime.IsInstalled, true));
         foreach (var provider in ApiKeyAccountService.Providers)
         {
             var providerLabel = BridgeSetupPanel.Providers.First(p => p.Id == provider).Label;
@@ -30,7 +28,7 @@ public sealed record BridgeAccountChoice(string Provider, string AccountId, stri
             .Select(g => g.Key).ToHashSet();
         return choices.Select(a => duplicateNames.Contains((a.Provider, a.Label, a.Detail))
                 ? a with { Label = $"{a.Label} · {a.AccountId[^Math.Min(6, a.AccountId.Length)..]}" } : a)
-            .OrderBy(a => Array.IndexOf(new[] { "claude", "codex", "gemini", "glm" }, a.Provider))
+            .OrderBy(a => Array.IndexOf(new[] { "claude", "codex", "glm" }, a.Provider))
             .ThenByDescending(a => a.IsDefault).ThenBy(a => a.Label, StringComparer.CurrentCultureIgnoreCase).ToArray();
     }
 

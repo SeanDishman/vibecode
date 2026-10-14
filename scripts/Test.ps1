@@ -28,13 +28,12 @@ try {
     Invoke-Regression VibeCode.PublicTests
     Invoke-Regression VibeCode.ChatModelPickerTests
     Invoke-Regression VibeCode.CliInstallTests
-    Invoke-Regression VibeCode.GeminiTests @('--fixtures-only')
     Invoke-Regression VibeCode.UsageAccountingTests
     Invoke-Regression VibeCode.BridgeUsageTests
     Invoke-Regression VibeCode.AutoScrollTests
     Invoke-Regression VibeCode.BridgeTerminalTests
     Invoke-Regression VibeCode.BridgeTerminalTests @('--cli-setup-only')
-    Invoke-Regression VibeCode.BridgeTerminalTests @('--gemini-only')
+    Invoke-Regression VibeCode.BridgeTerminalTests @('--removed-gemini-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--ultrafast-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--bridge-accounts-only')
     Invoke-Regression VibeCode.BridgeTerminalTests @('--jarvis-only')

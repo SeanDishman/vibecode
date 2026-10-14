@@ -75,7 +75,7 @@ internal static partial class Program
             Check("advanced orchestrators can honor an explicit native-child request",
                 BridgeOrchestratorPolicy.Instructions.Contains("If the user explicitly asks you to create native subagents")
                 && !BridgeOrchestratorPolicy.Instructions.Contains("Do not create native subagents"));
-            Check("unsupported providers are not promised native child tools", SwarmPolicy.SessionRuntimeRule("gemini", 6) == "");
+            Check("unsupported providers are not promised native child tools", SwarmPolicy.SessionRuntimeRule("glm", 6) == "");
             Check("worker slider range remains bounded", SwarmPolicy.ClampMaxWorkers(0) == 2
                 && SwarmPolicy.ClampMaxWorkers(int.MaxValue) == 16);
 

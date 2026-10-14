@@ -9,7 +9,7 @@ namespace VibeCode.Services;
 public static class JarvisSettingsActions
 {
     private static readonly string[] McpFields =
-        ["Name", "Transport", "Enabled", "UseClaude", "UseCodex", "UseGemini", "Command", "Arguments", "Url",
+        ["Name", "Transport", "Enabled", "UseClaude", "UseCodex", "Command", "Arguments", "Url",
          "Environment", "Headers", "BearerTokenEnvironmentVariable", "StartupTimeoutSeconds", "ToolTimeoutSeconds"];
 
     public static bool IsSettingsAction(string kind) => kind is
