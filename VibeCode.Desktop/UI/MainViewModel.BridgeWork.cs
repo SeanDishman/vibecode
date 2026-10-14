@@ -45,6 +45,7 @@ public sealed partial class MainViewModel
             ["central_orchestrator"] = CentralPlanJson(work),
             ["coordination_ready"] = CoordinationReady(bridge.Panes),
             ["orchestrator_communication_locked"] = work.DispatchStarted,
+            ["paused_workers"] = new JsonArray(work.PausedWorkers.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
             ["completed_steps"] = work.Tasks.Count(t => t.State == "completed"),
             ["total_steps"] = work.Tasks.Count,
             ["file_activity_policy"] = "Advisory only. Every agent may edit shared files; these are not exclusive claims or locks.",
@@ -104,6 +105,7 @@ public sealed partial class MainViewModel
         var worker = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == args["recipient"]!.GetValue<string>());
         if (worker is null) throw new StatusValidationException("Worker is not in this bridge. Refresh bridge_list_agents.");
         RequireOwnedWorker(manager, worker, bridge);
+        if (worker.BridgeWorkerPaused) throw new StatusValidationException("Worker is stopped by its orchestrator. Inspect interrupted work and use bridge_retry_task, or bridge_resume_worker before new assignments.");
         if (worker.Status is "closed" or "error") throw new StatusValidationException("Worker is not accepting work. Recover its session before dispatching.");
         var work = WorkFor(bridge.Panes);
         var id = args["task_id"]?.GetValue<string>() ?? Guid.NewGuid().ToString("N");
@@ -154,7 +156,7 @@ public sealed partial class MainViewModel
             if (!work.Ready(task) || work.Tasks.Any(t => t.OwnerId == task.OwnerId && t.Active)) continue;
             var worker = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == task.OwnerId);
             var manager = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == task.CoordinatorId && p.IsBridgeManager);
-            if (worker is null || manager is null || worker.Status != "idle" || worker.HasQueued) continue;
+            if (worker is null || manager is null || worker.Status != "idle" || worker.HasQueued || worker.BridgeWorkerPaused) continue;
             task.State = "dispatching";
             task.Attempt++;
             task.UpdatedAt = DateTimeOffset.UtcNow;
@@ -197,6 +199,12 @@ public sealed partial class MainViewModel
         var coordinator = caller.IsBridgeManager && task.CoordinatorId == caller.BridgeAgentId;
         if (!coordinator && (retry || task.OwnerId != caller.BridgeAgentId))
             throw new StatusValidationException("Only the task owner or its orchestrator may update it; only its orchestrator may retry it.");
+        var previousOwnerId = task.OwnerId;
+        var previousState = task.State;
+        var previousInstruction = task.Instruction;
+        var previousEvidence = task.Evidence;
+        ChatViewModel? resumedWorker = null;
+        var wasPaused = false;
         if (retry)
         {
             if (task.State is not ("failed" or "interrupted" or "blocked") || task.Instruction.Length == 0)
@@ -207,7 +215,10 @@ public sealed partial class MainViewModel
             var worker = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == ownerId);
             if (worker is null) throw new StatusValidationException("The task owner has left this bridge.");
             RequireOwnedWorker(caller, worker, bridge);
-            if (worker.IsWorking) throw new StatusValidationException("Wait for the owner's current turn to end before retrying.");
+            if (worker.ManagedWorkerResumeError is { } error) throw new StatusValidationException(error);
+            resumedWorker = worker;
+            wasPaused = work.PausedWorkers.Remove(worker.BridgeAgentId);
+            if (args["message"] is not null) task.Instruction = args["message"]!.GetValue<string>();
             task.OwnerId = worker.BridgeAgentId;
             task.State = "queued";
             task.Evidence = "";
@@ -226,7 +237,21 @@ public sealed partial class MainViewModel
             if (args.ContainsKey("files")) task.Files = TaskStrings(args["files"]);
         }
         task.UpdatedAt = DateTimeOffset.UtcNow;
-        SaveWork(bridge);
+        try { SaveWork(bridge); }
+        catch
+        {
+            // A failed restart must not leave a runnable assignment in memory for a later status event.
+            if (retry)
+            {
+                task.OwnerId = previousOwnerId;
+                task.State = previousState;
+                task.Instruction = previousInstruction;
+                task.Evidence = previousEvidence;
+                if (wasPaused) work.PausedWorkers.Add(resumedWorker!.BridgeAgentId);
+            }
+            throw;
+        }
+        resumedWorker?.ResumeManagedWorker();
         ScheduleReadyTasks(caller);
         return TaskJson(task, work);
     }
@@ -242,6 +267,13 @@ public sealed partial class MainViewModel
 
     private void RecordBridgeTaskTurn(ChatViewModel worker, LiveBridge bridge, bool turnEnded)
     {
+        if (worker.BridgeWorkerPaused && worker.ManagedWorkerStopAwaitingReport && worker.Status is "idle" or "error")
+        {
+            worker.ManagedWorkerStopAwaitingReport = false;
+            if (CoordinatorFor(worker, bridge.Panes) is { } manager)
+                SendManagerUpdate(manager, $"{worker.BridgeTerminalIdentity} has stopped. Its chat and existing work are retained, and its queue is held. " +
+                    "Inspect existing changes, then use bridge_retry_task with an optional revised message for interrupted work, or bridge_resume_worker if there is no interrupted assignment.");
+        }
         if (worker.IsBridgeManager || worker.IsPeerNotificationTurn || worker.WaitingForLimitReset || worker.WaitingForBridgeRetry || worker.IsCompactingContext) return;
         var work = WorkFor(bridge.Panes);
         var task = work.Tasks.FirstOrDefault(t => t.OwnerId == worker.BridgeAgentId && t.Active);

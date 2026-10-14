@@ -45,6 +45,9 @@ public sealed partial class MainViewModel
                 ["review_pass_limit"] = BridgeReviewPolicy.Choice(p.BridgeReviewLevel).PassLimit,
                 ["task_name"] = p.BridgeTaskName,
                 ["task_state"] = p.BridgeTaskState,
+                ["paused"] = p.BridgeWorkerPaused,
+                ["can_control_worker"] = caller.IsBridgeManager && caller.BridgeCoordinatesOnly &&
+                    !p.IsBridgeManager && ReferenceEquals(CoordinatorFor(p, bridge.Panes), caller),
                 ["file_activity"] = p.BridgeFileActivity,
                 ["recent_edits"] = RecentEditsJson(p.BridgeAgentId, rosterEdits ??= BridgeEditsFor(bridge), DateTimeOffset.UtcNow),
                 ["can_receive_messages"] = p.AcceptsPeerNotifications,
@@ -76,6 +79,8 @@ public sealed partial class MainViewModel
         }
         if (tool == "bridge_set_task_title") return SetBridgeTaskTitle(caller, args);
         if (tool == "bridge_dispatch_task") return DispatchDurableTask(caller, bridge, args);
+        if (tool == "bridge_stop_worker") return StopBridgeWorker(caller, bridge, args);
+        if (tool == "bridge_resume_worker") return ResumeBridgeWorker(caller, bridge, args);
         if (tool == "bridge_list_tasks") return ListBridgeTasks(bridge);
         if (tool == "bridge_file_edits") return ListBridgeFileEdits(caller, bridge, args);
         if (tool == "bridge_agent_status") return BridgeAgentStatus(caller, bridge, args);

@@ -132,7 +132,7 @@ public sealed partial class ChatViewModel
         "changes_requested" => "Changes requested",
         _ => BridgeReviewLevel == "none" ? "Review off" : "Final review pending",
     };
-    public string BridgeAvailabilityText => WaitingForBridgeRetry ? BridgeRetryText : Status is "closed" or "error" ? Status : BridgeTaskState switch
+    public string BridgeAvailabilityText => BridgeWorkerPaused ? IsWorking ? "Stopping" : "Stopped by orchestrator" : WaitingForBridgeRetry ? BridgeRetryText : Status is "closed" or "error" ? Status : BridgeTaskState switch
     {
         "completed" => Status == "idle" ? "Completed" : Status,
         "interrupted" => "Interrupted",

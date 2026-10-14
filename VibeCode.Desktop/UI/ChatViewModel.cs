@@ -135,8 +135,8 @@ public sealed partial class ChatViewModel : Observable
     /// session id: that one is resumable and gets written into settings, and a handset should not be able to name
     /// anything that outlives the window it is looking at.</summary>
     public string BridgeId { get; } = Guid.NewGuid().ToString("n")[..12];
-    public string? ResumeSessionId { get; }
-    public bool ForkSession { get; }
+    public string? ResumeSessionId { get; private set; }
+    public bool ForkSession { get; private set; }
     public string Provider { get; }
     public bool IsCodex => Provider == "codex";
     public bool IsGemini => Provider == "gemini";
@@ -1006,7 +1006,7 @@ public sealed partial class ChatViewModel : Observable
     public bool CanInterrupt => _status == "running" || WaitingForLimitReset || WaitingForBridgeRetry;
     /// <summary>The queue-head action can interrupt a live turn, dispatch early while the provider is starting, or
     /// retry after a failed turn (an errored pane never drains its queue on its own).</summary>
-    public bool CanSendQueuedNow => HasQueued && !RewindHoldsDispatch && !_interruptRequested && !_sendAllQueuedNowRequested
+    public bool CanSendQueuedNow => HasQueued && !BridgeWorkerPaused && !RewindHoldsDispatch && !_interruptRequested && !_sendAllQueuedNowRequested
                                     && !_steerSubmitting && !_steerQueueHold
                                     && (_status is "starting" or "running"
                                         || ExtendedQueuePaused && _sendQueue.TryPeek(out var head) && head.Extended
@@ -2088,7 +2088,7 @@ public sealed partial class ChatViewModel : Observable
     /// <summary>Actually dispatch a message to the CLI. Null means rewind is holding dispatch.</summary>
     private UserItem? SendNow(string text, IReadOnlyList<Attachment>? atts, bool goalCheck = false)
     {
-        if (RewindHoldsDispatch) return null;
+        if (RewindHoldsDispatch || BridgeWorkerPaused) return null;
         CancelBridgeErrorRecovery();
         CancelLimitRecovery();
         var wasStarting = _status == "starting";
@@ -2207,6 +2207,12 @@ public sealed partial class ChatViewModel : Observable
             return;
         }
 
+        if (StopManagedPreparation(userItem))
+        {
+            checkpoint.AbandonBeforeDispatch();
+            return;
+        }
+
         checkpoint.Activate();
         userItem.AttachRollbackCheckpoint(checkpoint);
         _activeRollback = checkpoint;
@@ -2289,7 +2295,7 @@ public sealed partial class ChatViewModel : Observable
         var canDispatch = _status == "idle" || (allowStarting && _status == "starting");
         // Stop reports idle before the checkpoint finishes sealing. Hold both queued prompts and peer notices
         // until any manual or automatic rewind has finished restoring files and trimming the transcript.
-        if (!canDispatch || RewindHoldsDispatch || _steerSubmitting || _steerQueueHold) return;
+        if (!canDispatch || RewindHoldsDispatch || BridgeWorkerPaused || _steerSubmitting || _steerQueueHold) return;
         // A peer arrival only starts its own short control turn at a natural idle boundary. The user's
         // pending cards and pause state stay intact, including when their extended queue is paused.
         if (FlushPeerNotifications()) return;
@@ -2894,9 +2900,11 @@ public sealed partial class ChatViewModel : Observable
         _ => "",
     };
 
-    public void Interrupt()
+    public void Interrupt() => InterruptCore(pauseBridgePlan: true);
+
+    private void InterruptCore(bool pauseBridgePlan)
     {
-        if (BridgeWork is { } work) work.IdlePlanRemindersPaused = true;
+        if (pauseBridgePlan && BridgeWork is { } work) work.IdlePlanRemindersPaused = true;
         if (WaitingForBridgeRetry)
         {
             CancelBridgeErrorRecovery();

@@ -8,6 +8,7 @@ public sealed class BridgeWorkState
     public string RunId { get; set; } = Guid.NewGuid().ToString("N");
     public int PlanVersion { get; set; } = 1;
     public bool DispatchStarted { get; set; }
+    public HashSet<string> PausedWorkers { get; set; } = new();
     public string OrchestratorRoster { get; set; } = "";
     public Dictionary<string, int> ConfirmedVersions { get; set; } = new();
     public Dictionary<string, string> Scopes { get; set; } = new();

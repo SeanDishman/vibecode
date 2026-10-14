@@ -3459,6 +3459,7 @@ public sealed partial class MainViewModel : Observable
         // and receipts above, but do not wake the manager's work-completion loop for it.
         if (c.IsPeerNotificationTurn || c.WaitingForLimitReset) return;
         RecordBridgeTaskTurn(c, bridge, turnEnded);
+        if (c.BridgeWorkerPaused) return; // The explicit stop receipt replaces a misleading normal completion report.
 
         // Advanced orchestration uses durable tools; text dispatch blocks never deliver work orders.
         if (c.IsBridgeManager)

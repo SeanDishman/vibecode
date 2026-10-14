@@ -51,7 +51,7 @@ public static class BridgeMcpTools
         "Files listed on tasks are advisory activity hints, NEVER exclusive ownership or editing locks. Everyone may edit a shared file; coordinate overlapping changes. " +
         "VibeCode automatically records which agent edited which lines of which file, kept for 7 days. Before changing code a peer may have touched, call bridge_file_edits with that path (add start_line and end_line for specific lines) to see who changed it, where and when; bridge_list_agents also shows each agent's recent_edits. This is history, never a lock. " +
         "To learn whether a peer is still working or has already finished before you take over its area, call bridge_agent_status (optionally with agent) instead of guessing; busy=false means it is not doing anything now. " +
-        "Include meaningful evidence for substantial work when useful; evidence is optional for simple tasks. Interrupted tasks require an explicit bridge_retry_task after checking existing work. " +
+        "Include meaningful evidence for substantial work when useful; evidence is optional for simple tasks. Orchestrators may use bridge_stop_worker only on their own workers, keeping chats and queued work intact. Wait for stop_pending to clear. Interrupted tasks require an explicit bridge_retry_task after checking existing work; its optional message revises instructions. bridge_resume_worker releases other held work without replaying interrupted assignments. " +
         "The roster exposes runtime status, task_state, unread_messages and peer_message_delivery. Do not send acknowledgments or speculative messages to idle/completed peers. Worker messages stay in the inbox without waking a model; use dispatch for real new assignments. " +
         "Respect each agent's user-selected review_level and review_pass_limit. None skips optional review, low permits one quick pass, normal one focused pass, and high up to two passes. Required work and user-requested checks still apply. " +
         "Orchestrators record scope completion with bridge_review_scope: approved after the configured reviews, or changes_requested for defects. At level none, approved records review_state=skipped rather than claiming a passed review. " +
@@ -113,8 +113,14 @@ public static class BridgeMcpTools
             [new("task_id", "Durable task ID from dispatch or bridge_list_tasks.", 64), new("status", "running, blocked, completed or failed.", 20),
              new("summary", "Actual progress, outcome, or blocker.", 1800), new("evidence", "Optional checks, paths, commands/results or other useful evidence.", 4000),
              new("files", "Current advisory file activity.", 50, "array")], ["task_id", "status", "summary"], invoke),
-        new BridgeTool("bridge_retry_task", "Orchestrator only: explicitly retry one failed, blocked or interrupted assignment with its original stable ID, dependencies and instructions. First inspect existing work for side effects; recovery never silently repeats an assignment.",
-            [new("task_id", "Task to retry within your group.", 64), new("recipient", "Optional replacement worker in your group; retains the original task ID and dependencies.", 80)], ["task_id"], invoke),
+        new BridgeTool("bridge_stop_worker", "Advanced Bridge orchestrator only: interrupt one of your own workers and hold its queued work and automatic retries. Keeps the chat, transcript, existing edits and task IDs. Other orchestrators, their workers and regular peers cannot be controlled. The receipt reports stop_pending until the current turn settles. Inspect existing work before restarting with bridge_retry_task (optional revised message) or bridge_resume_worker.",
+            [new("recipient", "Your worker's agent_id or message_recipient from bridge_list_agents.", 80),
+             new("reason", "Why this worker is being stopped or redirected.", 1200)], ["recipient", "reason"], invoke),
+        new BridgeTool("bridge_resume_worker", "Advanced Bridge orchestrator only: release a stopped worker's queued work, reconnecting the same conversation if needed. Does not close chats or replay interrupted assignments: use bridge_retry_task for those. A worker with no queued work stays idle; use bridge_dispatch_task for new work. Requires coordination_ready and a settled worker.",
+            [new("recipient", "Your worker's agent_id or message_recipient from bridge_list_agents.", 80)], ["recipient"], invoke),
+        new BridgeTool("bridge_retry_task", "Orchestrator only: restart one failed, blocked or interrupted assignment with its stable ID and dependencies, optionally revising its instructions. Releases the worker's stop hold. Wait for a stopped turn to settle and inspect existing work for side effects first; recovery never silently repeats an assignment.",
+            [new("task_id", "Task to retry within your group.", 64), new("recipient", "Optional replacement worker in your group; retains the original task ID and dependencies.", 80),
+             new("message", "Optional complete replacement work order for this attempt. Omit to keep the existing instructions. Inspect and preserve prior work as appropriate.", 6000)], ["task_id"], invoke),
         new BridgeTool("bridge_review_scope", "Orchestrator only: record completion for your group's scope within the user's configured review level and pass limit. When review is enabled, examine actual output and evidence. At level none, skip optional review and use approved to record completion as review_state=skipped. Use changes_requested for concrete defects and dispatch corrections within the review budget. Required work and requested checks must finish; busy, queued, failed or interrupted work blocks approval. Every orchestrator must complete its configured review or disabled-review sign-off before declaring the whole goal complete.",
             [new("verdict", "approved or changes_requested.", 32), new("summary", "Concrete findings, checks performed, evidence and any remaining limitations.", 1800)], ["verdict", "summary"], invoke),
     ];
@@ -207,7 +213,7 @@ public static class BridgeMcpTools
             {
                 ["readOnlyHint"] = name is "bridge_list_agents" or "bridge_list_tasks" or "bridge_file_edits" or "bridge_agent_status" or "bridge_read_chat",
                 ["destructiveHint"] = false,
-                ["idempotentHint"] = name is not ("bridge_send_message" or "bridge_broadcast" or "bridge_dispatch_task" or "bridge_review_scope" or "bridge_set_plan"),
+                ["idempotentHint"] = name is not ("bridge_send_message" or "bridge_broadcast" or "bridge_dispatch_task" or "bridge_stop_worker" or "bridge_resume_worker" or "bridge_retry_task" or "bridge_review_scope" or "bridge_set_plan"),
                 ["openWorldHint"] = false,
             },
         };

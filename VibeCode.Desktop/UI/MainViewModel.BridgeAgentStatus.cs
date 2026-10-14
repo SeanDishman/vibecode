@@ -49,6 +49,7 @@ public sealed partial class MainViewModel
         : p.WaitingForBridgeRetry ? "waiting_to_retry"
         : p.Status == "error" ? "error"
         : p.Status is "running" or "preparing" ? p.PendingPermissionCount > 0 ? "awaiting_approval" : "working"
+        : p.BridgeWorkerPaused ? "paused"
         : p.QueuedPromptCount > 0 ? "queued"
         : p.Status == "starting" ? "starting"
         : p.BridgeTaskState == "waiting" ? "waiting"
@@ -79,6 +80,7 @@ public sealed partial class MainViewModel
             ["busy"] = IsBusyState(state),
             ["task_name"] = task,
             ["task_state"] = p.BridgeTaskState,
+            ["paused"] = p.BridgeWorkerPaused,
             ["working_for"] = workingFor,
             ["idle_for"] = idleFor,
             ["queued_prompts"] = p.QueuedPromptCount,
@@ -98,6 +100,7 @@ public sealed partial class MainViewModel
             "working" => $"{name} is working right now{on}" + (workingFor is null ? "" : $" ({workingFor} into this turn)") +
                 ". Leave its area alone or message it, and check again later.",
             "awaiting_approval" => $"{name} is mid-turn{on} and waiting for the user to approve a tool call. Treat it as busy.",
+            "paused" => $"{name} is stopped by its orchestrator. Its chat and queued work are retained; it will not restart automatically.",
             "queued" => $"{name} is between turns with {p.QueuedPromptCount} queued prompt(s) it will start next. Treat it as busy.",
             "waiting" => $"{name} is between turns, waiting on its workers or replies{on}, and will continue on its own. Treat its area as taken.",
             "waiting_for_limit_reset" => $"{name} is paused by its provider's usage limit and will resume{on} automatically. Treat its area as taken.",

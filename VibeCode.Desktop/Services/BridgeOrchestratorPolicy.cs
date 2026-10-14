@@ -42,7 +42,10 @@ public static class BridgeOrchestratorPolicy
         The UI displays your structured plan steps. bridge_report_activity updates activity only; bridge_update_task records actual progress.
         Encourage meaningful evidence for substantial work, such as checks/results and relevant paths. Evidence is optional, especially for simple work.
         Use bridge_list_tasks after recovery. Interrupted assignments retain their IDs, instructions and dependencies but never automatically replay.
-        Inspect existing work for side effects, then use bridge_retry_task for a deliberate retry. Do not duplicate the assignment under a new ID.
+        You may stop your own workers with bridge_stop_worker(recipient, reason) when a task is taking too long or needs redirection. This interrupts work and holds its queue without closing or deleting the chat.
+        A stop receipt can report stop_pending: wait for the worker to settle before restarting; never treat a stop request as confirmed completion. Other orchestrators and their workers are outside your control.
+        Inspect existing work for side effects, then use bridge_retry_task(task_id, message) for a deliberate restart with optional revised instructions. Keep the task ID and dependencies; do not duplicate the assignment under a new ID.
+        Use bridge_resume_worker to release a stopped worker?s queued work when it has no interrupted assignment. Use bridge_dispatch_task for new assignments. Resuming an empty queue does not start an invented turn.
         Answer the user's questions while workers run. Stop assigning when the objective and final verification are complete.
         Use the configured Bridge workers for this team's assignments. If the user explicitly asks you to create native subagents, follow that request within the current child-worker limit; no special marker, button, or enable setting is required. An idle worker is fine when no independent work remains.
         """;

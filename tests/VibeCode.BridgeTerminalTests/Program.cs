@@ -27,6 +27,7 @@ internal static partial class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("app-server") && Environment.GetEnvironmentVariable("VIBECODE_WORKER_CONTROL_FIXTURE_LOG") is not null) return RunWorkerControlFixture();
         if (args.Contains("app-server")) return RunProviderFixture();
         var recoveryChild = args.Contains("--crash-seed") || args.Contains("--crash-resume");
         var live = args.Contains("--live-simulations") || args.Contains("--jarvis-knowledge-live");
@@ -248,6 +249,14 @@ internal static partial class Program
                 VerifyMessaging();
                 VerifyProtocolAndProjection();
                 Console.WriteLine($"PASS: {_checks} bridge broadcast, direct messaging and MCP checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--worker-controls-only"))
+            {
+                VerifyWorkerControls();
+                VerifyTaskDependenciesAndRecovery();
+                VerifyOneShotOrchestrators();
+                Console.WriteLine($"PASS: {_checks} managed worker control and durable workflow checks. Local fixtures only.");
                 return 0;
             }
             if (args.Contains("--workflow-only"))

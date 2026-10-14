@@ -111,12 +111,12 @@ public sealed partial class MainViewModel
         return managers.Length <= 1 || managers.All(m => work.Confirmed(m.BridgeAgentId));
     }
 
-    private void RequireOwnedWorker(ChatViewModel manager, ChatViewModel worker, LiveBridge bridge)
+    private void RequireOwnedWorker(ChatViewModel manager, ChatViewModel worker, LiveBridge bridge, bool requireReady = true)
     {
         ReconcileBridgeGroups(bridge.Panes);
         if (worker.IsBridgeManager || !ReferenceEquals(CoordinatorFor(worker, bridge.Panes), manager))
             throw new StatusValidationException("This worker belongs to another group or is unassigned. Dispatch only to agents whose coordinator_id is your agent_id; use bridge_send_message to coordinate with other orchestrators.");
-        if (!CoordinationReady(bridge.Panes))
+        if (requireReady && !CoordinationReady(bridge.Panes))
         {
             if (WorkFor(bridge.Panes).CentralPlan is not null)
                 throw new StatusValidationException("Dispatch is paused until the central handoff succeeds and every orchestrator publishes its own worker plan with bridge_set_plan. Read bridge_list_tasks for the central assignments and current state; do not negotiate duplicate scopes.");
