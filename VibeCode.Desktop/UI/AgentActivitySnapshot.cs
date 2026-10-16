@@ -20,19 +20,30 @@ public sealed record AgentActivityProject(string Key, string Name, string Direct
 
 public static class AgentActivitySnapshot
 {
+    public static readonly TimeSpan RecentWindow = TimeSpan.FromHours(1);
     // MainViewModel owns all open windows. LiveBridgePeers includes parked/second-monitor Bridges;
     // BridgePanes also covers a host while its sidebar membership is being reconciled.
-    public static IReadOnlyList<AgentActivityProject> Capture(MainViewModel? source) => source is null
-        ? [] : Build(source.Chats.Concat(source.BridgePanes).Concat(source.LiveBridgePeers));
+    public static IReadOnlyList<AgentActivityProject> Capture(MainViewModel? source, DateTimeOffset? now = null) => source is null
+        ? [] : Build(source.Chats.Concat(source.BridgePanes).Concat(source.LiveBridgePeers), now);
 
-    public static IReadOnlyList<AgentActivityProject> Build(IEnumerable<ChatViewModel> chats)
+    public static IReadOnlyList<AgentActivityProject> Build(IEnumerable<ChatViewModel> chats, DateTimeOffset? now = null)
     {
-        return chats.Distinct().Where(c => c.Status != "closed").Select(Node)
+        var observedAt = now ?? DateTimeOffset.UtcNow;
+        return chats.Distinct().Where(c => c.Status != "closed" && RecentlyActive(c, observedAt)).Select(Node)
             .GroupBy(n => n.ProjectKey, StringComparer.OrdinalIgnoreCase)
             .Select(g => new AgentActivityProject(g.Key, g.First().ProjectName, g.First().Directory,
                 g.ToArray()))
             .OrderBy(g => g.Key.Length == 0).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool RecentlyActive(ChatViewModel chat, DateTimeOffset now)
+    {
+        if (chat.Status is "running" or "preparing" || chat.HasWorkingSubagents) return true;
+        // Opening a chat, booting its CLI, or receiving Bridge mail is not agent work.
+        // Assistant timestamps cover older sessions that predate explicit agent-activity tracking.
+        var activity = chat.LastAgentActivityAt ?? chat.LastAssistantAt;
+        return activity is { } at && at >= now - RecentWindow && at <= now;
     }
 
     private static AgentActivityNode Node(ChatViewModel chat)

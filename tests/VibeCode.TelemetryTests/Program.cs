@@ -36,10 +36,12 @@ internal static partial class Program
                 var hud = new UsageHudWindow(); Capture(hud, 880, 620, "hud-before.png"); hud.Close();
                 return 0;
             }
+            SeedUsageFixtures();
             VerifySnapshots();
             VerifyNavigation();
             VerifyWall();
             VerifyVisualInteractions();
+            VerifyRecentActivityAndUsage();
             Console.WriteLine($"PASS: {Checks} workflow telemetry checks. Local fixtures only.");
             return 0;
         }

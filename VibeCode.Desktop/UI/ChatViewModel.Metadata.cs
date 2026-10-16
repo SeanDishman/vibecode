@@ -47,6 +47,7 @@ public sealed partial class ChatViewModel
         HasGeneratedTitle = _hasGeneratedTitle,
         LastActivityAt = _lastActivityAt,
         LastAssistantAt = _lastAssistantAt,
+        LastAgentActivityAt = _lastAgentActivityAt,
     };
 
     internal void RestoreChatMetadata(ChatMetadata? metadata)
@@ -57,6 +58,7 @@ public sealed partial class ChatViewModel
         _hasGeneratedTitle = metadata.HasGeneratedTitle;
         _lastActivityAt = metadata.LastActivityAt ?? _lastActivityAt;
         _lastAssistantAt = metadata.LastAssistantAt ?? _lastAssistantAt;
+        _lastAgentActivityAt = metadata.LastAgentActivityAt ?? _lastAgentActivityAt;
         if (!string.IsNullOrWhiteSpace(metadata.Title)) Title = metadata.Title;
         RaiseChatMetadata();
     }
@@ -89,7 +91,7 @@ public sealed partial class ChatViewModel
     {
         if (SessionId is not { Length: > 0 } id) return;
         var key = ChatMetadata.Key(Provider, id);
-        if (IsLocked || _isTitleManual || _hasGeneratedTitle || _lastActivityAt is not null || AppSettings.Current.ChatMetadata.ContainsKey(key))
+        if (IsLocked || _isTitleManual || _hasGeneratedTitle || _lastActivityAt is not null || _lastAgentActivityAt is not null || AppSettings.Current.ChatMetadata.ContainsKey(key))
             AppSettings.Current.ChatMetadata[key] = Metadata;
     }
 

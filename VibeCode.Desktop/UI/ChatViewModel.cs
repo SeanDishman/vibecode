@@ -607,7 +607,9 @@ public sealed partial class ChatViewModel : Observable
         get => _status;
         set
         {
+            var wasActive = _status is "running" or "preparing";
             if (!Set(ref _status, value)) return;
+            TrackAgentActivity(wasActive);
             if (value == "running") BeginTokenUsageTiming();
             UpdateTokenRateTimer();
             TrackWorkingElapsed();

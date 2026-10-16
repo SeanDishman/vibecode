@@ -18,6 +18,7 @@ internal static partial class Program
     {
         var chat = new ChatViewModel(directory, provider: provider) { Title = task, BridgeLabel = label, Status = status };
         typeof(ChatViewModel).GetField("_model", Flags)!.SetValue(chat, provider == "claude" ? "Opus" : "GPT");
+        typeof(ChatViewModel).GetField("_lastAgentActivityAt", Flags)!.SetValue(chat, DateTimeOffset.UtcNow);
         return chat;
     }
     static AgentActivityNode Only(ChatViewModel chat) => AgentActivitySnapshot.Build([chat]).Single().Agents.Single();
@@ -146,7 +147,7 @@ internal static partial class Program
         source.Chats.Clear(); wall.Refresh();
         Capture(wall, 1280, 800, "workflow-empty.png");
         Check("Closing all chats removes every graph node", graph.NodeCount == 0);
-        Check("Empty workspace explains how to populate the wall", ((TextBlock)wall.FindName("EmptyTitle")).Text == "No open agents yet");
+        Check("Empty workspace explains how to populate the wall", ((TextBlock)wall.FindName("EmptyTitle")).Text == "No recent agent activity");
         for (var i = 0; i < 150; i++)
             source.Chats.Add(Chat(@"C:\Scale\Project" + i / 10, "Codex " + i, "Task " + i));
         wall.Refresh(); wall.UpdateLayout();

@@ -72,7 +72,7 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
                     <TextBlock x:Name="Clock" FontFamily="{DynamicResource Mono}" FontSize="12" HorizontalAlignment="Right" />
-                    <TextBlock Text="Live · open chats and Bridges" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0" />
+                    <TextBlock Text="Agents active in the last 60 minutes" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0" />
                 </StackPanel>
             </Grid>
             <Grid Grid.Row="2" Margin="24,0,24,16">
@@ -103,7 +103,10 @@
                 <Button Grid.Column="3" Content="Clear" Padding="10,6" Click="OnClear" ToolTip="Clear search and filters"
                         AutomationProperties.Name="Clear workflow filters" />
             </Grid>
-            <Border Grid.Row="3" Margin="12,0" Background="{DynamicResource CodeBg}" CornerRadius="12" ClipToBounds="True">
+            <ScrollViewer x:Name="WallScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          SizeChanged="OnWallSizeChanged" CanContentScroll="False" AutomationProperties.Name="Workflow and token telemetry">
+                <StackPanel>
+            <Border x:Name="MapFrame" Height="400" Margin="12,0" Background="{DynamicResource CodeBg}" CornerRadius="12" ClipToBounds="True">
                 <Grid>
                     <Border IsHitTestVisible="False" Opacity="0.45">
                         <Border.Background>
@@ -121,12 +124,41 @@
                         <ui:WorkflowGraph x:Name="Graph" HorizontalAlignment="Stretch" VerticalAlignment="Top" />
                     </ScrollViewer>
                     <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30" MaxWidth="480">
-                        <TextBlock x:Name="EmptyTitle" Text="No open agents yet" FontSize="20" FontWeight="SemiBold" TextAlignment="Center" />
-                        <TextBlock x:Name="EmptyDetail" Text="Open a project chat or Bridge in VibeCode. Its agents appear here automatically."
+                        <TextBlock x:Name="EmptyTitle" Text="No recent agent activity" FontSize="20" FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock x:Name="EmptyDetail" Text="Agents appear while working and for one hour after their last activity."
                                    Margin="0,10,0,0" Foreground="{DynamicResource Muted}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Grid>
             </Border>
+            <StackPanel x:Name="UsageSection" Margin="24,18,24,0" SizeChanged="OnWallSizeChanged">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="Tokens · last 60 minutes" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="1" Text="All projects · includes live turns" VerticalAlignment="Center" Foreground="{DynamicResource Muted}" FontSize="11" />
+                </Grid>
+                <WrapPanel Margin="0,10,0,12" VerticalAlignment="Center">
+                    <TextBlock x:Name="UsageTotal" Text="0 total tokens" FontSize="20" FontWeight="SemiBold" Margin="0,0,24,0" />
+                    <TextBlock x:Name="UsageInput" Text="0 input" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" Margin="0,0,20,0" />
+                    <TextBlock x:Name="UsageOutput" Text="0 output" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" Margin="0,0,20,0" />
+                    <TextBlock x:Name="UsageCache" Text="0 cache read" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" />
+                </WrapPanel>
+                <UniformGrid x:Name="UsageColumns" Columns="2">
+                    <StackPanel Margin="0,0,16,12">
+                        <TextBlock Text="Tokens over time · 5-minute buckets" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,0,0,8" />
+                        <ui:HourlyThroughput x:Name="TokenTimeline" Height="170" Metric="Tokens" BucketMinutes="5" Plot="Bars" />
+                    </StackPanel>
+                    <StackPanel Margin="0,0,0,12">
+                        <TextBlock Text="Input / output by model" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,0,0,8" />
+                        <ScrollViewer Height="170" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
+                            <ui:ModelTokenBarChart x:Name="ModelTokens" SurfaceKey="Bg0" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </UniformGrid>
+                <TextBlock Text="Input includes cached tokens. History is grouped by turn timestamp; live turns are provisional."
+                           Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" />
+            </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
             <Grid Grid.Row="4" Margin="24,12,24,14">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <TextBlock Text="Lines connect agents to their directory. Moving dots mean working." TextWrapping="Wrap"

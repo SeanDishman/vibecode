@@ -9,6 +9,7 @@ public sealed record ChatMetadata
     public bool HasGeneratedTitle { get; init; }
     public DateTimeOffset? LastActivityAt { get; init; }
     public DateTimeOffset? LastAssistantAt { get; init; }
+    public DateTimeOffset? LastAgentActivityAt { get; init; }
 
     public static string Key(string provider, string sessionId) => provider + ":" + sessionId;
 
@@ -29,6 +30,7 @@ public sealed record ChatMetadata
                 {
                     LastActivityAt = Latest(current.LastActivityAt, other?.LastActivityAt),
                     LastAssistantAt = Latest(current.LastAssistantAt, other?.LastAssistantAt),
+                    LastAgentActivityAt = Latest(current.LastAgentActivityAt, other?.LastAgentActivityAt),
                 };
             }
         }

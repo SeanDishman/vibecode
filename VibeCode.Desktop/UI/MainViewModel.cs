@@ -943,7 +943,7 @@ public sealed partial class MainViewModel : Observable
                 RefreshSidebarChats();
                 RequestSave();
             }
-            if (e.PropertyName == nameof(ChatViewModel.LastActivityAt)) RequestSave();
+            if (e.PropertyName is nameof(ChatViewModel.LastActivityAt) or nameof(ChatViewModel.LastAgentActivityAt)) RequestSave();
             if (e.PropertyName == nameof(ChatViewModel.SessionId))
             {
                 c.RememberChatMetadata();

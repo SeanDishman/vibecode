@@ -6,12 +6,23 @@ public sealed partial class ChatViewModel
 {
     private DateTimeOffset? _lastActivityAt;
     private DateTimeOffset? _lastAssistantAt;
+    private DateTimeOffset? _lastAgentActivityAt;
     private bool _assistantActivityRecorded;
     private bool _activityTurnStarted;
 
     public DateTimeOffset? LastActivityAt => _lastActivityAt;
     internal DateTimeOffset? LastAssistantAt => _lastAssistantAt;
+    /// <summary>Last observed agent turn activity. Opening a chat, starting its CLI, and receiving mail do not count.</summary>
+    internal DateTimeOffset? LastAgentActivityAt => _lastAgentActivityAt;
     public DateTimeOffset SidebarActivityAt => _lastAssistantAt ?? _lastActivityAt ?? DateTimeOffset.MinValue;
+
+    private void TrackAgentActivity(bool wasActive)
+    {
+        if (!wasActive && Status is not ("running" or "preparing")) return;
+        _lastAgentActivityAt = DateTimeOffset.UtcNow;
+        RememberChatMetadata();
+        Raise(nameof(LastAgentActivityAt));
+    }
 
     internal void RecordUserActivity()
     {
