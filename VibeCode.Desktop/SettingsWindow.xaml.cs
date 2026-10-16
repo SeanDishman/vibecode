@@ -602,6 +602,8 @@ public partial class SettingsWindow : Window
 
     // Owner rather than this: Settings is modal, and a telemetry window owned by a dialog would be dismissed
     // along with it. The same idiom the radar button uses.
+    private void OnOpenWorkflowWall(object sender, RoutedEventArgs e) => WorkflowTelemetryWindow.Open(Owner ?? this);
+
     private void OnOpenTelemetryHud(object sender, RoutedEventArgs e) => UsageHudWindow.Open(Owner ?? this);
 
     private void OnOpenTelemetryWall(object sender, RoutedEventArgs e) => UsageDashboardWindow.Open(Owner ?? this);

@@ -1,0 +1,127 @@
+<Window x:Class="VibeCode.UI.WorkflowTelemetryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:VibeCode.UI"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Workflow Telemetry Wall" Icon="pack://application:,,,/VibeCode;component/Assets/logo.png"
+        Width="1280" Height="800" MinWidth="760" MinHeight="480"
+        WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Bg0}" Foreground="{DynamicResource Text}"
+        FontFamily="{DynamicResource Ui}" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        Loaded="OnLoaded" Closed="OnClosed" KeyDown="OnKeyDown" StateChanged="OnStateChanged">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" />
+    </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <Style x:Key="WorkflowNode" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource Bg1}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Frame" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Frame" Property="Background" Value="{DynamicResource Bg3}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                                <Setter TargetName="Frame" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Frame" Property="Background" Value="{DynamicResource AccentSoft}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Border BorderThickness="1" BorderBrush="{DynamicResource Border}" Background="{DynamicResource Bg0}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Border Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
+                <DockPanel Margin="16,0,5,0">
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <ToggleButton x:Name="Pin" Style="{DynamicResource IconToggle}" Content="&#xE840;" FontFamily="{DynamicResource Icons}"
+                                      Width="34" Height="28" ToolTip="Keep on top" AutomationProperties.Name="Keep workflow wall on top"
+                                      Checked="OnPinChanged" Unchecked="OnPinChanged" />
+                        <Button Style="{DynamicResource IconButton}" Content="&#xE740;" FontFamily="{DynamicResource Icons}"
+                                Width="34" Height="28" Click="OnFullScreen" ToolTip="Toggle full screen (F11)" AutomationProperties.Name="Toggle workflow wall full screen" />
+                        <Button Style="{DynamicResource IconButton}" Content="&#xE8BB;" FontFamily="{DynamicResource Icons}"
+                                Width="34" Height="28" Click="OnClose" ToolTip="Close (Esc)" AutomationProperties.Name="Close workflow wall" />
+                    </StackPanel>
+                    <TextBlock Text="Workflow Telemetry Wall" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
+                </DockPanel>
+            </Border>
+            <Grid Grid.Row="1" Margin="24,20,24,16">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Projects in motion" FontSize="24" FontWeight="SemiBold" />
+                    <TextBlock x:Name="Summary" Text="Waiting for open chats" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
+                    <TextBlock x:Name="Clock" FontFamily="{DynamicResource Mono}" FontSize="12" HorizontalAlignment="Right" />
+                    <TextBlock Text="Live · open chats and Bridges" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0" />
+                </StackPanel>
+            </Grid>
+            <Grid Grid.Row="2" Margin="24,0,24,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="230" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ComboBox x:Name="ProjectFilter" DisplayMemberPath="Label" SelectedValuePath="Key" MinHeight="32"
+                          SelectionChanged="OnFilterChanged" AutomationProperties.Name="Filter workflow by project" />
+                <Grid Grid.Column="1" Margin="12,0">
+                    <TextBox x:Name="Search" Padding="10,6" VerticalContentAlignment="Center"
+                             TextChanged="OnFilterChanged" ToolTip="Find a project, agent, model or task" AutomationProperties.Name="Search projects and agents" />
+                    <TextBlock Text="Search projects and agents" Foreground="{DynamicResource Muted}" IsHitTestVisible="False"
+                               VerticalAlignment="Center" Margin="12,0" TextTrimming="CharacterEllipsis">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=Search}" Value="">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+                <CheckBox x:Name="WorkingOnly" Grid.Column="2" Content="Working only" VerticalAlignment="Center" Margin="0,0,12,0"
+                          Checked="OnFilterChanged" Unchecked="OnFilterChanged" AutomationProperties.Name="Show working agents only" />
+                <Button Grid.Column="3" Content="Clear" Padding="10,6" Click="OnClear" ToolTip="Clear search and filters"
+                        AutomationProperties.Name="Clear workflow filters" />
+            </Grid>
+            <Border Grid.Row="3" Margin="12,0" Background="{DynamicResource CodeBg}" CornerRadius="12" ClipToBounds="True">
+                <Grid>
+                    <ScrollViewer x:Name="MapScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False" Padding="4" AutomationProperties.Name="Projects and agents graph">
+                        <ui:WorkflowGraph x:Name="Graph" HorizontalAlignment="Stretch" />
+                    </ScrollViewer>
+                    <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30" MaxWidth="480">
+                        <TextBlock x:Name="EmptyTitle" Text="No open agents yet" FontSize="20" FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock x:Name="EmptyDetail" Text="Open a project chat or Bridge in VibeCode. Its agents appear here automatically."
+                                   Margin="0,10,0,0" Foreground="{DynamicResource Muted}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+            <Grid Grid.Row="4" Margin="24,12,24,14">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="Lines connect agents to their directory. Moving dots mean working." TextWrapping="Wrap"
+                           Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0" />
+                <TextBlock Grid.Column="1" x:Name="VisibleCount" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

@@ -1625,6 +1625,11 @@
                              their own range control. Reading order is the page's own numbers first, then the two
                              ways to leave them running on another screen. -->
                         <ui:SettingGroup Header="Live telemetry" Margin="0,26,0,0" Keywords="hud wall dashboard monitor">
+                            <ui:SettingCard Glyph="&#xE8D4;" Title="Workflow Telemetry Wall" Keywords="workflow agents projects directories graph live activity"
+                                            Description="A live map of open projects and their agents, including background Bridges. See who's working, waiting or idle, filter by directory, and open a chat from its node.">
+                                <Button Style="{StaticResource SettingButtonPrimary}" Content="Open workflow wall"
+                                        Click="OnOpenWorkflowWall" AutomationProperties.Name="Open the Workflow Telemetry Wall" />
+                            </ui:SettingCard>
                             <ui:SettingCard Glyph="" Title="Telemetry HUD" Keywords="always on top full screen wall" Description="A compact always-on-top window covering the last 24 hours — spend, tokens, electricity and water, throughput hour by hour, and the split by model. Built to be parked on a spare screen and left running. The full-screen wall shows the same telemetry over anything from the last hour to the last 30 days, and remembers the range you leave it on.">
                                 <StackPanel Orientation="Horizontal">
                                     <Button Style="{StaticResource SettingButton}" Content="Full-screen wall" Click="OnOpenTelemetryWall" AutomationProperties.Name="Open the full-screen telemetry wall"/>
