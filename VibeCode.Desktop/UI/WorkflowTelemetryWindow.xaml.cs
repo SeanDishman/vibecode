@@ -69,7 +69,8 @@ public partial class WorkflowTelemetryWindow : Window
         var waiting = agents.Count(a => a.State == AgentActivityState.Waiting);
         var errors = agents.Count(a => a.State == AgentActivityState.Error);
         var children = agents.Sum(a => a.ActiveChildren);
-        Summary.Text = $"{working} working · {waiting} waiting · {agents.Length} agents · {_projects.Count(p => p.Directory.Length > 0)} projects"
+        var projectCount = _projects.Count(p => p.Directory.Length > 0);
+        Summary.Text = $"{working} working · {waiting} waiting · {agents.Length} agent{(agents.Length == 1 ? "" : "s")} · {projectCount} project{(projectCount == 1 ? "" : "s")}"
             + (errors > 0 ? $" · {errors} with errors" : "")
             + (children > 0 ? $" · {children} active subagents" : "");
 

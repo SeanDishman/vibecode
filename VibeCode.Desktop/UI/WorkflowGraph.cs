@@ -78,9 +78,10 @@ public sealed class WorkflowGraph : Canvas
         var links = new List<Connection>();
         // Wide displays show independent project clusters beside each other. Compact windows become a
         // single directional tree; node text never shrinks to make a graph fit.
-        var columns = Math.Max(1, (int)(width / 850));
+        var columns = Math.Min(Math.Max(1, _projects.Count), Math.Max(1, (int)(width / 900)));
         var cellWidth = width / columns;
         var y = 16.0;
+        var tabIndex = 0;
         for (var first = 0; first < _projects.Count; first += columns)
         {
             var rowHeight = 0.0;
@@ -89,14 +90,17 @@ public sealed class WorkflowGraph : Canvas
                 var project = _projects[first + column];
                 var x = cellWidth * column;
                 var compact = cellWidth < 760;
-                var agentWidth = compact ? Math.Max(190, cellWidth - 254) : Math.Min(300, (cellWidth - 300) / 2);
-                var projectWidth = compact ? 180 : 206;
+                var agentWidth = compact ? Math.Max(190, cellWidth - 254) : Math.Min(360, (cellWidth - 300) / 2);
+                var projectWidth = compact ? 180 : 214;
                 var rows = compact ? project.Agents.Count : (project.Agents.Count + 1) / 2;
-                var height = Math.Max(132, rows * 100 + 20);
+                var height = Math.Max(144, rows * 120 + 20);
                 rowHeight = Math.Max(rowHeight, height);
-                var hub = new Rect(x + (compact ? 16 : (cellWidth - projectWidth) / 2), y + (height - 98) / 2, projectWidth, 98);
+                var hub = new Rect(x + (compact ? 8 : (cellWidth - projectWidth) / 2), y + (compact ? 10 : (height - 112) / 2), projectWidth, 112);
                 var projectId = "project:" + project.Key;
                 var projectButton = Node(projectId, present);
+                KeyboardNavigation.SetTabIndex(projectButton, tabIndex++);
+                projectButton.SetResourceReference(Control.BackgroundProperty, "Bg2");
+                projectButton.SetResourceReference(Control.BorderBrushProperty, "AccentDim");
                 projectButton.Tag = project;
                 projectButton.ToolTip = project.Directory.Length == 0 ? "Chats without a project directory" : project.Directory;
                 AutomationProperties.SetName(projectButton, $"Filter to {project.Name}, {project.Agents.Count} agents");
@@ -107,8 +111,9 @@ public sealed class WorkflowGraph : Canvas
                     var agent = project.Agents[i];
                     var left = !compact && i % 2 == 0;
                     var index = compact ? i : i / 2;
-                    var rect = new Rect(x + (left ? 16 : cellWidth - agentWidth - 16), y + 10 + index * 100, agentWidth, 82);
+                    var rect = new Rect(x + (left ? 8 : cellWidth - agentWidth - 8), y + 10 + index * 120, agentWidth, 100);
                     var button = Node("agent:" + agent.Id, present);
+                    KeyboardNavigation.SetTabIndex(button, tabIndex++);
                     button.Tag = agent;
                     button.ToolTip = $"{agent.Label} · {agent.Role}\n{agent.Task}\n{agent.Model}\n{agent.Directory}\n{agent.Status}"
                         + (agent.Account.Length > 0 ? "\n" + agent.Account : "")
@@ -121,7 +126,7 @@ public sealed class WorkflowGraph : Canvas
                     links.Add(new(start, end, agent.State == AgentActivityState.Working));
                 }
             }
-            y += rowHeight + 28;
+            y += rowHeight + 44;
         }
         foreach (var id in _nodes.Keys.Where(k => !present.Contains(k)).ToArray())
         {
@@ -140,7 +145,7 @@ public sealed class WorkflowGraph : Canvas
     {
         present.Add(id);
         if (_nodes.TryGetValue(id, out var node)) return node;
-        node = new Button { Cursor = Cursors.Hand, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(12, 9, 12, 9) };
+        node = new Button { Cursor = Cursors.Hand, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(14, 12, 14, 12) };
         node.SetResourceReference(StyleProperty, "WorkflowNode");
         node.Click += (_, _) =>
         {
@@ -157,7 +162,7 @@ public sealed class WorkflowGraph : Canvas
 
     private static TextBlock Text(string text, double size, string resource = "Text")
     {
-        var block = new TextBlock { Text = text, FontSize = size, TextTrimming = TextTrimming.CharacterEllipsis };
+        var block = new TextBlock { Text = text, FontSize = size, TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap };
         block.SetResourceReference(TextBlock.ForegroundProperty, resource);
         return block;
     }
@@ -165,14 +170,21 @@ public sealed class WorkflowGraph : Canvas
     private static UIElement ProjectContent(AgentActivityProject project)
     {
         var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        var title = Text(project.Name, 15);
+        var heading = new DockPanel();
+        var icon = Text("\uE8B7", 17, "Accent");
+        icon.SetResourceReference(TextBlock.FontFamilyProperty, "Icons");
+        icon.Margin = new Thickness(0, 0, 9, 0);
+        icon.VerticalAlignment = VerticalAlignment.Center;
+        heading.Children.Add(icon);
+        var title = Text(project.Name, 16);
         title.FontWeight = FontWeights.SemiBold;
-        stack.Children.Add(title);
+        heading.Children.Add(title);
+        stack.Children.Add(heading);
         var path = project.Directory.Length == 0 ? "Independent chats" : project.Directory;
-        var directory = Text(path, 11, "Muted");
-        directory.Margin = new Thickness(0, 5, 0, 8);
+        var directory = Text(path, 11.5, "Muted");
+        directory.Margin = new Thickness(0, 8, 0, 10);
         stack.Children.Add(directory);
-        stack.Children.Add(Text($"{project.Agents.Count} agent{(project.Agents.Count == 1 ? "" : "s")} · {project.Working} working", 11, "Muted"));
+        stack.Children.Add(Text($"{project.Agents.Count} agent{(project.Agents.Count == 1 ? "" : "s")} · {project.Working} working", 12, "Muted"));
         return stack;
     }
 
@@ -180,21 +192,24 @@ public sealed class WorkflowGraph : Canvas
     {
         var stack = new StackPanel();
         var header = new DockPanel();
-        var state = Text(agent.Status, 10.5, StateResource(agent.State));
-        state.Margin = new Thickness(8, 0, 0, 0);
-        DockPanel.SetDock(state, Dock.Right);
-        header.Children.Add(state);
-        var label = Text(agent.Label, 12);
-        label.FontWeight = FontWeights.SemiBold;
+        var status = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0) };
+        var dot = new System.Windows.Shapes.Ellipse { Width = 5, Height = 5, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center };
+        dot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, StateResource(agent.State));
+        status.Children.Add(dot);
+        status.Children.Add(Text(agent.Status, 11, StateResource(agent.State)));
+        DockPanel.SetDock(status, Dock.Right);
+        header.Children.Add(status);
+        var label = Text(agent.Label, 12, "Muted");
         header.Children.Add(label);
         stack.Children.Add(header);
-        var task = Text(agent.Task, 12);
-        task.Margin = new Thickness(0, 4, 0, 4);
+        var task = Text(agent.Task, 14);
+        task.FontWeight = FontWeights.SemiBold;
+        task.Margin = new Thickness(0, 7, 0, 6);
         stack.Children.Add(task);
         var detail = agent.Role + " · " + agent.Model;
         if (agent.Account.Length > 0) detail += " · " + agent.Account;
         if (agent.ActiveChildren > 0) detail += $" · {agent.ActiveChildren} subagents working";
-        stack.Children.Add(Text(detail, 10.5, "Muted"));
+        stack.Children.Add(Text(detail, 11.5, "Muted"));
         return stack;
     }
 

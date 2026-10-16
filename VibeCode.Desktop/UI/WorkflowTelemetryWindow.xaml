@@ -68,7 +68,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Projects in motion" FontSize="24" FontWeight="SemiBold" />
-                    <TextBlock x:Name="Summary" Text="Waiting for open chats" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,0,0" />
+                    <TextBlock x:Name="Summary" Text="Waiting for open chats" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,6,16,0" TextWrapping="Wrap" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
                     <TextBlock x:Name="Clock" FontFamily="{DynamicResource Mono}" FontSize="12" HorizontalAlignment="Right" />
@@ -105,9 +105,20 @@
             </Grid>
             <Border Grid.Row="3" Margin="12,0" Background="{DynamicResource CodeBg}" CornerRadius="12" ClipToBounds="True">
                 <Grid>
+                    <Border IsHitTestVisible="False" Opacity="0.45">
+                        <Border.Background>
+                            <DrawingBrush TileMode="Tile" Viewport="0,0,24,24" ViewportUnits="Absolute" Viewbox="0,0,24,24" ViewboxUnits="Absolute">
+                                <DrawingBrush.Drawing>
+                                    <GeometryDrawing Brush="{DynamicResource Border}">
+                                        <GeometryDrawing.Geometry><EllipseGeometry Center="12,12" RadiusX="0.8" RadiusY="0.8" /></GeometryDrawing.Geometry>
+                                    </GeometryDrawing>
+                                </DrawingBrush.Drawing>
+                            </DrawingBrush>
+                        </Border.Background>
+                    </Border>
                     <ScrollViewer x:Name="MapScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                                  CanContentScroll="False" Padding="4" AutomationProperties.Name="Projects and agents graph">
-                        <ui:WorkflowGraph x:Name="Graph" HorizontalAlignment="Stretch" />
+                                  CanContentScroll="False" Padding="12,16" VerticalContentAlignment="Top" AutomationProperties.Name="Projects and agents graph">
+                        <ui:WorkflowGraph x:Name="Graph" HorizontalAlignment="Stretch" VerticalAlignment="Top" />
                     </ScrollViewer>
                     <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30" MaxWidth="480">
                         <TextBlock x:Name="EmptyTitle" Text="No open agents yet" FontSize="20" FontWeight="SemiBold" TextAlignment="Center" />

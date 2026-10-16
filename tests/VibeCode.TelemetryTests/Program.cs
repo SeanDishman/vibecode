@@ -16,6 +16,9 @@ internal static partial class Program
     static int Main(string[] args)
     {
         Directory.CreateDirectory(Output);
+        using var report = Environment.GetEnvironmentVariable("VIBECODE_TEST_REPORT") is { Length: > 0 } reportPath
+            ? new StreamWriter(reportPath, false) { AutoFlush = true } : null;
+        if (report is not null) { Console.SetOut(report); Console.SetError(report); }
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", Path.Combine(Output, "data"));
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -36,20 +39,21 @@ internal static partial class Program
             VerifySnapshots();
             VerifyNavigation();
             VerifyWall();
+            VerifyVisualInteractions();
             Console.WriteLine($"PASS: {Checks} workflow telemetry checks. Local fixtures only.");
             return 0;
         }
         catch(Exception e) { Console.Error.WriteLine(e); return 1; }
         finally { app.Shutdown(); }
     }
-    static void Capture(Window window, int width, int height, string filename)
+    static void Capture(Window window, int width, int height, string filename, double dpi = 96)
     {
         window.Width=width; window.Height=height;
         window.UpdateLayout();
         Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
         var root=(FrameworkElement)window.Content;
         root.Measure(new Size(width,height)); root.Arrange(new Rect(0,0,width,height)); root.UpdateLayout();
-        var image=new RenderTargetBitmap(width,height,96,96,PixelFormats.Pbgra32);
+        var image=new RenderTargetBitmap((int)(width*dpi/96),(int)(height*dpi/96),dpi,dpi,PixelFormats.Pbgra32);
         image.Render(root);
         var encoder=new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
         using var stream=File.Create(Path.Combine(Output,filename)); encoder.Save(stream);

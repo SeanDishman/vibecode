@@ -13,6 +13,10 @@ Projects are hubs connected to their open chats and Bridge agents. Background an
 
 The wall inherits the current app theme, companion-display setting and telemetry animation preference, and respects Windows reduced-motion settings. Narrow windows use a single directory tree; wide displays arrange independent project clusters side by side. Larger rosters scroll without discarding agents.
 
+Directory hubs have folder icons and accent outlines, while agent nodes emphasize their task and show a labeled status dot. The graph starts at the top of its canvas. In narrow windows each directory stays beside its first agent. Long labels truncate inside the node and remain available in full through its tooltip; keyboard order follows the visible project/agent order after filtering.
+
 The window reads live view-model state once per second while visible. Unchanged snapshots retain their controls; animation repaints only cached connection geometry at 20 FPS while agents are working. No provider calls, usage-service requests, chat-history reads or stored-memory access are performed by the wall.
 
 Verification: `dotnet run --project tests/VibeCode.TelemetryTests/VibeCode.TelemetryTests.csproj -c Release`. Tests use local fixtures, exercise grouping and lifecycle/navigation, and render compact, desktop, wall, empty and CLI-theme captures. Generated binaries follow the repository BuildOutput rules.
+
+Visual interaction checks additionally cover long names, 150% raster scaling, keyboard focus and scroll-into-view, node activation, timed state updates, and stationary versus animated connection frames. Captures show the production WPF controls with isolated fixture chats, not a live account session.
