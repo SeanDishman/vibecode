@@ -11,7 +11,7 @@ using System.Windows.Threading;
 using VibeCode.Services;
 using VibeCode.UI;
 
-internal static class Program
+internal static partial class Program
 {
     private const string Address = "http://192.168.1.252:8766/";
     private static int _checks;
@@ -26,7 +26,16 @@ internal static class Program
         Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Path.Combine(root, "codex"));
         AppSettings.Current.AgentMemoryEnabled = false;
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-        var viewer = new ProbeMarkdownView { IsToolBarVisible = false };
+        app.Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("/VibeCode;component/Themes/Dark.xaml", UriKind.Relative),
+        });
+        TextEditMenu.Install();
+        var viewer = new ProbeMarkdownView
+        {
+            IsToolBarVisible = false, MarkdownStyleName = "Sasabune", Focusable = true,
+            IsTabStop = false, IsSelectionEnabled = true,
+        };
         var window = new Window
         {
             Content = viewer, Width = 800, Height = 400, Left = -32000, Top = -32000,
@@ -100,6 +109,7 @@ internal static class Program
             Activate(viewer, Links(viewer.Document).Single(), TranscriptLinkKind.Web, Address, null,
                 "restored links still navigate with URI parameters");
 
+            VerifyLinkMenus(window, viewer, root);
             VerifyRecycledMenu(window, root);
             Console.WriteLine($"PASS: {_checks} clipboard and link checks");
             return 0;

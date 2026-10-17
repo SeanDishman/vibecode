@@ -57,7 +57,12 @@ public static class TextEditMenu
     private static bool IsTextSurface(object candidate) =>
         candidate is TextBoxBase or PasswordBox or FlowDocumentScrollViewer;
 
-    private static void OnRightButtonDown(object sender, MouseButtonEventArgs e) => EnsureOurMenu(sender);
+    private static void OnRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        EnsureOurMenu(sender);
+        if (sender is MarkdownView viewer && viewer.ContextMenu is EditingMenu menu)
+            UpdateLinkActions(menu, viewer, e.OriginalSource as DependencyObject, e.GetPosition(viewer));
+    }
 
     /// <summary>Put our menu on the control if it is still showing somebody else's. Returns true if it did.</summary>
     internal static bool EnsureOurMenu(object sender)
@@ -70,7 +75,12 @@ public static class TextEditMenu
 
     private static void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (!EnsureOurMenu(sender) || sender is not FrameworkElement target) return;
+        var replaced = EnsureOurMenu(sender);
+        if (sender is not FrameworkElement target) return;
+        if (target is MarkdownView viewer && target.ContextMenu is EditingMenu textMenu)
+            UpdateLinkActions(textMenu, viewer, e.OriginalSource as DependencyObject,
+                e.CursorLeft < 0 || e.CursorTop < 0 ? null : Mouse.GetPosition(viewer));
+        if (!replaced) return;
 
         // Reached without a right-button press (the Menu key), so the menu was chosen before we swapped it.
         // Assigning it now is too late for WPF to notice, so put ours up directly and suppress the other.
@@ -103,7 +113,7 @@ public static class TextEditMenu
     internal static ContextMenu BuildFor(FrameworkElement target, Action<string>? copyText = null)
     {
         copyText ??= SetClipboard;
-        var menu = new ContextMenu
+        var menu = new EditingMenu(copyText)
         {
             Style = Application.Current?.TryFindResource("DarkContextMenu") as Style,
             MinWidth = 196,
@@ -139,7 +149,33 @@ public static class TextEditMenu
                 break;
         }
 
+        if (target is MarkdownView viewer) UpdateLinkActions(menu, viewer, null, null);
         return menu;
+    }
+
+    private sealed class EditingMenu(Action<string> copyText) : ContextMenu
+    {
+        public Action<string> CopyText { get; } = copyText;
+        public int LinkItemCount { get; set; }
+    }
+
+    private static void UpdateLinkActions(EditingMenu menu, MarkdownView viewer, DependencyObject? source, Point? point)
+    {
+        // A menu survives document streaming and control recycling. Resolve the destination for every opening,
+        // then keep that snapshot while the menu is open so later output cannot change what Copy means.
+        while (menu.LinkItemCount > 0)
+        {
+            menu.Items.RemoveAt(0);
+            menu.LinkItemCount--;
+        }
+        var actions = viewer.LinkMenuActions(source, point, menu.CopyText);
+        if (actions.Count == 0) return;
+        foreach (var (header, run) in actions)
+            menu.Items.Insert(menu.LinkItemCount++, Item(header, run));
+        menu.Items.Insert(menu.LinkItemCount++, new Separator
+        {
+            Style = Application.Current?.TryFindResource("DarkSeparator") as Style,
+        });
     }
 
     /// <summary>
