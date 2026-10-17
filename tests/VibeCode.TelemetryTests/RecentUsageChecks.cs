@@ -73,8 +73,13 @@ internal static partial class Program
         var recent = Chat(@"C:\Projects\Recent", "Codex 1", "Active project", "running");
         var old = Chat(@"C:\Projects\Old", "Claude 2", "Old project"); Activity(old, now.AddMinutes(-30));
         source.Chats.Add(recent); source.Chats.Add(old);
+        var speedSubscribers = SpeedSubscribers;
         var wall = new WorkflowTelemetryWindow(source) { Left = 6200, Top = 200, WindowStartupLocation = WindowStartupLocation.Manual, ShowInTaskbar = false };
         wall.Show(); wall.Refresh();
+        Check("The open workflow wall listens for shared OpenRouter updates", SpeedSubscribers == speedSubscribers + 1);
+        Check("The wall uses cached public readings without a network request",
+            ((HashSet<string>)typeof(ModelSpeedService).GetField("_inFlight", Flags)!.GetValue(ModelSpeedService.Instance)!).Count == 0
+            && ((ItemsControl)wall.FindName("ModelSpeeds")).Items.Count == 2);
         var graph = (WorkflowGraph)wall.FindName("Graph");
         var timeline = (HourlyThroughput)wall.FindName("TokenTimeline");
         var models = (ModelTokenBarChart)wall.FindName("ModelTokens");
@@ -102,12 +107,25 @@ internal static partial class Program
         var panel = (Border)wall.FindName("UsagePanel");
         var map = (Border)wall.FindName("MapFrame");
         var body = (Grid)wall.FindName("WallBody");
+        var rail = (Grid)wall.FindName("AnalyticsRail");
+        var speedPanel = (Border)wall.FindName("SpeedPanel");
         Check("Full-screen map and usage panel fit together", wallScroll.ScrollableHeight < 1);
         Check("Analytics occupy about one fifth of the workspace", panel.ActualWidth * panel.ActualHeight / (wallScroll.ActualWidth * wallScroll.ActualHeight) is > .18 and < .22);
         var corner = panel.TranslatePoint(new Point(panel.ActualWidth, panel.ActualHeight), body);
-        Check("Analytics dock at the bottom right beside the map", Grid.GetColumn(panel) == 1 && Math.Abs(corner.Y - map.ActualHeight) < 2
-            && Math.Abs(corner.X + panel.Margin.Right - body.ActualWidth) < 2);
+        Check("Analytics dock at the bottom right beside the map", Grid.GetColumn(rail) == 1 && Math.Abs(corner.Y - map.ActualHeight) < 2
+            && Math.Abs(corner.X + rail.Margin.Right - body.ActualWidth) < 2);
+        var speedsTop = speedPanel.TranslatePoint(new Point(), body).Y;
+        var tokensTop = panel.TranslatePoint(new Point(), body).Y;
+        Check("Public performance fills the old gap and raises the token panel", Math.Abs(speedsTop) < 1 && tokensTop < map.ActualHeight * .27
+            && Math.Abs(tokensTop - speedPanel.ActualHeight - speedPanel.Margin.Bottom) < 2);
+        Check("Both model speed readings are visible at wall size", ((ScrollViewer)wall.FindName("SpeedScroll")).ScrollableHeight < 1);
+        Capture(wall, 1280, 800, "workflow-speeds-desktop.png");
+        Check("Normal desktop size shows two model speeds without scrolling", ((ScrollViewer)wall.FindName("SpeedScroll")).ScrollableHeight < 1);
         Capture(wall, 760, 520, "workflow-recent-compact.png");
+        wallScroll.ScrollToVerticalOffset(rail.TranslatePoint(new Point(), body).Y); PumpFor(60);
+        Capture(wall, 760, 520, "workflow-speeds-compact.png");
+        Check("Compact model speeds keep their heading and readings reachable", speedPanel.TranslatePoint(new Point(), wallScroll).Y >= -.5
+            && ((ScrollViewer)wall.FindName("SpeedScroll")).ScrollableHeight < 1);
         ((ScrollViewer)wall.FindName("WallScroll")).ScrollToBottom(); PumpFor(60);
         Check("Compact analytics keep their heading within the visible viewport", panel.TranslatePoint(new Point(), wallScroll).Y >= -.5
             && panel.ActualHeight <= wallScroll.ViewportHeight + 1);
@@ -118,6 +136,7 @@ internal static partial class Program
         PumpFor(1500);
         Check("The real refresh timer removes the expired agent and directory", graph.NodeCount == 0);
         wall.Close();
+        Check("Closing the wall releases the shared OpenRouter event subscription", SpeedSubscribers == speedSubscribers);
         Check("Closing the workflow wall releases its streaming usage watcher", !LiveTurnTelemetry.Instance.IsWatched);
         recent.Close(); old.Close();
     }

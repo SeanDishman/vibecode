@@ -18,6 +18,10 @@ public partial class WorkflowTelemetryWindow : Window
     private IDisposable? _liveWatch;
     private IReadOnlyList<UsageEntry> _committedUsage = [];
     private volatile bool _usageDirty = true;
+    private IReadOnlyList<ModelUsage> _speedModels = [];
+    private WorkflowModelSpeedRow[] _speedRows = [];
+    private string _speedSelection = "";
+    private DateTime _nextSpeedRefresh;
     private sealed record ProjectChoice(string Key, string Label);
 
     public WorkflowTelemetryWindow() : this(null) { }
@@ -60,6 +64,7 @@ public partial class WorkflowTelemetryWindow : Window
         _source ??= AgentActivitySnapshot.ResolveSource(Owner);
         _liveWatch ??= LiveTurnTelemetry.Instance.Watch();
         UsageLog.Instance.Changed += OnUsageChanged;
+        ModelSpeedService.Instance.Updated += OnModelSpeedsUpdated;
         Refresh();
         _tick.Start();
     }
@@ -120,10 +125,37 @@ public partial class WorkflowTelemetryWindow : Window
         UsageModelCount.Text = $"{usage.Report.Models.Count:N0} models";
         TokenTimeline.Hours = usage.Buckets;
         ModelTokens.Report = usage.Report;
+        _speedModels = usage.Report.Models;
+        RefreshModelSpeeds();
         System.Windows.Automation.AutomationProperties.SetName(TokenTimeline,
             $"Tokens in the last hour: {usage.Report.Total:N0} total, {usage.Report.TotalIn:N0} input, {usage.Report.Output:N0} output.");
         System.Windows.Automation.AutomationProperties.SetName(ModelTokens,
             "Token usage by model. " + string.Join("; ", usage.Report.Models.Select(m => $"{m.Display}: {m.TotalIn:N0} input, {m.Output:N0} output")));
+    }
+
+    private void OnModelSpeedsUpdated()
+    {
+        if (_ready && IsVisible && WindowState != WindowState.Minimized) RefreshModelSpeeds();
+    }
+
+    private void RefreshModelSpeeds()
+    {
+        var service = ModelSpeedService.Instance;
+        var rows = WorkflowModelSpeeds.Build(_speedModels, service.ById, service.FetchedAt);
+        if (!_speedRows.SequenceEqual(rows))
+        {
+            _speedRows = rows;
+            ModelSpeeds.ItemsSource = rows;
+        }
+        SpeedCaption.Text = WorkflowModelSpeeds.Caption(rows);
+        var ids = rows.Select(r => r.OpenRouterId).OfType<string>().ToArray();
+        var selection = string.Join("|", ids);
+        if (selection != _speedSelection || DateTime.UtcNow >= _nextSpeedRefresh)
+        {
+            _speedSelection = selection;
+            _nextSpeedRefresh = DateTime.UtcNow + WorkflowModelSpeeds.RefreshInterval;
+            service.PrefetchIds(ids, WorkflowModelSpeeds.RefreshInterval - TimeSpan.FromSeconds(30));
+        }
     }
 
     private void OnWallSizeChanged(object sender, SizeChangedEventArgs e)
@@ -131,12 +163,14 @@ public partial class WorkflowTelemetryWindow : Window
         if (!_ready) return;
         var compact = WallScroll.ActualWidth < 1000;
         var height = Math.Max(280, WallScroll.ActualHeight);
-        // 28% of the width by 70% of the height: roughly one fifth of the workspace, bottom right.
-        UsagePanel.Width = compact ? Math.Min(440, WallScroll.ActualWidth - 24) : WallScroll.ActualWidth * .28;
-        UsagePanel.Height = compact ? Math.Max(160, Math.Min(400, WallScroll.ActualHeight)) : height * .70;
-        Grid.SetColumn(UsagePanel, compact ? 0 : 1);
-        Grid.SetRow(UsagePanel, compact ? 1 : 0);
-        UsagePanel.Margin = new Thickness(0, compact ? 12 : 0, 12, 0);
+        // The map leads. Public model performance fills the previous gap above the local token charts.
+        AnalyticsRail.Width = compact ? Math.Min(440, WallScroll.ActualWidth - 24) : WallScroll.ActualWidth * .28;
+        var speedHeight = compact ? 204 : Math.Clamp(height * .24, 204, 236);
+        AnalyticsRail.Height = compact ? speedHeight + Math.Max(160, Math.Min(400, WallScroll.ActualHeight)) : height;
+        SpeedRow.Height = new GridLength(speedHeight);
+        Grid.SetColumn(AnalyticsRail, compact ? 0 : 1);
+        Grid.SetRow(AnalyticsRail, compact ? 1 : 0);
+        AnalyticsRail.Margin = new Thickness(0, compact ? 12 : 0, 12, 0);
         MapFrame.Height = compact ? Math.Max(320, height * .70) : height;
     }
 
@@ -199,6 +233,7 @@ public partial class WorkflowTelemetryWindow : Window
         _ready = false;
         _tick.Stop();
         UsageLog.Instance.Changed -= OnUsageChanged;
+        ModelSpeedService.Instance.Updated -= OnModelSpeedsUpdated;
         _liveWatch?.Dispose();
         _liveWatch = null;
         Graph.MotionEnabled = false;

@@ -37,6 +37,8 @@ internal static partial class Program
                 return 0;
             }
             SeedUsageFixtures();
+            SeedSpeedFixtures();
+            VerifyModelSpeeds();
             VerifySnapshots();
             VerifyNavigation();
             VerifyWall();
