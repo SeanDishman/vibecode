@@ -22,6 +22,7 @@ public sealed class BridgeCentralPlan
     public string? Model { get; set; }
     public string? Effort { get; set; }
     public string Error { get; set; } = "";
+    public DateTimeOffset? LastActivityAt { get; set; }
     public List<BridgeOrchestratorAssignment> Assignments { get; set; } = new();
     public HashSet<string> PublishedPlans { get; set; } = new();
     [JsonIgnore] public CancellationTokenSource? Cancellation { get; set; }

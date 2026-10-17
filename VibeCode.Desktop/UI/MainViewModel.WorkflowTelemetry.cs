@@ -2,6 +2,9 @@ namespace VibeCode.UI;
 
 public sealed partial class MainViewModel
 {
+    // Include hosts as well as workers on every visible, secondary and parked roster.
+    internal IEnumerable<ChatViewModel> WorkflowAgents => Chats.Concat(LiveBridges().SelectMany(b => b.Panes)).Concat(BridgePanes);
+
     /// <summary>Navigate to an already-open agent, including a parked Bridge, without starting a new session.</summary>
     public bool OpenWorkflowAgent(ChatViewModel chat)
     {

@@ -10,7 +10,11 @@ public enum AgentActivityState { Working, Waiting, Idle, Error, Paused }
 public sealed record AgentActivityNode(
     string Id, string ProjectKey, string ProjectName, string Directory, string Label,
     string Task, string Model, string Account, string Role, AgentActivityState State,
-    string Status, int ActiveChildren, ChatViewModel Chat);
+    string Status, int ActiveChildren, ChatViewModel Chat)
+{
+    public string? ParentAgentId { get; init; }
+    public bool IsCentralPlanner { get; init; }
+}
 
 public sealed record AgentActivityProject(string Key, string Name, string Directory,
     IReadOnlyList<AgentActivityNode> Agents)
@@ -20,16 +24,38 @@ public sealed record AgentActivityProject(string Key, string Name, string Direct
 
 public static class AgentActivitySnapshot
 {
-    public static readonly TimeSpan RecentWindow = TimeSpan.FromHours(1);
+    public static readonly TimeSpan RecentWindow = TimeSpan.FromMinutes(10);
     // MainViewModel owns all open windows. LiveBridgePeers includes parked/second-monitor Bridges;
     // BridgePanes also covers a host while its sidebar membership is being reconciled.
     public static IReadOnlyList<AgentActivityProject> Capture(MainViewModel? source, DateTimeOffset? now = null) => source is null
-        ? [] : Build(source.Chats.Concat(source.BridgePanes).Concat(source.LiveBridgePeers), now);
+        ? [] : Build(source.WorkflowAgents, now);
 
     public static IReadOnlyList<AgentActivityProject> Build(IEnumerable<ChatViewModel> chats, DateTimeOffset? now = null)
     {
         var observedAt = now ?? DateTimeOffset.UtcNow;
-        return chats.Distinct().Where(c => c.Status != "closed" && RecentlyActive(c, observedAt)).Select(Node)
+        var open = chats.Distinct().Where(c => c.Status != "closed").ToArray();
+        var nodes = open.Where(c => RecentlyActive(c, observedAt)).Select(Node).ToList();
+        // Central planning uses its own temporary provider session, not a ChatViewModel in the roster.
+        foreach (var roster in open.Where(c => c.BridgeWork?.CentralPlan is not null).GroupBy(c => c.BridgeWork!.RunId))
+        {
+            var host = roster.FirstOrDefault(c => c.IsBridgeHost) ?? roster.First();
+            var central = host.BridgeWork!.CentralPlan!;
+            var live = central.Activity is { IsDisposed: false } && central.State is "planning" or "handing_off";
+            if (!live && !WithinWindow(central.LastActivityAt, observedAt)) continue;
+            var id = "central:" + roster.Key;
+            var template = Node(host);
+            var state = live ? AgentActivityState.Working : central.State == "failed" ? AgentActivityState.Error
+                : central.State == "interrupted" ? AgentActivityState.Paused : AgentActivityState.Idle;
+            nodes.Add(template with { Id = id, Label = "Central orchestrator", Role = "Central planner", Account = "",
+                Task = live ? central.Activity!.Status : central.State == "completed" ? "Assignments delivered" : "Assignment " + central.State,
+                Model = ProviderModelCatalog.DisplayName(central.Provider) + " · " + (central.Model ?? "Default model"),
+                State = state, Status = live ? "Planning" : central.State == "completed" ? "Completed" : central.State == "failed" ? "Error" : "Stopped",
+                ActiveChildren = 0, IsCentralPlanner = true, ParentAgentId = null });
+            for (var i = 0; i < nodes.Count; i++)
+                if (!nodes[i].IsCentralPlanner && nodes[i].Chat.IsBridgeManager && nodes[i].Chat.BridgeWork?.RunId == roster.Key)
+                    nodes[i] = nodes[i] with { ParentAgentId = id };
+        }
+        return nodes
             .GroupBy(n => n.ProjectKey, StringComparer.OrdinalIgnoreCase)
             .Select(g => new AgentActivityProject(g.Key, g.First().ProjectName, g.First().Directory,
                 g.ToArray()))
@@ -43,8 +69,11 @@ public static class AgentActivitySnapshot
         // Opening a chat, booting its CLI, or receiving Bridge mail is not agent work.
         // Assistant timestamps cover older sessions that predate explicit agent-activity tracking.
         var activity = chat.LastAgentActivityAt ?? chat.LastAssistantAt;
-        return activity is { } at && at >= now - RecentWindow && at <= now;
+        return WithinWindow(activity, now);
     }
+
+    private static bool WithinWindow(DateTimeOffset? activity, DateTimeOffset now) =>
+        activity is { } at && at > now - RecentWindow && at <= now;
 
     private static AgentActivityNode Node(ChatViewModel chat)
     {
@@ -67,7 +96,7 @@ public static class AgentActivitySnapshot
             chat.IsBridgeAgent && chat.BridgeHeaderTaskTitle.Length > 0 ? chat.BridgeHeaderTaskTitle : chat.Title,
             chat.ModelDisplay, chat.ShowBridgeAccountLabel ? chat.AccountLabel : "",
             chat.IsBridgeManager ? "Orchestrator" : chat.BridgeHasCoordinator ? "Worker" : chat.IsBridgeAgent ? "Bridge" : "Chat",
-            state, status, chat.ActiveSubagentCount, chat);
+            state, status, chat.ActiveSubagentCount, chat) { ParentAgentId = chat.BridgeCoordinatorAgentId };
     }
 
     private static AgentActivityState StateOf(ChatViewModel chat)

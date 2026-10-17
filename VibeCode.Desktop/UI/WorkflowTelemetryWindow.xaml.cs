@@ -111,6 +111,13 @@ public partial class WorkflowTelemetryWindow : Window
         UsageInput.Text = UsageAnalytics.Tokens(usage.Report.TotalIn) + " input";
         UsageOutput.Text = UsageAnalytics.Tokens(usage.Report.Output) + " output";
         UsageCache.Text = UsageAnalytics.Tokens(usage.Report.CacheRead) + " cache read";
+        UsageCacheWrite.Text = UsageAnalytics.Tokens(usage.Report.CacheWrite) + " cache write";
+        UsageCacheRate.Text = $"{usage.Report.CacheHitRatio:P0} cache hit";
+        UsageTurns.Text = $"{usage.Report.Turns:N0} turns";
+        UsagePerTurn.Text = UsageAnalytics.Tokens(usage.TokensPerTurn) + " tokens / turn";
+        UsageRate.Text = UsageAnalytics.Tokens(usage.TokensPerMinute) + " tokens / min";
+        UsageRecentRate.Text = UsageAnalytics.Tokens(usage.RecentTokensPerMinute) + " / min · last 5m";
+        UsageModelCount.Text = $"{usage.Report.Models.Count:N0} models";
         TokenTimeline.Hours = usage.Buckets;
         ModelTokens.Report = usage.Report;
         System.Windows.Automation.AutomationProperties.SetName(TokenTimeline,
@@ -122,9 +129,15 @@ public partial class WorkflowTelemetryWindow : Window
     private void OnWallSizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (!_ready) return;
-        var compact = WallScroll.ActualWidth < 1020;
-        UsageColumns.Columns = compact ? 1 : 2;
-        MapFrame.Height = Math.Max(280, WallScroll.ActualHeight - UsageSection.ActualHeight - UsageSection.Margin.Top);
+        var compact = WallScroll.ActualWidth < 1000;
+        var height = Math.Max(280, WallScroll.ActualHeight);
+        // 28% of the width by 70% of the height: roughly one fifth of the workspace, bottom right.
+        UsagePanel.Width = compact ? Math.Min(440, WallScroll.ActualWidth - 24) : WallScroll.ActualWidth * .28;
+        UsagePanel.Height = compact ? Math.Max(160, Math.Min(400, WallScroll.ActualHeight)) : height * .70;
+        Grid.SetColumn(UsagePanel, compact ? 0 : 1);
+        Grid.SetRow(UsagePanel, compact ? 1 : 0);
+        UsagePanel.Margin = new Thickness(0, compact ? 12 : 0, 12, 0);
+        MapFrame.Height = compact ? Math.Max(320, height * .70) : height;
     }
 
     private void OnFilterChanged(object sender, RoutedEventArgs e)
@@ -147,7 +160,7 @@ public partial class WorkflowTelemetryWindow : Window
         EmptyState.Visibility = count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyTitle.Text = _projects.Count == 0 ? "No recent agent activity" : "No matching agents";
         EmptyDetail.Text = _projects.Count == 0
-            ? "Agents appear while working and for one hour after their last activity. Start a task in any project or Bridge."
+            ? "Agents disappear after 10 minutes without work. Start a task in any project or Bridge."
             : "Try another project or search, or clear the filters to see every open agent.";
     }
 

@@ -5,9 +5,14 @@ namespace VibeCode.UI;
 /// <summary>One exact rolling hour shared by the totals and both workflow-wall usage charts.</summary>
 public sealed record WorkflowUsageSnapshot(UsageReport Report, IReadOnlyList<HourUsage> Buckets)
 {
+    public static readonly TimeSpan UsageWindow = TimeSpan.FromHours(1);
+    public double TokensPerMinute => Report.Total / UsageWindow.TotalMinutes;
+    public double TokensPerTurn => Report.Turns > 0 ? Report.Total / Report.Turns : 0;
+    public double RecentTokensPerMinute { get; init; }
+
     public static WorkflowUsageSnapshot Build(IReadOnlyList<UsageEntry> entries, DateTimeOffset now)
     {
-        var since = now - AgentActivitySnapshot.RecentWindow;
+        var since = now - UsageWindow;
         static double Tokens(double value) => double.IsFinite(value) && value > 0 ? value : 0;
         var recent = entries.Where(e => e.At >= since && e.At <= now).Select(e => new UsageEntry
         {
@@ -34,6 +39,9 @@ public sealed record WorkflowUsageSnapshot(UsageReport Report, IReadOnlyList<Hou
                 bucket.ByModel[entry.Model] = model = new HourSlice();
             model.Tokens += entry.Total;
         }
-        return new(report, buckets);
+        return new(report, buckets)
+        {
+            RecentTokensPerMinute = recent.Where(e => e.At > now.AddMinutes(-5)).Sum(e => e.Total) / 5,
+        };
     }
 }

@@ -72,7 +72,7 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
                     <TextBlock x:Name="Clock" FontFamily="{DynamicResource Mono}" FontSize="12" HorizontalAlignment="Right" />
-                    <TextBlock Text="Agents active in the last 60 minutes" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0" />
+                    <TextBlock Text="Working now or active within 10 minutes" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0" />
                 </StackPanel>
             </Grid>
             <Grid Grid.Row="2" Margin="24,0,24,16">
@@ -105,7 +105,9 @@
             </Grid>
             <ScrollViewer x:Name="WallScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           SizeChanged="OnWallSizeChanged" CanContentScroll="False" AutomationProperties.Name="Workflow and token telemetry">
-                <StackPanel>
+                <Grid x:Name="WallBody">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <Border x:Name="MapFrame" Height="400" Margin="12,0" Background="{DynamicResource CodeBg}" CornerRadius="12" ClipToBounds="True">
                 <Grid>
                     <Border IsHitTestVisible="False" Opacity="0.45">
@@ -125,43 +127,55 @@
                     </ScrollViewer>
                     <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30" MaxWidth="480">
                         <TextBlock x:Name="EmptyTitle" Text="No recent agent activity" FontSize="20" FontWeight="SemiBold" TextAlignment="Center" />
-                        <TextBlock x:Name="EmptyDetail" Text="Agents appear while working and for one hour after their last activity."
+                        <TextBlock x:Name="EmptyDetail" Text="Agents appear while working and disappear after 10 minutes without work."
                                    Margin="0,10,0,0" Foreground="{DynamicResource Muted}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Grid>
             </Border>
-            <StackPanel x:Name="UsageSection" Margin="24,18,24,0" SizeChanged="OnWallSizeChanged">
-                <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                    <TextBlock Text="Tokens · last 60 minutes" FontSize="17" FontWeight="SemiBold" />
-                    <TextBlock Grid.Column="1" Text="All projects · includes live turns" VerticalAlignment="Center" Foreground="{DynamicResource Muted}" FontSize="11" />
-                </Grid>
-                <WrapPanel Margin="0,10,0,12" VerticalAlignment="Center">
-                    <TextBlock x:Name="UsageTotal" Text="0 total tokens" FontSize="20" FontWeight="SemiBold" Margin="0,0,24,0" />
-                    <TextBlock x:Name="UsageInput" Text="0 input" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" Margin="0,0,20,0" />
-                    <TextBlock x:Name="UsageOutput" Text="0 output" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" Margin="0,0,20,0" />
-                    <TextBlock x:Name="UsageCache" Text="0 cache read" Foreground="{DynamicResource Muted}" FontSize="12" VerticalAlignment="Center" />
-                </WrapPanel>
-                <UniformGrid x:Name="UsageColumns" Columns="2">
-                    <StackPanel Margin="0,0,16,12">
-                        <TextBlock Text="Tokens over time · 5-minute buckets" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,0,0,8" />
-                        <ui:HourlyThroughput x:Name="TokenTimeline" Height="170" Metric="Tokens" BucketMinutes="5" Plot="Bars" />
-                    </StackPanel>
-                    <StackPanel Margin="0,0,0,12">
-                        <TextBlock Text="Input / output by model" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,0,0,8" />
-                        <ScrollViewer Height="170" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
-                            <ui:ModelTokenBarChart x:Name="ModelTokens" SurfaceKey="Bg0" />
-                        </ScrollViewer>
-                    </StackPanel>
-                </UniformGrid>
-                <TextBlock Text="Input includes cached tokens. History is grouped by turn timestamp; live turns are provisional."
-                           Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" />
-            </StackPanel>
+            <Border x:Name="UsagePanel" Grid.Column="1" Width="350" Height="420" VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                    Margin="0,0,12,0" Padding="14" Background="{DynamicResource Bg1}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="12">
+                <ScrollViewer x:Name="UsageScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False"
+                              AutomationProperties.Name="Hourly token analytics">
+                <StackPanel x:Name="UsageSection">
+                    <TextBlock Text="Tokens · last hour" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="All projects · includes live turns" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,4,0,10" />
+                    <TextBlock x:Name="UsageTotal" Text="0 total tokens" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,12" />
+                    <UniformGrid Columns="2" Margin="0,0,0,8">
+                        <UniformGrid.Resources>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                <Setter Property="FontSize" Value="12" />
+                                <Setter Property="Foreground" Value="{DynamicResource Muted}" />
+                                <Setter Property="Margin" Value="0,0,6,9" />
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                            </Style>
+                        </UniformGrid.Resources>
+                        <TextBlock x:Name="UsageInput" Text="0 input" />
+                        <TextBlock x:Name="UsageOutput" Text="0 output" />
+                        <TextBlock x:Name="UsageCache" Text="0 cache read" />
+                        <TextBlock x:Name="UsageCacheWrite" Text="0 cache write" />
+                        <TextBlock x:Name="UsageCacheRate" Text="0% cache hit" />
+                        <TextBlock x:Name="UsageTurns" Text="0 turns" />
+                        <TextBlock x:Name="UsagePerTurn" Text="0 tokens / turn" />
+                        <TextBlock x:Name="UsageRate" Text="0 tokens / min" ToolTip="Average over the full hour" />
+                        <TextBlock x:Name="UsageRecentRate" Text="0 / min · last 5m" ToolTip="Average over the most recent five minutes" />
+                        <TextBlock x:Name="UsageModelCount" Text="0 models" />
+                    </UniformGrid>
+                    <TextBlock Text="Token timeline · 5-minute buckets" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,0,6" />
+                    <ui:HourlyThroughput x:Name="TokenTimeline" Height="100" Metric="Tokens" BucketMinutes="5" Plot="Bars" Margin="0,0,0,12" />
+                    <TextBlock Text="Input / output by model" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,0,0,6" />
+                    <ScrollViewer Height="120" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
+                        <ui:ModelTokenBarChart x:Name="ModelTokens" SurfaceKey="Bg1" />
+                    </ScrollViewer>
+                    <TextBlock Text="Input includes cache. Rates use turn timestamps; live totals are provisional."
+                               Foreground="{DynamicResource Muted}" FontSize="10.5" Margin="0,8,0,0" TextWrapping="Wrap" />
                 </StackPanel>
+                </ScrollViewer>
+            </Border>
+                </Grid>
             </ScrollViewer>
             <Grid Grid.Row="4" Margin="24,12,24,14">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <TextBlock Text="Lines connect agents to their directory. Moving dots mean working." TextWrapping="Wrap"
+                <TextBlock Text="Lines show directories and orchestrator teams. Moving dots mean working." TextWrapping="Wrap"
                            Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0" />
                 <TextBlock Grid.Column="1" x:Name="VisibleCount" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" />
             </Grid>

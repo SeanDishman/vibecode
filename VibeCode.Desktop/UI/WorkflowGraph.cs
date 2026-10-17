@@ -21,6 +21,7 @@ public sealed class WorkflowGraph : Canvas
     public event Action<string>? ProjectSelected;
     public bool MotionEnabled { get; set; } = true;
     public int NodeCount => _nodes.Count;
+    public int ManagedConnectionCount => _connections.Links.Count(link => link.Managed);
     public bool IsAnimating => _motion.IsEnabled;
 
     public WorkflowGraph()
@@ -89,6 +90,11 @@ public sealed class WorkflowGraph : Canvas
             {
                 var project = _projects[first + column];
                 var x = cellWidth * column;
+                if (project.Agents.Any(a => a.IsCentralPlanner || a.Chat.IsBridgeManager || a.ParentAgentId is not null))
+                {
+                    rowHeight = Math.Max(rowHeight, LayoutAdvanced(project, x, y, cellWidth, present, links, ref tabIndex));
+                    continue;
+                }
                 var compact = cellWidth < 760;
                 var agentWidth = compact ? Math.Max(190, cellWidth - 254) : Math.Min(360, (cellWidth - 300) / 2);
                 var projectWidth = compact ? 180 : 214;
@@ -112,15 +118,7 @@ public sealed class WorkflowGraph : Canvas
                     var left = !compact && i % 2 == 0;
                     var index = compact ? i : i / 2;
                     var rect = new Rect(x + (left ? 8 : cellWidth - agentWidth - 8), y + 10 + index * 120, agentWidth, 100);
-                    var button = Node("agent:" + agent.Id, present);
-                    KeyboardNavigation.SetTabIndex(button, tabIndex++);
-                    button.Tag = agent;
-                    button.ToolTip = $"{agent.Label} · {agent.Role}\n{agent.Task}\n{agent.Model}\n{agent.Directory}\n{agent.Status}"
-                        + (agent.Account.Length > 0 ? "\n" + agent.Account : "")
-                        + "\nOpen this chat";
-                    AutomationProperties.SetName(button, $"Open {agent.Label}: {agent.Task}. {agent.Status}. {agent.Role}.");
-                    button.Content = AgentContent(agent);
-                    Place(button, rect);
+                    PlaceAgent(agent, rect, present, ref tabIndex);
                     var start = new Point(left ? hub.Left : hub.Right, hub.Top + hub.Height / 2);
                     var end = new Point(left ? rect.Right : rect.Left, rect.Top + rect.Height / 2);
                     links.Add(new(start, end, agent.State == AgentActivityState.Working));
@@ -139,6 +137,84 @@ public sealed class WorkflowGraph : Canvas
         _connections.Links = links;
         _connections.InvalidateVisual();
         UpdateMotion();
+    }
+
+    private void PlaceAgent(AgentActivityNode agent, Rect rect, HashSet<string> present, ref int tabIndex)
+    {
+        var button = Node("agent:" + agent.Id, present);
+        KeyboardNavigation.SetTabIndex(button, tabIndex++);
+        button.Tag = agent;
+        button.SetResourceReference(Control.BorderBrushProperty, agent.IsCentralPlanner ? "Accent" : agent.Chat.IsBridgeManager ? "AccentDim" : "Border");
+        button.ToolTip = $"{agent.Label} · {agent.Role}\n{agent.Task}\n{agent.Model}\n{agent.Directory}\n{agent.Status}"
+            + (agent.Account.Length > 0 ? "\n" + agent.Account : "")
+            + (agent.IsCentralPlanner ? "\nOpen this planner's Bridge" : "\nOpen this chat");
+        AutomationProperties.SetName(button, $"Open {agent.Label}: {agent.Task}. {agent.Status}. {agent.Role}.");
+        button.Content = AgentContent(agent);
+        Place(button, rect);
+    }
+
+    private double LayoutAdvanced(AgentActivityProject project, double x, double y, double width,
+        HashSet<string> present, List<Connection> links, ref int tabIndex)
+    {
+        var hub = new Rect(x + (width - 214) / 2, y + 10, 214, 112);
+        var projectButton = Node("project:" + project.Key, present);
+        KeyboardNavigation.SetTabIndex(projectButton, tabIndex++);
+        projectButton.SetResourceReference(Control.BackgroundProperty, "Bg2");
+        projectButton.SetResourceReference(Control.BorderBrushProperty, "AccentDim");
+        projectButton.Tag = project; projectButton.ToolTip = project.Directory;
+        AutomationProperties.SetName(projectButton, $"Filter to {project.Name}, {project.Agents.Count} agents");
+        projectButton.Content = ProjectContent(project); Place(projectButton, hub);
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        var nextY = hub.Bottom + 36;
+        var index = tabIndex;
+
+        void Groups(AgentActivityNode[] roots, Rect parent, bool managed)
+        {
+            var columns = Math.Max(1, Math.Min(roots.Length, Math.Min(3, (int)(width / 280))));
+            var cell = width / columns;
+            for (var first = 0; first < roots.Length; first += columns)
+            {
+                var bottom = nextY;
+                for (var column = 0; column < columns && first + column < roots.Length; column++)
+                {
+                    var manager = roots[first + column];
+                    if (!used.Add(manager.Id)) continue;
+                    var cardWidth = Math.Min(320, cell - 24);
+                    var rect = new Rect(x + column * cell + (cell - cardWidth) / 2, nextY, cardWidth, 100);
+                    PlaceAgent(manager, rect, present, ref index);
+                    links.Add(new(new(parent.Left + parent.Width / 2, parent.Bottom), new(rect.Left + rect.Width / 2, rect.Top),
+                        manager.State == AgentActivityState.Working, Vertical: true, Managed: managed));
+                    var workerY = rect.Bottom + 20;
+                    foreach (var worker in project.Agents.Where(a => a.ParentAgentId == manager.Id && !a.IsCentralPlanner && !a.Chat.IsBridgeManager))
+                    {
+                        if (!used.Add(worker.Id)) continue;
+                        var workerRect = new Rect(rect.Left + 18, workerY, rect.Width - 18, 100);
+                        PlaceAgent(worker, workerRect, present, ref index);
+                        // Route down the team's left gutter, never through earlier workers' cards.
+                        links.Add(new(new(rect.Left + 7, rect.Bottom), new(workerRect.Left, workerRect.Top + 50),
+                            worker.State == AgentActivityState.Working, LaneX: rect.Left + 7, Managed: true));
+                        workerY += 116;
+                    }
+                    bottom = Math.Max(bottom, workerY);
+                }
+                nextY = bottom + 32;
+            }
+        }
+
+        foreach (var central in project.Agents.Where(a => a.IsCentralPlanner))
+        {
+            used.Add(central.Id);
+            var rect = new Rect(x + (width - 320) / 2, nextY, 320, 100);
+            PlaceAgent(central, rect, present, ref index);
+            links.Add(new(new(hub.Left + hub.Width / 2, hub.Bottom), new(rect.Left + rect.Width / 2, rect.Top),
+                central.State == AgentActivityState.Working, Vertical: true));
+            nextY = rect.Bottom + 36;
+            Groups(project.Agents.Where(a => a.ParentAgentId == central.Id && a.Chat.IsBridgeManager && !a.IsCentralPlanner).ToArray(), rect, true);
+        }
+        Groups(project.Agents.Where(a => !used.Contains(a.Id) && a.Chat.IsBridgeManager).ToArray(), hub, false);
+        Groups(project.Agents.Where(a => !used.Contains(a.Id)).ToArray(), hub, false);
+        tabIndex = index;
+        return nextY - y;
     }
 
     private Button Node(string id, HashSet<string> present)
@@ -213,16 +289,19 @@ public sealed class WorkflowGraph : Canvas
         return stack;
     }
 
-    private sealed record Connection(Point Start, Point End, bool Working)
+    private sealed record Connection(Point Start, Point End, bool Working, bool Vertical = false, double? LaneX = null, bool Managed = false)
     {
+        public Point Control1 => Vertical ? new(Start.X, (Start.Y + End.Y) / 2) : new(LaneX ?? (Start.X + End.X) / 2, Start.Y);
+        public Point Control2 => Vertical ? new(End.X, (Start.Y + End.Y) / 2) : new(LaneX ?? (Start.X + End.X) / 2, End.Y);
         // Geometry belongs to the layout, not the animation frame.
-        public StreamGeometry Geometry { get; } = Build(Start, End);
-        private static StreamGeometry Build(Point start, Point end)
+        public StreamGeometry Geometry { get; } = Build(Start, End, Vertical, LaneX);
+        private static StreamGeometry Build(Point start, Point end, bool vertical, double? lane)
         {
-            var middle = (start.X + end.X) / 2;
+            var c1 = vertical ? new Point(start.X, (start.Y + end.Y) / 2) : new Point(lane ?? (start.X + end.X) / 2, start.Y);
+            var c2 = vertical ? new Point(end.X, (start.Y + end.Y) / 2) : new Point(lane ?? (start.X + end.X) / 2, end.Y);
             var geometry = new StreamGeometry();
             using (var path = geometry.Open())
-            { path.BeginFigure(start, false, false); path.BezierTo(new(middle, start.Y), new(middle, end.Y), end, true, false); }
+            { path.BeginFigure(start, false, false); path.BezierTo(c1, c2, end, true, false); }
             geometry.Freeze();
             return geometry;
         }
@@ -240,9 +319,8 @@ public sealed class WorkflowGraph : Canvas
             var green = TryFindResource("Green") as Brush ?? Brushes.LightGreen;
             foreach (var link in Links)
             {
-                var midpoint = (link.Start.X + link.End.X) / 2;
-                var c1 = new Point(midpoint, link.Start.Y);
-                var c2 = new Point(midpoint, link.End.Y);
+                var c1 = link.Control1;
+                var c2 = link.Control2;
                 dc.DrawGeometry(null, new Pen(link.Working ? active : idle, link.Working ? 1.5 : 1), link.Geometry);
                 dc.DrawEllipse(link.Working ? active : idle, null, link.End, 3, 3);
                 if (!link.Working || !Animate) continue;

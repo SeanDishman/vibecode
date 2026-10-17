@@ -40,6 +40,7 @@ public sealed partial class MainViewModel
         }
         using var activity = new CentralPlannerActivity(configuration);
         central.Activity = activity;
+        central.LastActivityAt = DateTimeOffset.UtcNow;
         RaiseCentralPlannerUi();
         var status = new BannerItem
         {
@@ -164,6 +165,7 @@ public sealed partial class MainViewModel
                 Result = activity.Transcript()
             });
             central.Activity = null;
+            central.LastActivityAt = DateTimeOffset.UtcNow;
             central.Cancellation = null;
             RaiseCentralPlannerUi();
             RequestSave();

@@ -42,6 +42,7 @@ internal static partial class Program
             VerifyWall();
             VerifyVisualInteractions();
             VerifyRecentActivityAndUsage();
+            VerifyAdvancedWorkflow();
             Console.WriteLine($"PASS: {Checks} workflow telemetry checks. Local fixtures only.");
             return 0;
         }

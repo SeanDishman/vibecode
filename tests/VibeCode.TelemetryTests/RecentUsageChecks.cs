@@ -28,11 +28,13 @@ internal static partial class Program
         var now = DateTimeOffset.UtcNow;
         var chat = Chat(@"C:\Recent", "Codex 1", "Recently active");
         bool Visible(DateTimeOffset at) => AgentActivitySnapshot.Build([chat], at).Count > 0;
-        Activity(chat, now.AddMinutes(-59));
-        Check("Agents active 59 minutes ago remain on the wall", Visible(now));
-        Activity(chat, now.AddHours(-1));
-        Check("The one-hour boundary is inclusive", Visible(now));
-        Check("Idle agents expire after one hour", !Visible(now.AddTicks(1)));
+        Activity(chat, now.AddMinutes(-9));
+        Check("Agents active nine minutes ago remain on the wall", Visible(now));
+        Activity(chat, now.AddMinutes(-10));
+        Check("Agents remain visible immediately before ten minutes", Visible(now.AddTicks(-1)));
+        Check("Idle agents disappear at exactly ten minutes", !Visible(now));
+        Activity(chat, now.AddMinutes(-30));
+        Check("Chats inactive for thirty minutes are excluded", !Visible(now));
         chat.Status = "running"; Activity(chat, now.AddHours(-3));
         Check("Long-running turns stay visible beyond an hour", Visible(now));
         chat.Status = "idle";
@@ -43,8 +45,10 @@ internal static partial class Program
         chat.Status = "starting";
         Check("Booting a CLI alone does not qualify as recent work", !Visible(now));
         chat.Status = "idle";
-        typeof(ChatViewModel).GetField("_lastAssistantAt", Flags)!.SetValue(chat, now.AddMinutes(-12));
+        typeof(ChatViewModel).GetField("_lastAssistantAt", Flags)!.SetValue(chat, now.AddMinutes(-7));
         Check("Older sessions can use a genuine assistant activity timestamp", Visible(now));
+        typeof(ChatViewModel).GetField("_lastAssistantAt", Flags)!.SetValue(chat, now.AddMinutes(-12));
+        Check("Legacy assistant timestamps also expire after ten minutes", !Visible(now));
         chat.Close();
 
         var rows = new[] {
@@ -57,6 +61,8 @@ internal static partial class Program
         Check("Totals include cache tiers once and exclude stale/future rows", usage.Report.Total == 400 && usage.Report.TotalIn == 370 && usage.Report.Output == 30);
         Check("Both graphs and total cover the exact same hour", usage.Buckets.Sum(b => b.Total) == usage.Report.Total
             && usage.Report.Models.Sum(m => m.Total) == usage.Report.Total);
+        Check("Hourly token history is independent of the ten-minute agent window", usage.Report.Total == 400
+            && usage.TokensPerMinute == 400.0 / 60 && usage.TokensPerTurn == 200 && usage.RecentTokensPerMinute == 5);
         Check("Partial five-minute edge buckets retain boundary tokens", usage.Buckets.Count == 13 && usage.Buckets.First().Total == 375 && usage.Buckets.Last().Total == 25);
         Check("No activity produces zero-filled charts", WorkflowUsageSnapshot.Build([], now).Buckets.All(b => b.Total == 0));
         var shifted = WorkflowUsageSnapshot.Build(rows.Select(e => new UsageEntry { At = e.At.ToOffset(TimeSpan.FromHours(-6)), Model = e.Model,
@@ -65,7 +71,7 @@ internal static partial class Program
 
         var source = new MainViewModel();
         var recent = Chat(@"C:\Projects\Recent", "Codex 1", "Active project", "running");
-        var old = Chat(@"C:\Projects\Old", "Claude 2", "Old project"); Activity(old, now.AddHours(-2));
+        var old = Chat(@"C:\Projects\Old", "Claude 2", "Old project"); Activity(old, now.AddMinutes(-30));
         source.Chats.Add(recent); source.Chats.Add(old);
         var wall = new WorkflowTelemetryWindow(source) { Left = 6200, Top = 200, WindowStartupLocation = WindowStartupLocation.Manual, ShowInTaskbar = false };
         wall.Show(); wall.Refresh();
@@ -93,13 +99,24 @@ internal static partial class Program
         ((TextBox)wall.FindName("Search")).Clear();
         Capture(wall, 1920, 1080, "workflow-recent-usage.png");
         var wallScroll = (ScrollViewer)wall.FindName("WallScroll");
-        Check("Full-screen map and usage section fit together", wallScroll.ScrollableHeight < 1);
+        var panel = (Border)wall.FindName("UsagePanel");
+        var map = (Border)wall.FindName("MapFrame");
+        var body = (Grid)wall.FindName("WallBody");
+        Check("Full-screen map and usage panel fit together", wallScroll.ScrollableHeight < 1);
+        Check("Analytics occupy about one fifth of the workspace", panel.ActualWidth * panel.ActualHeight / (wallScroll.ActualWidth * wallScroll.ActualHeight) is > .18 and < .22);
+        var corner = panel.TranslatePoint(new Point(panel.ActualWidth, panel.ActualHeight), body);
+        Check("Analytics dock at the bottom right beside the map", Grid.GetColumn(panel) == 1 && Math.Abs(corner.Y - map.ActualHeight) < 2
+            && Math.Abs(corner.X + panel.Margin.Right - body.ActualWidth) < 2);
         Capture(wall, 760, 520, "workflow-recent-compact.png");
         ((ScrollViewer)wall.FindName("WallScroll")).ScrollToBottom(); PumpFor(60);
+        Check("Compact analytics keep their heading within the visible viewport", panel.TranslatePoint(new Point(), wallScroll).Y >= -.5
+            && panel.ActualHeight <= wallScroll.ViewportHeight + 1);
         Capture(wall, 760, 520, "workflow-usage-compact.png");
-        recent.Status = "idle"; Activity(recent, DateTimeOffset.UtcNow.AddHours(-2));
+        recent.Status = "idle"; Activity(recent, DateTimeOffset.UtcNow.AddMinutes(-10).AddMilliseconds(400));
         wall.Refresh();
-        Check("The refresh removes agents as their activity ages out", graph.NodeCount == 0);
+        Check("A finished agent stays visible until its ten minutes elapse", graph.NodeCount == 2);
+        PumpFor(1500);
+        Check("The real refresh timer removes the expired agent and directory", graph.NodeCount == 0);
         wall.Close();
         Check("Closing the workflow wall releases its streaming usage watcher", !LiveTurnTelemetry.Instance.IsWatched);
         recent.Close(); old.Close();
