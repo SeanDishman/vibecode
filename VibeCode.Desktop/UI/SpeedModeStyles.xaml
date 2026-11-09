@@ -36,4 +36,13 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!-- The robot (agent team) toggle beside the lightning: grey when off, green when on. A style trigger outranks the
+         shared template's amber IsChecked trigger, so only the colour differs from the speed controls. -->
+    <Style x:Key="AgentTeamToggle" TargetType="ToggleButton" BasedOn="{StaticResource SpeedModeToggle}">
+        <Style.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource Green}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
 </ResourceDictionary>

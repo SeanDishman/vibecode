@@ -158,7 +158,7 @@ class BridgeClient(
         request("POST", "/api/chats/${chatId.esc()}/fast", body = JSONObject().put("on", on))
     }
 
-    // ---------------- queue, rewind, lifecycle ----------------
+    // ---------------- queue and lifecycle ----------------
 
     suspend fun sendQueuedNow(chatId: String, ordinal: Int) = queue(chatId, ordinal, "send")
 
@@ -170,11 +170,6 @@ class BridgeClient(
             body = JSONObject().put("ord", ordinal).put("action", action),
         )
     }
-
-    /** Rewinds the workspace to just before the prompt at [ordinal]. Returns the desktop's summary of what moved. */
-    suspend fun undoPrompt(chatId: String, ordinal: Int): String =
-        request("POST", "/api/chats/${chatId.esc()}/undo", body = JSONObject().put("ord", ordinal))
-            .optString("message")
 
     suspend fun togglePin(chatId: String): Boolean =
         request("POST", "/api/chats/${chatId.esc()}/pin", body = JSONObject()).optBoolean("pinned")

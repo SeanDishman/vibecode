@@ -33,7 +33,10 @@ public static class WorkflowModelSpeeds
                     : at is null ? "Fetching public model stats"
                     : valid ? $"OpenRouter provider traffic · last checked {at.Value.ToLocalTime():HH:mm}"
                     : "No public stats available";
-                return new WorkflowModelSpeedRow(model.Model, model.Display, ProviderModelCatalog.DisplayName(model.Provider), id,
+                var modelId = ModelPricing.CanonicalId(model.Model);
+                var paletteId = id is null ? modelId : id[(id.IndexOf('/') + 1)..];
+                return new WorkflowModelSpeedRow(modelId, UsagePalette.DisplayName(paletteId),
+                    ProviderModelCatalog.DisplayName(model.Provider), id,
                     valid ? speed!.Value.TokensPerSecond.ToString("0") : "—",
                     valid ? $"{speed!.Value.LatencySeconds:0.0}s" : "—", detail, at, valid);
             }).ToArray();

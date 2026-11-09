@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using VibeCode.Protocol;
@@ -30,6 +31,20 @@ public static class CliInstallationService
         {
             var packages = Path.Combine(directory, "node_modules", "@openai");
             if (Directory.Exists(packages)) return Directory.EnumerateFiles(packages, "codex.exe", SearchOption.AllDirectories).FirstOrDefault();
+        }
+        // Google's Gemini CLI is sunset for individual accounts. Gemini chats host the official Antigravity ACP
+        // server (agy_acp_server + localharness_external), which is the client Google still serves.
+        if (provider == "gemini")
+        {
+            var direct = Existing(Path.Combine(directory, "agy_acp_server.exe"));
+            if (direct is not null) return direct;
+            if (!Directory.Exists(directory)) return null;
+            try
+            {
+                return Directory.EnumerateFiles(directory, "agy_acp_server.exe", SearchOption.AllDirectories).FirstOrDefault()
+                       ?? Directory.EnumerateFiles(directory, "agy_acp_server.par", SearchOption.AllDirectories).FirstOrDefault();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
         }
         return null;
     }
@@ -102,7 +117,10 @@ public static class CliInstallationService
                 progress?.Report($"Checking {DisplayName(provider)} CLI…");
                 using var check = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 check.CancelAfter(TimeSpan.FromSeconds(45));
-                await RunAsync(cli, ["--version"], check.Token).ConfigureAwait(false);
+                if (Path.GetExtension(cli).Equals(".js", StringComparison.OrdinalIgnoreCase))
+                    await RunAsync(NodePath, [cli, "--version"], check.Token).ConfigureAwait(false);
+                else
+                    await RunAsync(cli, ["--version"], check.Token).ConfigureAwait(false);
                 Promote(staging, Path.Combine(Root, provider));
                 ConfigureEnvironment();
                 if (!IsReady(provider)) throw new IOException("The CLI was installed but is not available. Close setup and retry.");
@@ -111,6 +129,64 @@ public static class CliInstallationService
             finally { RemoveStaging(staging); }
         }
         finally { Gate.Release(); }
+    }
+
+    private const string AntigravityRegistryUrl = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
+    private const string AntigravityFallbackUrlX64 =
+        "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.4-windows-x86_64.zip";
+    private const string AntigravityFallbackShaX64 = "4b68e5936a3d7a60b520aa1ee9479c8be58c43e015f026dc41e7ad17ec54d427";
+    private const string AntigravityFallbackUrlArm64 =
+        "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.4-windows-arm64.zip";
+    private const string AntigravityFallbackShaArm64 = "655835b095e160d726ee894a10e56960a9a81b03503edbd348079336163b28de";
+
+    /// <summary>
+    /// Google's official Antigravity ACP server from the ACP registry (same binary Zed and JetBrains host).
+    /// Individual Google accounts refuse Gemini CLI; this is the client those accounts still serve.
+    /// </summary>
+    private static async Task InstallAntigravityAsync(IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        progress?.Report("Installing Google Antigravity…");
+        var (url, checksum) = await ResolveAntigravityArchiveAsync(cancellationToken).ConfigureAwait(false);
+        await InstallArchiveAsync(url, checksum, "gemini", inner: null, progress, cancellationToken).ConfigureAwait(false);
+        var cli = FindInDirectory("gemini", Path.Combine(Root, "gemini"))
+                  ?? throw new IOException("The installer finished without Google Antigravity. Retry the installation.");
+        var harness = Path.Combine(Path.GetDirectoryName(cli)!, "localharness_external.exe");
+        if (!File.Exists(harness))
+            throw new IOException("Google Antigravity is missing its agent harness. Retry the installation.");
+    }
+
+    private static async Task<(string Url, string Checksum)> ResolveAntigravityArchiveAsync(CancellationToken cancellationToken)
+    {
+        var arm = RuntimeInformation.OSArchitecture == Architecture.Arm64;
+        var platform = arm ? "windows-aarch64" : "windows-x86_64";
+        try
+        {
+            var json = await Http.GetStringAsync(AntigravityRegistryUrl, cancellationToken).ConfigureAwait(false);
+            if (JsonNode.Parse(json)?["agents"] is JsonArray agents)
+            {
+                foreach (var agent in agents.OfType<JsonObject>())
+                {
+                    if (!string.Equals(agent["id"]?.GetValue<string>(), "antigravity-acp", StringComparison.Ordinal))
+                        continue;
+                    var dist = agent["distribution"]?["binary"]?[platform] as JsonObject;
+                    var url = dist?["archive"]?.GetValue<string>();
+                    var sha = dist?["sha256"]?.GetValue<string>();
+                    if (url is { Length: > 0 } && sha is { Length: > 0 }
+                        && url.StartsWith("https://dl.google.com/agy-extensions/", StringComparison.OrdinalIgnoreCase)
+                        && Regex.IsMatch(sha, "^[a-fA-F0-9]{64}$"))
+                        return (url, sha);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException
+                                       or InvalidOperationException or IOException)
+        {
+            // Fall through to the pinned Google download. The registry is only a version pointer.
+        }
+
+        return arm
+            ? (AntigravityFallbackUrlArm64, AntigravityFallbackShaArm64)
+            : (AntigravityFallbackUrlX64, AntigravityFallbackShaX64);
     }
 
     private static async Task EnsureNodeAsync(IProgress<string>? progress, CancellationToken cancellationToken)
@@ -132,8 +208,6 @@ public static class CliInstallationService
             ?? throw new IOException("Node.js did not publish a checksum for this platform.");
         await InstallArchiveAsync(baseUrl + name + ".zip", checksum, "node", name, progress, cancellationToken).ConfigureAwait(false);
     }
-
-
 
     private static async Task InstallArchiveAsync(string url, string checksum, string component, string? inner,
         IProgress<string>? progress, CancellationToken cancellationToken)

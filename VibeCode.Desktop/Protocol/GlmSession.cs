@@ -26,6 +26,8 @@ public sealed class GlmSessionOptions
     public string? Effort { get; init; }
     public string PermissionMode { get; init; } = "default";
     public string? AppendSystemPrompt { get; init; }
+    public bool DialogueOnly { get; init; }
+    public bool ForkSession { get; init; }
     public string? BridgeMcpPipe { get; init; }
     /// <summary>The session to continue. Its saved conversation is loaded from <see cref="HistoryDirectory"/>.</summary>
     public string? Resume { get; init; }
@@ -132,7 +134,7 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
         // A resumed chat keeps its id even when nothing was saved for it (chats from before history was kept), so
         // the sidebar row, its title and its metadata stay attached to the same conversation.
         var resume = Services.GlmTranscriptStore.IsValidId(_options.Resume) ? _options.Resume : null;
-        SessionId = resume ?? Guid.NewGuid().ToString("n");
+        SessionId = resume is not null && !_options.ForkSession ? resume : Guid.NewGuid().ToString("n");
         Models = BuildModels();
         _history.Add(new JsonObject
         {
@@ -161,6 +163,7 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
 
     private string SystemPrompt()
     {
+        if (_options.DialogueOnly) return _options.AppendSystemPrompt ?? "Answer the user directly. No tools are available.";
         var builder = new StringBuilder();
         builder.Append("You are a coding agent running inside VibeCode on Windows. You are working in the folder ")
             .Append(_options.Cwd).Append(".\n\n")
@@ -291,6 +294,8 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
                 // Record exactly what the model said, tool calls included, or the next request loses the thread.
                 _history.Add(reply.ToHistory(GlmPreset.IsZai(_backend)));
 
+                if (_options.DialogueOnly && reply.ToolCalls.Count > 0)
+                    throw new InvalidOperationException("This conversation has no tools available.");
                 if (reply.ToolCalls.Count == 0)
                 {
                     // Guidance that arrived while this final answer streamed keeps the turn going, so it is answered
@@ -532,7 +537,7 @@ public sealed class GlmSession : ICodingSession, ISteerableSession
                 // reply rather than a short one. See GlmPreset.DefaultMaxTokensPerTurn.
                 ["max_tokens"] = GlmPreset.DefaultMaxTokensPerTurn,
                 ["messages"] = History(),
-                ["tools"] = ToolSchema(),
+                ["tools"] = _options.DialogueOnly ? null : ToolSchema(),
                 ["tool_choice"] = "auto",
             };
             if (GlmPreset.IsZai(_backend))

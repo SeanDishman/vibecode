@@ -15,7 +15,7 @@ public sealed partial class ChatViewModel
     internal int PendingPermissionCount => _pendingPerms.Count;
 
     internal bool CanAcceptBridgeObjective => Status is not ("error" or "closed") &&
-        (Status == "starting" || _session is { HasExited: false });
+        (Status == "starting" || _providerAsleep || _session is { HasExited: false });
 
     internal bool SendBridgeObjective(string objective)
     {
@@ -70,8 +70,9 @@ public sealed partial class ChatViewModel
     /// <summary>Title changes accepted since the last prompt was dispatched. The MCP handler caps them so the
     /// header follows the overall task instead of narrating sub-steps.</summary>
     internal int BridgeTaskTitleChangesThisTurn { get; set; }
-    public string BridgeTerminalIdentity => int.TryParse(BridgeLabel.Split(' ').LastOrDefault(), out var number)
-        ? $"Agent {number}" : AgentDisplay;
+    /// <summary>Its name, else "Agent 2": its number within its pane's team where it has one, otherwise in the Bridge.</summary>
+    public string BridgeTerminalIdentity => _agentTeamName.Length > 0 ? _agentTeamName
+        : AgentTeamNumber > 0 ? $"Agent {AgentTeamNumber}" : AgentDisplay;
     public string BridgeTerminalLabel => $"{BridgeTerminalIdentity} · {BridgeTaskName}";
     public bool BridgeCoordinatesOnly { get; internal set; }
     public string? BridgeCoordinatorAgentId { get; internal set; }
@@ -132,7 +133,7 @@ public sealed partial class ChatViewModel
         "changes_requested" => "Changes requested",
         _ => BridgeReviewLevel == "none" ? "Review off" : "Final review pending",
     };
-    public string BridgeAvailabilityText => BridgeWorkerPaused ? IsWorking ? "Stopping" : "Stopped by orchestrator" : WaitingForBridgeRetry ? BridgeRetryText : Status is "closed" or "error" ? Status : BridgeTaskState switch
+    public string BridgeAvailabilityText => BridgeWorkerPaused ? IsWorking ? "Stopping" : "Stopped by orchestrator" : WaitingForBridgeRetry ? BridgeRetryText : IsIdleAsleep ? "Sleeping" : Status is "closed" or "error" ? Status : BridgeTaskState switch
     {
         "completed" => Status == "idle" ? "Completed" : Status,
         "interrupted" => "Interrupted",

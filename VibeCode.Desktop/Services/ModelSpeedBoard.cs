@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
+using VibeCode.UI;
 
 namespace VibeCode.Services;
 
@@ -11,18 +13,20 @@ namespace VibeCode.Services;
 /// </summary>
 public sealed class ModelSpeedRow : INotifyPropertyChanged
 {
-    public ModelSpeedRow(string displayName, string vendor, string openRouterId, string paletteId)
+    public ModelSpeedRow(string displayName, string vendor, string? openRouterId, string paletteId)
     {
         DisplayName = displayName;
         Vendor = vendor;
         OpenRouterId = openRouterId;
+        Key = openRouterId ?? vendor + ":" + paletteId;
         Swatch = UsagePalette.BrushFor(paletteId);
     }
 
     public string DisplayName { get; }
     /// <summary>Who makes it — the board groups visually by this, and two vendors ship a "5" model each.</summary>
     public string Vendor { get; }
-    public string OpenRouterId { get; }
+    public string? OpenRouterId { get; }
+    internal string Key { get; }
     /// <summary>The same colour this model gets in the donut and the by-model list, so one model reads as one
     /// colour everywhere on the wall.</summary>
     public Brush Swatch { get; }
@@ -70,13 +74,12 @@ public sealed class ModelSpeedRow : INotifyPropertyChanged
 }
 
 /// <summary>
-/// The telemetry wall's model speed board: throughput and latency for a fixed set of frontier models, polled from
-/// OpenRouter's public endpoint stats on a slow cycle.
+/// The telemetry wall's model speed board: the user's most-used models over the last 30 days, with throughput
+/// and latency polled from OpenRouter's public endpoint stats on a slow cycle.
 ///
 /// This is deliberately NOT scoped by the wall's range strip. Every other panel there is a window over THIS
-/// machine's own history; these figures are the wider world's — OpenRouter's median over its last 30 minutes of
-/// real traffic across every provider endpoint serving that model. Nothing local would change them, so a "last
-/// 7 days" chip would be meaningless against them.
+/// machine's own history; selection here always uses 30 days of local tokens, while the speeds describe
+/// OpenRouter's last 30 minutes of traffic. Local usage selects the models, not their measured speeds.
 ///
 /// The fetch itself is <see cref="ModelSpeedService"/>, the same code that fills the model picker's speed line, so
 /// the wall and the picker can never quote different numbers for the same model.
@@ -89,28 +92,44 @@ public sealed class ModelSpeedBoard
     /// traffic, so a faster cycle would spend requests to redraw the same numbers.</summary>
     public static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
 
-    private static ModelSpeedRow[] CreateRows() =>
-[
-    new("Opus 5.5",      "Anthropic", "anthropic/claude-opus-5.5",   "claude-opus-5-5"),
-        new("Sonnet 5.5",    "Anthropic", "anthropic/claude-sonnet-5.5", "claude-sonnet-5-5"),
-        new("Fable 5.1",     "Anthropic", "anthropic/claude-fable-5.1", "claude-fable-5-1"),
-        // Astra shipped 2026-09-03 and OpenRouter had not listed openai/gpt-6-astra yet when this row was added,
-        // so it reads "no data" until they do — Apply() keeps that tidy rather than printing a fake zero.
-        new("GPT-6 Astra",   "OpenAI",    "openai/gpt-6-astra",        "gpt-6-astra"),
-        new("GPT-6.1 Sol",   "OpenAI",    "openai/gpt-6.1-sol",      "gpt-6.1-sol"),
-        new("GPT-6 Sol",     "OpenAI",    "openai/gpt-6-sol",          "gpt-6-sol"),
-        new("GPT-6 Luna",    "OpenAI",    "openai/gpt-6-luna",         "gpt-6-luna"),
-        new("GPT 5.6 Sol",   "OpenAI",    "openai/gpt-5.6-sol",        "gpt-5.6-sol"),
-        new("GPT 5.6 Terra", "OpenAI",    "openai/gpt-5.6-terra",      "gpt-5.6-terra"),
-        new("GPT 5.6 Luna",  "OpenAI",    "openai/gpt-5.6-luna",       "gpt-5.6-luna"),
-    ];
+    public const int MaxRows = 8;
+    public static readonly TimeSpan UsagePeriod = TimeSpan.FromDays(30);
 
-    private readonly ModelSpeedRow[] _board;
+    /// <summary>Rank actual, completed usage by all input/cache/output tokens. Collapse aliases and prompt
+    /// wrappers onto the same backend, without substituting a newer model for an older model actually used.</summary>
+    public static ModelSpeedRow[] SelectRows(IEnumerable<UsageEntry> entries, DateTimeOffset now)
+    {
+        var groups = new Dictionary<string, (ModelSpeedRow Row, double Tokens, DateTimeOffset LastUsed)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+        {
+            if (entry.At < now - UsagePeriod || entry.At > now || !double.IsFinite(entry.Total) || entry.Total <= 0) continue;
+            var raw = ModelPricing.CanonicalId(entry.Model);
+            if (raw.ToLowerInvariant() is "unknown" or "auto" or "default") continue;
+            var id = ModelSpeedService.OpenRouterId(raw, entry.Provider);
+            var paletteId = id is null ? raw : id[(id.IndexOf('/') + 1)..];
+            if (paletteId.StartsWith("claude-", StringComparison.Ordinal))
+                paletteId = Regex.Replace(paletteId, @"(?<=\d)\.(?=\d)", "-");
+            var vendor = (id?.Split('/')[0]) switch
+            {
+                "anthropic" => "Anthropic", "openai" => "OpenAI", "x-ai" => "xAI",
+                "z-ai" => "Z.ai", "moonshotai" => "Moonshot", "google" => "Google",
+                _ => ProviderModelCatalog.DisplayName(entry.Provider),
+            };
+            var key = id ?? vendor + ":" + paletteId;
+            if (groups.TryGetValue(key, out var group))
+                groups[key] = (group.Row, group.Tokens + entry.Total, entry.At > group.LastUsed ? entry.At : group.LastUsed);
+            else
+                groups[key] = (new ModelSpeedRow(UsagePalette.DisplayName(paletteId), vendor, id, paletteId), entry.Total, entry.At);
+        }
+        return groups.Values.OrderByDescending(g => g.Tokens).ThenByDescending(g => g.LastUsed)
+            .ThenBy(g => g.Row.Key, StringComparer.OrdinalIgnoreCase).Take(MaxRows).Select(g => g.Row).ToArray();
+    }
+
+    private readonly ObservableCollection<ModelSpeedRow> _board = new();
 
     private ModelSpeedBoard()
     {
-        _board = CreateRows();
-        Rows = new ReadOnlyObservableCollection<ModelSpeedRow>(new ObservableCollection<ModelSpeedRow>(_board));
+        Rows = new ReadOnlyObservableCollection<ModelSpeedRow>(_board);
     }
 
     public ReadOnlyObservableCollection<ModelSpeedRow> Rows { get; }
@@ -137,6 +156,7 @@ public sealed class ModelSpeedBoard
             if (!_hooked)
             {
                 ModelSpeedService.Instance.Updated += OnSpeedsUpdated;
+                UsageLog.Instance.Changed += OnUsageChanged;
                 _hooked = true;
             }
             _timer ??= new DispatcherTimer { Interval = RefreshInterval };
@@ -153,29 +173,55 @@ public sealed class ModelSpeedBoard
         if (--_watchers > 0) return;
         _watchers = 0;
         _timer?.Stop();
+        ModelSpeedService.Instance.Updated -= OnSpeedsUpdated;
+        UsageLog.Instance.Changed -= OnUsageChanged;
+        _hooked = false;
     }
 
     private void OnTick(object? sender, EventArgs e) => Refresh();
 
+    private void OnUsageChanged() => Application.Current?.Dispatcher.BeginInvoke(() =>
+    {
+        if (_watchers > 0) Refresh();
+    });
+
+    private void UpdateSelection()
+    {
+        var selected = SelectRows(UsageLog.Instance.Entries(), DateTimeOffset.Now);
+        var existing = _board.ToDictionary(r => r.Key, StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < selected.Length; i++)
+        {
+            if (existing.TryGetValue(selected[i].Key, out var row))
+            {
+                var oldIndex = _board.IndexOf(row);
+                if (oldIndex != i) _board.Move(oldIndex, i);
+            }
+            else _board.Insert(i, selected[i]);
+        }
+        while (_board.Count > selected.Length) _board.RemoveAt(_board.Count - 1);
+    }
+
     /// <summary>Poll every model on the board. Cheap when nothing has expired — the underlying cache skips those.</summary>
     public void Refresh()
     {
+        UpdateSelection();
         // Just under the cycle: a cache entry written by the previous tick must be considered stale by this one, or
         // every poll after the first would be skipped and the board would freeze on its opening numbers.
         var maxAge = RefreshInterval - TimeSpan.FromSeconds(30);
-        ModelSpeedService.Instance.PrefetchIds(_board.Select(r => r.OpenRouterId), maxAge);
+        ModelSpeedService.Instance.PrefetchIds(_board.Select(r => r.OpenRouterId).OfType<string>(), maxAge);
         Apply();
+        Updated?.Invoke();
     }
 
     private void OnSpeedsUpdated()
     {
         Apply();
-        Application.Current?.Dispatcher.BeginInvoke(() => Updated?.Invoke());
+        Updated?.Invoke();
     }
 
     private void Apply()
     {
-        var newest = LastUpdated;
+        DateTime? newest = null;
         foreach (var row in _board)
         {
             row.Apply(ModelSpeedService.Instance.ById(row.OpenRouterId));

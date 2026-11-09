@@ -26,9 +26,63 @@ public sealed partial class ChatViewModel
     private bool ValidateGoalCommand(string text)
     {
         if (!GoalPolicy.TryParseCommand(text, out var goal) || goal.Length > 0) return true;
-        Items.Add(new BannerItem { Level = "info", Text = "Use /goal followed by the goal you want completed." });
-        ItemsChanged?.Invoke();
+        ShowGoalNotice(Goal is null ? GoalStatusText()
+            : GoalStatusText() + "\nUse /goal followed by a new goal to replace it, or /goal pause, /goal resume or /goal clear.");
         return false;
+    }
+
+    /// <summary>/goal status, pause, resume and clear manage the current goal without starting a turn, even while one
+
+    private bool ApplyGoalControl(string text, GoalControl control, IReadOnlyList<Attachment>? attachments)
+    {
+        if (attachments is { Count: > 0 })
+        {
+            ShowGoalNotice($"Remove attachments before using {text.Trim()}.");
+            return false;
+        }
+        _promptHistory.Record(text);
+        switch (control)
+        {
+            case GoalControl.Pause when Goal is { Completed: false, Paused: false }:
+                PauseGoal();
+                ShowGoalNotice("Goal paused. Send a message or use /goal resume to continue.");
+                break;
+            case GoalControl.Resume when Goal is { Completed: false, Paused: true } paused:
+                Goal = paused with { Paused = false };
+                ShowGoalNotice("Goal resumed.");
+                // Like a sent message, resuming retries a failed turn instead of waiting behind its error state.
+                if (_status == "error")
+                {
+                    CancelBridgeErrorRecovery();
+                    CancelLimitRecovery();
+                    Status = "idle";
+                }
+                else MaybeScheduleGoalCheck();
+                break;
+            case GoalControl.Clear when Goal is not null:
+                CancelGoalCheck();
+                Goal = null;
+                ShowGoalNotice("Goal cleared.");
+                break;
+            default:
+                ShowGoalNotice(GoalStatusText());
+                break;
+        }
+        return true;
+    }
+
+    private string GoalStatusText() => Goal switch
+    {
+        null => "Use /goal followed by the goal you want completed.",
+        { Completed: true } done => "Goal completed: " + done.Text,
+        { Paused: true } paused => "Goal paused: " + paused.Text,
+        var active => "Goal active: " + active.Text,
+    };
+
+    private void ShowGoalNotice(string text)
+    {
+        InsertBeforeQueued(new BannerItem { Level = "info", Text = text });
+        ItemsChanged?.Invoke();
     }
 
     private GoalTurn? BeginGoalTurn(string text, bool goalCheck)
@@ -84,7 +138,7 @@ public sealed partial class ChatViewModel
     private bool CanCheckGoal() => Goal is { Completed: false, Paused: false }
         && _status == "idle" && _session is { HasExited: false }
         && !HasPendingDispatch && string.IsNullOrWhiteSpace(Draft) && Attachments.Count == 0
-        && !RewindHoldsDispatch && !_steerSubmitting && !_steerQueueHold
+        && !ModelRestartHoldsDispatch && !_steerSubmitting && !_steerQueueHold
         && !ExtendedQueuePaused && _pendingPerms.Count == 0;
 
     private void MaybeScheduleGoalCheck()

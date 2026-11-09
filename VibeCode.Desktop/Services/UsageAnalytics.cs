@@ -170,14 +170,15 @@ public static class UsageAnalytics
             if (firstSeen is null || e.At < firstSeen) firstSeen = e.At;
             if (since is not null && e.At < since) continue;
 
-            if (!models.TryGetValue(e.Model, out var model))
+            var modelId = ModelPricing.CanonicalId(e.Model);
+            if (!models.TryGetValue(modelId, out var model))
             {
-                models[e.Model] = model = new ModelUsage
+                models[modelId] = model = new ModelUsage
                 {
-                    Model = e.Model,
+                    Model = modelId,
                     Provider = e.Provider,
-                    Display = UsagePalette.DisplayName(e.Model),
-                    Color = UsagePalette.ColorFor(e.Model),
+                    Display = UsagePalette.DisplayName(modelId),
+                    Color = UsagePalette.ColorFor(modelId),
                 };
             }
             model.Input += e.Input;

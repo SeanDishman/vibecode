@@ -71,7 +71,7 @@ public sealed class ApiKeyValidation
 /// selected account for that provider is an API-key account. Subscription runs are never touched, and
 /// picking a key account is therefore the only way to start spending per-token.
 /// </summary>
-public sealed class ApiKeyAccountService : Observable
+public sealed partial class ApiKeyAccountService : Observable
 {
     public static ApiKeyAccountService Instance { get; } = new();
 
@@ -108,8 +108,8 @@ public sealed class ApiKeyAccountService : Observable
     private static class Known
     {
         /// <summary>Providers that can be signed into with a key, in menu order.</summary>
-        /// <remarks>GLM is last because it is the only entry here that is ONLY a key - the other four are
-        /// subscription CLIs for which a key is an alternative. Its id must stay in this list: it is also what
+        /// <remarks>GLM is last because it is the only entry here that is ONLY a key - the others are
+        /// subscription or login CLIs for which a key is an alternative. Its id must stay in this list: it is also what
         /// <see cref="DropRetiredProviders"/> checks, so omitting it would silently delete every saved GLM key
         /// on the next launch.</remarks>
         internal static readonly string[] InMenuOrder =
@@ -136,6 +136,8 @@ public sealed class ApiKeyAccountService : Observable
 
     public ApiKeyAccount Add(string provider, string key, string? label = null, string? glmBackend = null)
     {
+        provider = provider.Trim().ToLowerInvariant();
+        if (!Providers.Contains(provider)) throw new ArgumentException("Choose a supported provider.", nameof(provider));
         key = (key ?? "").Trim();
         var account = new ApiKeyAccount
         {
@@ -334,6 +336,9 @@ public sealed class ApiKeyAccountService : Observable
                 return status switch
                 {
                     401 or 403 => ApiKeyValidation.Bad("The provider rejected that key."),
+                    // Google answers a malformed or unknown key with 400 INVALID_ARGUMENT ("API key not valid").
+                    400 when provider.Equals("gemini", StringComparison.OrdinalIgnoreCase) =>
+                        ApiKeyValidation.Bad("Google rejected that key. Create one in Google AI Studio → Get API key."),
                     429 => ApiKeyValidation.Good("Key is valid (rate limited right now)."),
                     // Deliberately not "that key is bad": after the retries above this is the provider being
                     // unwell, and the key may well be fine.
@@ -401,11 +406,14 @@ public sealed class ApiKeyAccountService : Observable
         try
         {
             if (!File.Exists(FilePath)) return;
-            var data = JsonSerializer.Deserialize<Persisted>(File.ReadAllText(FilePath));
+            var json = File.ReadAllText(FilePath);
+            var data = JsonSerializer.Deserialize<Persisted>(json);
             if (data is null) return;
             _accounts.AddRange(data.Accounts);
             foreach (var kv in data.Selected) _selected[kv.Key] = kv.Value;
-            if (DropRetiredProviders()) Save();
+            // Retire the old route and encrypted key while preserving ordinary provider accounts.
+            using var document = JsonDocument.Parse(json);
+            if (DropRetiredProviders() || document.RootElement.TryGetProperty("UnlimitedClaude", out _)) Save();
         }
         catch { /* a corrupt file must not stop the app starting */ }
     }
@@ -429,7 +437,7 @@ public sealed class ApiKeyAccountService : Observable
         return removed > 0;
     }
 
-    private void Save()
+    private void Save(bool requireSuccess = false)
     {
         try
         {
@@ -437,8 +445,14 @@ public sealed class ApiKeyAccountService : Observable
             var json = JsonSerializer.Serialize(
                 new Persisted { Accounts = _accounts, Selected = new Dictionary<string, string>(_selected) },
                 new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(FilePath, json);
+            var temporary = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporary, json);
+                File.Move(temporary, FilePath, overwrite: true);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
-        catch { /* best effort - the in-memory list still works this session */ }
+        catch when (!requireSuccess) { /* best effort for existing account callers */ }
     }
 }

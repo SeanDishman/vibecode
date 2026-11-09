@@ -11,7 +11,7 @@ internal static class BridgeAgentConfigurationPolicy
 {
     public static readonly string[] Providers = ["claude", "codex", GlmPreset.ProviderId];
 
-    public static BridgeAgentConfiguration From(ChatViewModel chat) => new(chat.Provider, chat.Model, chat.Effort, chat.BridgeReviewLevel, chat.FastMode, chat.UltrafastMode);
+    public static BridgeAgentConfiguration From(ChatViewModel chat) => new(chat.Provider, chat.ChosenModel, chat.Effort, chat.BridgeReviewLevel, chat.FastMode, chat.UltrafastMode);
 
     public static BridgeAgentConfiguration Defaults(string provider, ChatViewModel? host = null)
     {

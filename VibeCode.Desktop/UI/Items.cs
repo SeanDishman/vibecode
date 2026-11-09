@@ -28,6 +28,9 @@ public abstract class ItemVm : Observable
     private static long _nextDisplaySequence;
     // Keeps interleaved bridge activity in arrival order without copying or re-owning transcript items.
     internal long DisplaySequence { get; } = Interlocked.Increment(ref _nextDisplaySequence);
+    /// <summary>When a row loaded from saved history was first written. A restored or forked team loads each agent's
+    /// history on its own, so the shared terminal orders those rows by this instead of by when they finished loading.</summary>
+    internal DateTimeOffset? HistoryTime { get; set; }
 }
 
 /// <summary>Backing collection for a chat transcript. A plain Add lands ABOVE the pinned tail — the live
@@ -47,15 +50,21 @@ public sealed class TranscriptItems : ObservableCollection<ItemVm>
         _ => 0,
     };
 
+    /// <summary>Set while saved history is replayed: every row added meanwhile was written at this time. Stamped
+    /// before the add is announced, so the shared terminal already sees it when it places the row.</summary>
+    internal DateTimeOffset? HistoryTime { get; set; }
+
     protected override void InsertItem(int index, ItemVm item)
     {
+        if (HistoryTime is { } written) item.HistoryTime ??= written;
         // Only plain appends are redirected. An explicit Insert at a known index is left alone, and each tail
         // member must still be able to reach past everything it outranks.
         if (index == Count)
         {
             var rank = TailRank(item);
-            for (var i = 0; i < Count; i++)
-                if (TailRank(this[i]) > rank) { index = i; break; }
+            // Only the pinned suffix can outrank an append. Walking from the start made restoring
+            // N ordinary rows quadratic, even with no queued prompts or thinking row at all.
+            while (index > 0 && TailRank(this[index - 1]) > rank) index--;
         }
         base.InsertItem(index, item);
     }
@@ -132,6 +141,12 @@ public sealed class SubagentItem : ItemVm
 
     /// <summary>True once this row's on-disk transcript has been streamed in, so a re-open does not replay it.</summary>
     public bool WorkflowTranscriptLoaded { get; set; }
+
+    /// <summary>For a workflow row: the step its transcript on disk shows it on, and the newest one it finished,
+    /// followed while the run is live (see ChatViewModel.FollowWorkflowAgent). Any other subagent streams its tool
+    /// rows into <see cref="Transcript"/>, which says the same thing directly.</summary>
+    public AgentActivityStep? LiveStep { get; set; }
+    public AgentActivityStep? LastStep { get; set; }
 
     public string Label { get => _label; set => Set(ref _label, value); }
     public string Task { get => _task; set => Set(ref _task, value); }
@@ -241,6 +256,7 @@ public sealed class UserItem : ItemVm
     private int _newerPendingTurns;
     private bool _undoInProgress;
 
+    internal bool IsLocalSubmission { get; init; }
     public required string Text { get; init; }
     /// <summary>Stable id used by AgentMemory's deduplication and turn provenance. Never shown in the transcript.</summary>
     internal string MemoryTurnId { get; init; } = "";
@@ -327,14 +343,11 @@ public sealed class UserItem : ItemVm
     public int NewerPendingTurns => _newerPendingTurns;
     public bool UndoCascades => _newerPendingTurns > 0;
 
-    /// <summary>The rewind button stays actionable while the current turn is running or its checkpoint is sealing
-    /// (clicking that state requests Stop first), and when only this chat's own newer prompts stand in the way —
-    /// those get rewound on the way past. A blocker this chat CANNOT clear, such as another Bridge pane's overlapping
-    /// turn, still disables it, because no amount of cascading here would resolve one.</summary>
+    /// <summary>A click either rewinds the prompt or explains why it cannot be restored. Checkpoint failures and
+    /// overlapping edits must not turn the visible arrow into a silent no-op. Only an in-progress rewind or an
+    /// already-restored prompt disables the action; the checkpoint engine still validates every file restore.</summary>
     public bool CanRequestUndo => !_undoInProgress
-                                  && _rollbackCheckpoint is { WasRolledBack: false } checkpoint
-                                  && checkpoint.UnavailableReason is null
-                                  && (checkpoint.CanRollback || !checkpoint.IsCompleted || UndoCascades);
+                                  && _rollbackCheckpoint is { WasRolledBack: false };
     public bool HasUndoStatus => _rollbackCheckpoint?.WasRolledBack == true;
     public int UndoChangedFileCount => _rollbackCheckpoint?.ChangedFileCount ?? 0;
     public string UndoStatusText => HasUndoStatus ? "Changes undone · prompt restored" : "";
@@ -413,6 +426,10 @@ public sealed class QueuedItem : ItemVm
         set { if (Set(ref _text, value)) { Raise(nameof(HasText)); Raise(nameof(IsGoalCommand)); } }
     }
     public bool IsGoalCommand => GoalPolicy.TryParseCommand(Text, out _);
+    /// <summary>App-owned context that rides on the wire with exactly this prompt and is never shown in its bubble (an
+    /// agent team's /message note). It is kept here rather than on the chat's Prelude so a peer notice dispatched while
+    /// the prompt waits cannot carry it off.</summary>
+    internal string? WireNote { get; set; }
     /// <summary>The chat or Bridge pane that owns this queue entry. Shared item templates must not infer ownership
     /// from their visual ancestors because the normal transcript and Bridge panes have different trees.</summary>
     public required ChatViewModel Owner { get; init; }
@@ -451,7 +468,12 @@ public sealed class QueuedItem : ItemVm
             : Extended
                 ? $"Extended queue · {QueuePosition}/{QueueTotal} · {Owner.ExtendedQueueChunkSize} per turn" +
                   (RetryCount > 0 ? $" · retry {RetryCount}" : "")
+                // An agent that is still starting (a teammate that just joined, a pane coming back) has no turn to
+                // finish: its prompt is pending until the agent is up, not queued behind work.
+                : IsPending ? "Pending · sends when the agent is ready"
                 : "Queued · sends when the agent finishes";
+    /// <summary>The owner is still starting, so this prompt waits for it to come up rather than for a turn to end.</summary>
+    public bool IsPending => Owner.Status == "starting";
     public string QueueActionText => Extended
         ? Owner.ExtendedQueuePaused ? "Resume queue" : "Send next chunk now"
         : Owner.IsCodex ? "Send message now" : "Send prompt now";
@@ -459,6 +481,7 @@ public sealed class QueuedItem : ItemVm
         ? Owner.ExtendedQueuePaused
             ? "Resume the extended queue now instead of waiting for the next usage check"
             : $"Stop the active turn if needed, then send the next {Owner.ExtendedQueueChunkSize} queued request(s)"
+        : IsPending ? "Send it now, without waiting for the agent to finish starting"
         : "Stop the active turn if needed, then send all queued prompts together";
 
     internal void UpdateQueuePosition(int position, int total)
@@ -470,6 +493,7 @@ public sealed class QueuedItem : ItemVm
 
     internal void RefreshQueueState()
     {
+        Raise(nameof(IsPending));
         Raise(nameof(QueueStatusText));
         Raise(nameof(QueueActionText));
         Raise(nameof(QueueActionToolTip));
@@ -717,11 +741,11 @@ public sealed class TodoEntry : Observable
     public bool Done => Status == "completed";
 }
 
-public sealed class ToolItem : ItemVm
+public sealed partial class ToolItem : ItemVm
 {
     public required string Id { get; init; }
     public required string Name { get; init; }
-    public string DisplayName => BridgeToolPresentation.DisplayName(Name) ?? (Name == "CodexEdit" ? Str(Input?["kind"]) switch
+    public string DisplayName => BridgeToolPresentation.CardDisplayName(Name, Input) ?? (Name == "CodexEdit" ? Str(Input?["kind"]) switch
     {
         "add" => "Create",
         "delete" => "Delete",
@@ -738,12 +762,21 @@ public sealed class ToolItem : ItemVm
     private double _elapsed;
     private string? _summaryOverride;
 
-    public JsonNode? Input { get => _input; set { _input = value; RaiseAll(); } }
-    public string Status { get => _status; set { if (Set(ref _status, value)) { Raise(nameof(IsRunning)); } } }
+    // JsonNode children reference their parents. A retained tool row must own only its arguments,
+    // not the full provider envelope (including sibling text, images and the parser's backing buffer).
+    // DeepClone alone can share the immutable JsonElement document, so reparse just the input payload.
+    public JsonNode? Input
+    {
+        get => _input;
+        set { _input = value?.Parent is null ? value : JsonNode.Parse(value.ToJsonString()); RaiseAll(); }
+    }
+    public string Status { get => _status; set { if (Set(ref _status, value)) { Raise(nameof(IsRunning)); Raise(nameof(LookupStatus)); Raise(nameof(LookupAccessibleName)); } } }
     public string? Result { get => _result; set { if (Set(ref _result, value)) Raise(nameof(ResultCapped)); } }
-    public bool IsError { get => _isError; set => Set(ref _isError, value); }
+    public bool IsError { get => _isError; set { if (Set(ref _isError, value)) { Raise(nameof(ResultCapped)); Raise(nameof(LookupStatus)); Raise(nameof(LookupAccessibleName)); } } }
     public bool Expanded { get => _expanded; set => Set(ref _expanded, value); }
     public bool IsAgent { get => _isAgent; set { if (Set(ref _isAgent, value)) Raise(nameof(Icon)); } }
+    /// <summary>VibeCode's own todo_write, from any provider. Its card shows the checklist it set.</summary>
+    public bool IsTodoTool => BridgeMcpConnection.IsTodoToolCall(Name, _input);
     public string? ProgressText { get => _progressText; set => Set(ref _progressText, value); }
     public double Elapsed { get => _elapsed; set { if (Set(ref _elapsed, value)) Raise(nameof(ElapsedText)); } }
     public string? SummaryOverride
@@ -783,7 +816,7 @@ public sealed class ToolItem : ItemVm
     /// same-file edits so the code viewer can reconstruct the pre-edit file and show cumulative green/red.</summary>
     public List<(string Old, string New)> EditOps { get; } = new();
     /// <summary>Absolute path of the file this tool targets (Edit/Write/MultiEdit/NotebookEdit), if any.</summary>
-    public string? FilePath => Str(Input?["file_path"]) ?? Str(Input?["notebook_path"]);
+    public string? FilePath => ToolFileRange.PathFromInput(Input as JsonObject);
 
     /// <summary>
     /// Best guess at the line this edit landed on, so "Open in editor" can put the caret there. Located by
@@ -798,17 +831,21 @@ public sealed class ToolItem : ItemVm
             var path = FilePath;
             if (string.IsNullOrWhiteSpace(path)) return null;
             var needle = Str(Input?["new_string"]) ?? Str(Input?["old_string"]) ?? Str(Input?["content"]);
-            if (string.IsNullOrWhiteSpace(needle)) return null;
-            try
+            if (!string.IsNullOrWhiteSpace(needle))
             {
-                var probe = needle.Split('\n')[0].TrimEnd('\r').Trim();
-                if (probe.Length < 4) return null;          // too generic to match reliably
-                var lines = System.IO.File.ReadAllLines(path);
-                for (var i = 0; i < lines.Length; i++)
-                    if (lines[i].Contains(probe, StringComparison.Ordinal)) return i + 1;
+                try
+                {
+                    var probe = needle.Split('\n')[0].TrimEnd('\r').Trim();
+                    if (probe.Length >= 4)
+                    {
+                        var lines = System.IO.File.ReadAllLines(path);
+                        for (var i = 0; i < lines.Length; i++)
+                            if (lines[i].Contains(probe, StringComparison.Ordinal)) return i + 1;
+                    }
+                }
+                catch { /* unreadable file just means fall through to the named range */ }
             }
-            catch { /* unreadable file just means no line hint */ }
-            return null;
+            return _input as JsonObject is { } args && ToolFileRange.FromInput(args) is { } range ? range.Start : null;
         }
     }
     /// <summary>Whether the "View full code" affordance applies (file-editing tools).</summary>
@@ -835,10 +872,11 @@ public sealed class ToolItem : ItemVm
         "WebSearch" or "WebFetch" => "",                // globe
         "Task" or "Agent" or "spawn_subagent" => "",
         "TodoWrite" => "",                              // checked box
+        _ when IsTodoTool => "",                    // checked box: VibeCode's todo_write, from any provider
         "AskUserQuestion" => "",                        // help
         "ExitPlanMode" or "EnterPlanMode" => "",        // document
         "Skill" or "SlashCommand" => "",                // lightning
-        _ when Name.StartsWith("mcp__") => "",          // plug
+        _ when Name.StartsWith("mcp__", StringComparison.Ordinal) || Name.StartsWith("mcp_", StringComparison.Ordinal) => "",          // plug (Claude mcp__ / Gemini mcp_)
         _ => "",                                        // gear
     };
 
@@ -853,8 +891,8 @@ public sealed class ToolItem : ItemVm
             return Name switch
             {
                 "Bash" or "PowerShell" => S(i["command"]) ?? S(i["description"]) ?? "",
-                "Read" or "Write" => S(i["file_path"]) ?? "",
-                "Edit" or "MultiEdit" or "CodexEdit" => S(i["file_path"]) ?? "",
+                "Read" or "Write" => ToolFileRange.FileSummary(i as JsonObject, S(i["file_path"])),
+                "Edit" or "MultiEdit" or "CodexEdit" => ToolFileRange.FileSummary(i as JsonObject, S(i["file_path"])),
                 "NotebookEdit" => S(i["notebook_path"]) ?? "",
                 "Grep" => $"{S(i["pattern"])}{(S(i["path"]) is { } p ? $"  in {p}" : "")}",
                 "Glob" => S(i["pattern"]) ?? "",
@@ -909,6 +947,11 @@ public sealed class ToolItem : ItemVm
     /// </summary>
     public string HeaderSummary => CompactToolPresentation.ToSingleLine(Summary);
 
+    /// <summary>Just the line numbers, docked on the right of a compact file row so a long Gemini path cannot
+    /// ellipsis <c>: 19-26</c> off the end of HeaderSummary.</summary>
+    public string LineRangeText => ToolFileRange.Describe(_input as JsonObject) ?? "";
+    public bool HasLineRange => LineRangeText.Length > 0;
+
     public string AgentType => (Input?["subagent_type"]?.GetValue<string>())
         ?? (Input?["agent_type"]?.GetValue<string>())
         ?? "agent";
@@ -928,7 +971,8 @@ public sealed class ToolItem : ItemVm
     public string InputPretty => Input?.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) ?? "";
     public string WriteContent => Trunc(Input?["content"]?.GetValue<string>() ?? "", 6000);
     public string PlanMarkdown => Input?["plan"]?.GetValue<string>() ?? "";
-    public string ResultCapped => Trunc(LaunchNotice(Name, _result) ?? _result ?? "", 6000);
+    // A successful todo_write receipt is counts and a reminder written for the model; the checklist above it is the output.
+    public string ResultCapped => IsTodoTool && !_isError ? "" : Trunc(LaunchNotice(Name, _result) ?? _result ?? "", 6000);
 
     /// <summary>
     /// Collapse a background-launch tool result down to the one line that is addressed to the USER.
@@ -981,7 +1025,8 @@ public sealed class ToolItem : ItemVm
     }
     public string BashCommand => Input?["command"]?.GetValue<string>() ?? "";
     /// <summary>Raw request details needed by compact rows whose dedicated body would otherwise be empty.</summary>
-    public string CompactFallbackInput => Name == "NotebookEdit" || Name == "WebFetch" || Name.StartsWith("mcp__", StringComparison.Ordinal)
+    public string CompactFallbackInput => IsFileLookup || Name == "NotebookEdit" || Name == "WebFetch"
+        || Name.StartsWith("mcp__", StringComparison.Ordinal) || Name.StartsWith("mcp_", StringComparison.Ordinal)
         ? Trunc(InputPretty, 6000)
         : "";
     /// <summary>Caption for the exact Codex web action shown inside the expanded tool card.</summary>
@@ -1021,8 +1066,11 @@ public sealed class ToolItem : ItemVm
 
     private void RaiseAll()
     {
+        _lookup = null;
+        Raise(nameof(Lookup)); Raise(nameof(LookupAccessibleName));
         Raise(nameof(DisplayName)); Raise(nameof(Icon));
         Raise(nameof(Input)); Raise(nameof(Summary)); Raise(nameof(HeaderSummary)); Raise(nameof(InputPretty));
+        Raise(nameof(LineRangeText)); Raise(nameof(HasLineRange)); Raise(nameof(FilePath));
         Raise(nameof(WriteContent)); Raise(nameof(PlanMarkdown)); Raise(nameof(BashCommand));
         Raise(nameof(CompactFallbackInput)); Raise(nameof(AgentType));
         Raise(nameof(WebSearchDetailLabel)); Raise(nameof(WebSearchDetails));
@@ -1076,6 +1124,19 @@ public sealed class ToolItem : ItemVm
     }
 
     internal static string Trunc(string s, int max) => s.Length <= max ? s : s[..max] + $"\n… (+{s.Length - max} chars)";
+
+    /// <summary>A replayed tool output is only ever shown capped (see <see cref="ResultCapped"/>), so once its card is
+    /// built there is no need to keep the whole body: a long chat's thousands of outputs cost ~151 MB of strings. Keep a
+    /// bounded head - well above every display cap - and note how much was dropped; the full output stays in the session
+    /// transcript on disk. Live results are left whole (memory capture, copy, and the settle-time parsers read them).</summary>
+    internal const int RetainedHistoryResultCap = 8 * 1024;
+    public void TrimResultForHistory()
+    {
+        if (_result is not { } result || result.Length <= RetainedHistoryResultCap) return;
+        _result = result[..RetainedHistoryResultCap]
+            + $"\n… [{result.Length - RetainedHistoryResultCap:N0} more characters hidden to save memory; the full output is in the session transcript]";
+        Raise(nameof(ResultCapped));
+    }
 }
 
 /// <summary>
@@ -1133,9 +1194,9 @@ public sealed class CompactToolGroupItem : ItemVm
     public string CountText => Kind switch
     {
         BashKind => $"{Tools.Count} command{(Tools.Count == 1 ? "" : "s")}",
-        BrowseKind => Tools.Count > 0 && Tools.All(t => t.Name == "Read")
-            ? $"{Tools.Count} file{(Tools.Count == 1 ? "" : "s")}"
-            : $"{Tools.Count} lookup{(Tools.Count == 1 ? "" : "s")}",
+        BrowseKind => string.Join(" · ", new[] { ("Read", "read"), ("Grep", "search"), ("Glob", "file search"), ("LS", "listing") }
+            .Select(kind => (Count: Tools.Count(t => t.Name == kind.Item1), Label: kind.Item2))
+            .Where(kind => kind.Count > 0).Select(kind => $"{kind.Count} {kind.Label}{(kind.Count == 1 ? "" : kind.Label.EndsWith("search") ? "es" : "s")}")),
         EditKind => $"{Tools.Count} edit{(Tools.Count == 1 ? "" : "s")}",
         WebKind => $"{Tools.Count} action{(Tools.Count == 1 ? "" : "s")}",
         _ => $"{Tools.Count} item{(Tools.Count == 1 ? "" : "s")}",
@@ -1198,6 +1259,9 @@ public sealed class CompactToolGroupItem : ItemVm
         "Read" or "Grep" or "Glob" or "LS" => BrowseKind,
         "Write" or "Edit" or "MultiEdit" or "NotebookEdit" or "CodexEdit" => EditKind,
         "WebSearch" or "WebFetch" => WebKind,
+        // A checklist update stands alone, as TodoWrite does, so its progress line is not folded into "Web / MCP".
+        _ when BridgeMcpConnection.IsTodoToolCall(toolName, null) => null,
+        _ when BridgeMcpConnection.IsChatTitleMcpName(toolName) => null,
         _ when toolName.StartsWith("mcp__", StringComparison.Ordinal) => WebKind,
         _ => null,
     };
@@ -1273,7 +1337,7 @@ public sealed class PermItem : ItemVm
             return ToolName switch
             {
                 "Bash" or "PowerShell" => i?["description"]?.GetValue<string>() ?? "",
-                "Edit" or "MultiEdit" or "Write" or "Read" => i?["file_path"]?.GetValue<string>() ?? "",
+                "Edit" or "MultiEdit" or "Write" or "Read" => ToolFileRange.FileSummary(i as JsonObject, i?["file_path"]?.GetValue<string>()),
                 _ => "",
             };
         }

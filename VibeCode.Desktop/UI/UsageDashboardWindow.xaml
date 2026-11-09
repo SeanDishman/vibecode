@@ -250,16 +250,19 @@
             </Border>
         </Grid>
 
-        <!-- Model speed board. The one panel here that is NOT about this machine: OpenRouter's median throughput
-             and end-to-end latency for each model over its last 30 minutes of real traffic, request-weighted
-             across every provider endpoint serving it. Nothing local moves these numbers, which is exactly why
-             the range strip does not scope them - and why the caption says where they came from instead. -->
+        <!-- Selection uses this machine's last 30 days of tokens. Speeds are OpenRouter's recent medians;
+             neither window follows the range strip used by the local-history panels above. -->
         <Border Grid.Row="5" Style="{DynamicResource Card}" Padding="16,12" Margin="0,12,0,0">
             <StackPanel>
                 <DockPanel LastChildFill="False" Margin="0,0,0,10">
-                    <TextBlock Text="MODEL SPEED · OPENROUTER" Style="{StaticResource WallCaption}" DockPanel.Dock="Left"/>
-                    <TextBlock x:Name="WallSpeedAge" FontFamily="{DynamicResource Mono}" FontSize="10" Foreground="{DynamicResource Faint}" VerticalAlignment="Center" Margin="0,0,0,0" DockPanel.Dock="Right"/>
+                    <TextBlock Text="MOST-USED MODELS · OPENROUTER SPEED" Style="{StaticResource WallCaption}"
+                               DockPanel.Dock="Left" />
+                    <TextBlock x:Name="WallSpeedAge" FontFamily="{DynamicResource Mono}" FontSize="10"
+                               Foreground="{DynamicResource Faint}" VerticalAlignment="Center"
+                               Margin="0,0,0,0" DockPanel.Dock="Right" />
                 </DockPanel>
+                <TextBlock Text="Top 8 by your token usage in the last 30 days. Speeds reflect OpenRouter traffic."
+                           Foreground="{DynamicResource Muted}" FontSize="10.5" TextWrapping="Wrap" Margin="0,0,0,10" />
                 <ItemsControl x:Name="WallModelSpeeds">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -273,8 +276,11 @@
                             <Border Background="{DynamicResource Bg1}" CornerRadius="{DynamicResource Rad8}" Padding="12,10" Margin="3,0">
                                 <StackPanel>
                                     <DockPanel LastChildFill="True">
-                                        <Rectangle Width="9" Height="9" Fill="{Binding Swatch}" RadiusX="2" RadiusY="2" VerticalAlignment="Center" DockPanel.Dock="Left"/>
-                                        <TextBlock Text="{Binding DisplayName}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="7,0,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                        <Rectangle Width="9" Height="9" Fill="{Binding Swatch}" RadiusX="2" RadiusY="2"
+                                                   VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                        <TextBlock Text="{Binding DisplayName}" FontSize="11.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Text}" Margin="7,0,0,0"
+                                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTip="{Binding DisplayName}" />
                                     </DockPanel>
                                     <TextBlock Text="{Binding Vendor}" FontSize="9.5" Foreground="{DynamicResource Faint}" Margin="16,1,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
                                     <DockPanel Margin="0,8,0,0" LastChildFill="False">
@@ -287,6 +293,19 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <TextBlock Text="Your most-used models appear here after you use them."
+                           Foreground="{DynamicResource Muted}" Margin="3,8" TextWrapping="Wrap">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasItems, ElementName=WallModelSpeeds}" Value="False">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </StackPanel>
         </Border>
     </Grid>

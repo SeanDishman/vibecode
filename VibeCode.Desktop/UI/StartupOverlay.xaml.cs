@@ -59,21 +59,7 @@ public partial class StartupOverlay : UserControl
     {
         await SetStageAsync("Workspace ready", 100, 4);
 
-        if (!SystemParameters.ClientAreaAnimation)
-        {
-            Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        await Task.Delay(110);
-        BeginAnimation(OpacityProperty, new DoubleAnimation
-        {
-            From = 1,
-            To = 0,
-            Duration = TimeSpan.FromMilliseconds(260),
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut },
-        });
-        await Task.Delay(280);
+        // Readiness is not gated on a decorative minimum time or fade-out.
         Visibility = Visibility.Collapsed;
         BeginAnimation(OpacityProperty, null);
     }

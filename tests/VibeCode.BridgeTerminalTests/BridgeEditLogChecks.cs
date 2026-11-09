@@ -283,8 +283,9 @@ internal static partial class Program
         var fixedNow = new DateTimeOffset(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
         BridgeEditLedger.Append(workspace, Entry(fixedNow.AddHours(-1), "src/a.ts"));
         BridgeEditLedger.Append(workspace, Entry(fixedNow.AddMinutes(-5), "src/b.ts"));
-        Check("the log lives in the project's hidden .vibecode folder and is git-ignored",
-            directory == Path.Combine(workspace, ".vibecode", "bridge-edits") && File.ReadAllText(Path.Combine(directory, ".gitignore")).Trim() == "*"
+        Check("the log lives in shared user data with a project identity",
+            Path.GetDirectoryName(directory) == Path.Combine(AppSettings.Dir, "agent-edit-history")
+            && File.Exists(Path.Combine(directory, "workspace.json"))
             && File.ReadAllText(Path.Combine(directory, "README.md")).Contains("bridge_file_edits"));
         var line = JsonNode.Parse(File.ReadLines(Day("2026-10-04")).First())!;
         Check("each line is one self-describing JSON edit", line["agent_id"]?.ToString() == "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"

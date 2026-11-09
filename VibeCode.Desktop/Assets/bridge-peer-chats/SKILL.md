@@ -1,9 +1,13 @@
 ---
 name: bridge-peer-chats
-description: Find context in other agents' chats in your current VibeCode Bridge. Use when joining a bridge fresh, recovering earlier decisions, or checking what a Codex or Claude peer already tried.
+description: Find context in other agents' chats in your current VibeCode Bridge, including normal Bridges across Codex, Claude and GLM. Use bridge_read_chat for full conversations; this helper supports focused archive searches.
 ---
 
 # Bridge peer chats
+
+Normal/regular Bridges already have the built-in MCP tool `bridge_read_chat`, including across providers and with Second Brain disabled. If it is not visible, search for that exact tool name before switching to shell scripts.
+
+Every transcript entry has a `role`: `user` is the human's message, `assistant` is the AI's reply, `peer` is another agent's message, `tool` is tool input/output, and `system` is an app notice. For "what did I ask Codex 1?", retain entries whose role is `user` while paging the whole transcript; do not treat AI replies or peer messages as the user's words.
 
 When the user asks to read another agent's whole conversation, prefer the built-in `bridge_read_chat` tool. Pick the agent from `bridge_list_agents`, call `bridge_read_chat` with `agent` and no cursor, then keep passing `next_cursor` as `cursor` with the returned `agent_id` as `agent` until `has_more` is false. Each read captures a fixed snapshot from the beginning, so streaming updates cannot move messages between pages. Long messages continue across pages using `text_offset`; concatenate their `text` in order for the complete content. This includes grouped tool inputs and results. Cursors expire after 30 minutes without a read, with at most four snapshots retained per caller. The tool never messages, wakes or interrupts the chat owner. Do not routinely poll other agents' transcripts.
 

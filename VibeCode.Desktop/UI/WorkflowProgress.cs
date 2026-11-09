@@ -11,12 +11,43 @@ public sealed class WorkflowAgentVm : Observable
 {
     private string _state = "start";
     private double _tokens, _toolCalls, _durationMs;
-    private string _resultPreview = "";
+    private string _resultPreview = "", _promptPreview = "", _agentId = "", _doing = "", _did = "";
+    private bool _ended;
 
     public required int Index { get; init; }
     public required string Label { get; set; }
     public string Model { get; set; } = "";
-    public string PromptPreview { get; set; } = "";
+    public string PromptPreview { get => _promptPreview; set { if (Set(ref _promptPreview, value)) Raise(nameof(HoverText)); } }
+
+    /// <summary>The step its transcript on disk shows it on ("Reading WorkflowGraph.cs"), followed while it runs;
+    /// empty once it has finished, and before its transcript shows anything.</summary>
+    public string Doing { get => _doing; set { if (Set(ref _doing, value)) Raise(nameof(HoverText)); } }
+
+    /// <summary>The newest step it finished ("Ran dotnet build").</summary>
+    public string Did { get => _did; set { if (Set(ref _did, value)) Raise(nameof(HoverText)); } }
+
+    /// <summary>Its run's journal says it returned, or the turn that launched the run was stopped. The progress stream
+    /// can lag behind either, so the hover stops saying what it is doing even while the row still reads as running.</summary>
+    public bool Ended { get => _ended; set { if (Set(ref _ended, value)) Raise(nameof(HoverText)); } }
+
+    /// <summary>The row's hover: what it is doing now, what it finished last, then what it was asked to do. Null
+    /// rather than empty when there is nothing to say, so no blank tooltip opens.</summary>
+    public string? HoverText
+    {
+        get
+        {
+            var lines = new List<string>();
+            if (IsRunning && !_ended) lines.Add("Now: " + (_doing.Length > 0 ? _doing : AgentId.Length == 0 ? "Waiting to start" : "Working"));
+            else if (_state == "error") lines.Add("Failed");
+            if (_did.Length > 0) lines.Add("Last: " + _did);
+            if (_promptPreview.Length > 0)
+            {
+                if (lines.Count > 0) lines.Add("");
+                lines.Add(_promptPreview);
+            }
+            return lines.Count == 0 ? null : string.Join("\n", lines);
+        }
+    }
 
     /// <summary>
     /// The run's own id for this agent — what names its transcript file, <c>agent-&lt;id&gt;.jsonl</c>, inside the
@@ -24,13 +55,13 @@ public sealed class WorkflowAgentVm : Observable
     /// it does. That is the only honest link between this row and its conversation on disk, so an agent still
     /// waiting for a concurrency slot correctly has nothing to show.
     /// </summary>
-    public string AgentId { get; set; } = "";
+    public string AgentId { get => _agentId; set { if (Set(ref _agentId, value)) Raise(nameof(HoverText)); } }
 
     /// <summary>start | done | error — the CLI's own vocabulary, kept verbatim.</summary>
     public string State
     {
         get => _state;
-        set { if (Set(ref _state, value)) { Raise(nameof(IsRunning)); Raise(nameof(Mark)); Raise(nameof(StatusKey)); } }
+        set { if (Set(ref _state, value)) { Raise(nameof(IsRunning)); Raise(nameof(Mark)); Raise(nameof(StatusKey)); Raise(nameof(HoverText)); } }
     }
 
     public double Tokens { get => _tokens; set { if (Set(ref _tokens, value)) Raise(nameof(Stats)); } }

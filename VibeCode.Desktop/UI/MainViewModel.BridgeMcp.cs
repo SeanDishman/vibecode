@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using VibeCode.AgentStatus.Mcp.Bridge;
 using VibeCode.AgentStatus.Mcp.Contracts;
 using VibeCode.Services;
 
@@ -12,10 +13,18 @@ public sealed partial class MainViewModel
     // A tool argument can neither choose its sender nor reach another bridge in the same workspace.
     private JsonObject InvokeBridgeTool(ChatViewModel caller, string tool, JsonObject args)
     {
+        if (caller.Status == "closed" && tool != "bridge_list_agents")
+            throw new BridgeMcpException("caller_closed", "This MCP connection belongs to a chat that has closed or been removed. It can no longer perform Bridge actions.",
+                "Continue from an open chat and refresh bridge_list_agents there. Do not retry on this stale connection.", "not_started");
         if (tool == "chat_set_title") return SetChatTitleFromMcp(caller, args);
+        if (tool == "chat_checkpoint") return caller.SaveTaskCheckpoint(args);
+        if (tool == BridgeMcpTools.TodoToolName) return caller.SetTodosFromMcp(args);
+        // A team's first agent names itself before any teammate exists, so this works outside a live roster too.
+        if (tool == BridgeMcpTools.AgentNameToolName) return SetAgentTeamNameFromMcp(caller, args);
         if (!TryGetLiveBridge(caller, out var bridge) || caller.Status == "closed")
             return InvokeProjectChatTool(caller, tool, args);
         ReconcileBridgeGroups(bridge.Panes);
+        RememberBridgeRecipients(bridge);
 
         IReadOnlyList<BridgeEditEntry>? rosterEdits = null;
         if (tool == "bridge_list_agents") return new JsonObject
@@ -25,6 +34,7 @@ public sealed partial class MainViewModel
             ["self_id"] = caller.BridgeAgentId,
             ["messaging_enabled"] = PeerMessagingEnabled,
             ["plan_version"] = WorkFor(bridge.Panes).PlanVersion,
+            ["plan_steps"] = WorkFor(bridge.Panes).PlanSteps,
             ["coordination_mode"] = WorkFor(bridge.Panes).CentralPlan is null ? "peer_agreement" : "central_assignment",
             ["central_orchestrator"] = CentralPlanJson(WorkFor(bridge.Panes)),
             ["orchestrator_communication_locked"] = WorkFor(bridge.Panes).DispatchStarted,
@@ -32,9 +42,11 @@ public sealed partial class MainViewModel
             ["all_scopes_reviewed"] = bridge.Panes.Any(p => p.IsBridgeManager) && bridge.Panes.Where(p => p.IsBridgeManager).All(p => p.BridgeReviewComplete),
             ["agents"] = new JsonArray(bridge.Panes.Select(p => (JsonNode?)new JsonObject
             {
-                ["agent_id"] = p.BridgeAgentId,
-                ["number"] = BridgeNumberOf(p),
-                ["label"] = p.BridgeLabel,
+                ["agent_id"] = p.BridgeAgentId, ["number"] = BridgeNumberOf(p), ["label"] = p.BridgeLabel,
+                ["name"] = p.AgentTeamName.Length > 0 ? p.AgentTeamName : null,
+                // A team inside one pane numbers its agents from 1 within that pane; "number" counts the whole Bridge.
+                ["team_pane"] = p.AgentTeamAnchorId is { } teamPane ? bridge.Panes.FirstOrDefault(a => a.BridgeAgentId == teamPane)?.BridgeLabel : null,
+                ["team_number"] = p.AgentTeamSeatNumber > 0 ? p.AgentTeamSeatNumber : null,
                 ["message_recipient"] = BridgeMessageRecipient(p, bridge.Panes),
                 ["provider"] = p.Provider,
                 ["status"] = p.WaitingForBridgeRetry ? "waiting_to_retry" : p.Status,
@@ -84,12 +96,17 @@ public sealed partial class MainViewModel
         if (tool == "bridge_list_tasks") return ListBridgeTasks(bridge);
         if (tool == "bridge_file_edits") return ListBridgeFileEdits(caller, bridge, args);
         if (tool == "bridge_agent_status") return BridgeAgentStatus(caller, bridge, args);
-        if (tool == "bridge_read_chat") return ReadBridgeChat(caller, bridge, args);
+        if (tool == "bridge_read_chat")
+            return args["view"] is null && args["term"] is null ? ReadBridgeChat(caller, bridge, args) : ReadBridgeChatView(caller, bridge, args);
+        // A Bridge keeps its own membership: its agents read each other, never the ordinary chats beside it.
+        if (tool == BridgeMcpTools.ProjectReadChatToolName)
+            throw new StatusValidationException(BridgeMcpTools.ProjectReadChatToolName + " is for ordinary chats outside a Bridge. Use bridge_read_chat to read your Bridge peers' chats.");
         if (tool == "bridge_set_plan") return SetBridgePlan(caller, bridge, args);
         if (tool == "bridge_update_task") return UpdateBridgeTask(caller, bridge, args, false);
         if (tool == "bridge_retry_task") return UpdateBridgeTask(caller, bridge, args, true);
         if (tool == "bridge_agree_scope") return AgreeBridgeScope(caller, bridge, args);
         if (tool == "bridge_review_scope") return ReviewBridgeScope(caller, bridge, args);
+        if (tool == BridgeMcpTools.MarkTaskDoneToolName) return MarkBridgeTaskDone(caller, bridge, args);
         if (tool == "bridge_send_message") return SendBridgeMcpMessage(caller, bridge, args);
         if (tool == "bridge_broadcast") return SendBridgeMcpMessage(caller, bridge, args, broadcast: true);
 
@@ -112,11 +129,8 @@ public sealed partial class MainViewModel
                 }
                 messages.Add(new JsonObject
                 {
-                    ["message_id"] = message.Id,
-                    ["sender_id"] = sender?.BridgeAgentId,
-                    ["recipient_id"] = recipient?.BridgeAgentId,
-                    ["from"] = message.From.Label,
-                    ["to"] = message.To.Label,
+                    ["message_id"] = message.Id, ["sender_id"] = message.From.AgentId, ["recipient_id"] = message.To.AgentId,
+                    ["from"] = message.From.Label, ["to"] = message.To.Label,
                     ["direction"] = ReferenceEquals(message.To, mailbox) ? "incoming" : "outgoing",
                     ["message"] = message.Body,
                     ["status"] = message.Status,
@@ -173,7 +187,8 @@ public sealed partial class MainViewModel
 
     private JsonObject SendBridgeMcpMessage(ChatViewModel sender, LiveBridge bridge, JsonObject args, bool broadcast = false)
     {
-        if (!PeerMessagingEnabled) throw new StatusValidationException("Peer messaging is paused in Bridge settings.");
+        if (!PeerMessagingEnabled) throw new BridgeMcpException("messaging_paused", "Peer messaging is paused in Bridge settings.",
+            "Continue your task independently. Messaging must be enabled in settings before sending.", "not_started");
         var recipient = broadcast ? "all" : args["recipient"]!.GetValue<string>();
         if (!broadcast && recipient.Equals("all", StringComparison.OrdinalIgnoreCase))
             throw new StatusValidationException("Prefer bridge_send_message to one specific peer (twice for two peers). For important information needed by at least three other agents, use bridge_broadcast with affected_agent_ids and reason.");
@@ -200,7 +215,7 @@ public sealed partial class MainViewModel
         var targets = bridge.Panes.Where(p => !ReferenceEquals(p, sender)
             && (recipient == "all" || p.BridgeAgentId == recipient || BridgeMessageRecipient(p, bridge.Panes) == recipient)).ToList();
         if (targets.Count == 0)
-            throw new StatusValidationException("Recipient is not a live peer in your bridge. Call bridge_list_agents for current agent_id values.");
+            throw MissingBridgeRecipient(sender, bridge, recipient);
         var count = _bridgeMcpSends.GetValueOrDefault(sender);
         if (count >= bridge.Peers.Limits.MaxBlocksPerTurn)
             throw new StatusValidationException("This turn's message limit was reached. Continue your task; avoid acknowledgment loops.");
@@ -209,12 +224,15 @@ public sealed partial class MainViewModel
         var delivered = new JsonArray();
         var failures = new JsonArray();
         var skipped = new JsonArray();
+        var savedWithoutReceipt = false;
         foreach (var target in targets)
         {
             var setupKey = BridgeWorkState.PeerKey(sender.BridgeAgentId, target.BridgeAgentId);
             if (BridgeMessageRestriction(sender, target, work) is { } restriction)
             {
-                (broadcast ? skipped : failures).Add(new JsonObject { ["agent_id"] = target.BridgeAgentId, ["reason"] = restriction });
+                (broadcast ? skipped : failures).Add(new JsonObject { ["agent_id"] = target.BridgeAgentId, ["reason"] = restriction,
+                    ["code"] = target.AcceptsPeerNotifications ? "messaging_restricted" : "recipient_unavailable",
+                    ["recipient_status"] = target.Status, ["delivery_status"] = "not_delivered" });
                 continue;
             }
             var to = BridgeNumberOf(target);
@@ -222,9 +240,11 @@ public sealed partial class MainViewModel
             var verdict = bridge.Peers.Admit(from, to, body, hop, admittedAt);
             if (verdict != PeerMessageVerdict.Deliver)
             {
-                failures.Add(new JsonObject { ["agent_id"] = target.BridgeAgentId, ["reason"] = PeerMessagePolicy.Explain(verdict, target.BridgeLabel) });
+                failures.Add(new JsonObject { ["agent_id"] = target.BridgeAgentId, ["reason"] = PeerMessagePolicy.Explain(verdict, target.BridgeLabel),
+                    ["code"] = "message_rejected", ["delivery_status"] = "not_delivered" });
                 continue;
             }
+            BridgeMailboxStore.Message? savedMessage = null;
             try
             {
                 var fromBox = MailboxFor(sender, bridge);
@@ -247,19 +267,33 @@ public sealed partial class MainViewModel
                 target.Items.Add(new DividerItem { Label = $"Message from {sender.BridgeLabel}" });
                 NoteBridgeActivity(BridgePanes.Contains(sender) ? null : bridge);
             }
-            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch (Exception ex)
             {
-                bridge.Peers.RollbackDelivery(from, to, body, admittedAt);
-                failures.Add(new JsonObject
-                {
-                    ["agent_id"] = target.BridgeAgentId,
-                    ["reason"] = ex is InvalidOperationException
-                    ? ex.Message : "Could not save or queue the message. No delivery slot was consumed; retry when the mailbox is available."
-                });
+                // Registration and notification callbacks can throw other exception types too. Any failure
+                // before durable delivery must release the admission; after save, retain the message receipt.
+                if (savedMessage is null) bridge.Peers.RollbackDelivery(from, to, body, admittedAt);
+                else savedWithoutReceipt = true;
+                var diagnosis = savedMessage is null && ex is InvalidOperationException
+                    ? new JsonObject { ["code"] = "mailbox_rejected" }
+                    : BridgeMcpDiagnostics.Failure(ex, broadcast ? "bridge_broadcast" : "bridge_send_message",
+                        savedMessage is null ? "mailbox_save" : "notification").Details;
+                failures.Add(new JsonObject { ["agent_id"] = target.BridgeAgentId,
+                    ["reason"] = (savedMessage is null ? "Message could not be saved. " : "Message was saved, but notification did not finish. Do not resend it. ") + ex.Message,
+                    ["code"] = savedMessage is null ? diagnosis["code"]!.DeepClone() : JsonValue.Create("notification_failed"),
+                    ["diagnostic_id"] = diagnosis["diagnostic_id"]?.DeepClone(), ["message_id"] = savedMessage?.Id,
+                    ["delivery_status"] = savedMessage is null ? "not_delivered" : "saved" });
             }
         }
         if (delivered.Count == 0)
-            throw new StatusValidationException("No messages delivered. " + string.Join(" ", failures.Select(f => f?["reason"]?.ToString())));
+        {
+            if (savedWithoutReceipt) _bridgeMcpSends[sender] = count + 1;
+            throw new BridgeMcpException(failures.Count == 1 ? failures[0]!["code"]!.GetValue<string>() : "delivery_failed",
+                (savedWithoutReceipt ? "Message saved without a complete notification receipt. " : "No messages delivered. ") +
+                    string.Join(" ", failures.Select(f => f?["reason"]?.ToString())),
+                savedWithoutReceipt ? BridgeMcpException.CheckReceipt
+                    : "Follow the failure reason and refresh bridge_list_agents for the recipient's status and message_blocked_reason. Do not bypass restrictions or wake a peer without authorization.",
+                savedWithoutReceipt ? "unknown" : "rejected", new JsonObject { ["failures"] = failures });
+        }
         _bridgeMcpSends[sender] = count + 1;
         sender.Items.Add(new DividerItem { Label = $"Message queued for {delivered.Count} bridge agent(s)" });
         var receipt = new JsonObject { ["delivered"] = delivered, ["failures"] = failures };

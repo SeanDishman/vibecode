@@ -53,8 +53,10 @@ public partial class UsageHudWindow : Window
             return;
         }
 
-        // Owned, so it goes away with the app rather than holding the process open on its own.
+        // Owned, so it goes away with the app rather than holding the process open on its own. A pin releases it so it
+        // survives the main window being minimized; it still closes with the app.
         var hud = new UsageHudWindow { Owner = owner };
+        hud._ownership = new PinnedWindowOwner(hud, owner);
         // Off-screen verification runs the whole app past the right edge of every monitor; a restored placement
         // would otherwise drop this onto the user's real desktop mid-run.
         if (Environment.GetEnvironmentVariable("VIBECODE_HIDDEN") == "1")
@@ -70,6 +72,8 @@ public partial class UsageHudWindow : Window
         }
         _open = hud;
         hud.Show();
+        // After Show, so placement relative to the owner still applies before a pin releases it.
+        hud._ownership.Apply(hud.PinToggle.IsChecked == true);
     }
 
     /// <summary>
@@ -109,6 +113,7 @@ public partial class UsageHudWindow : Window
     public UsageHudWindow()
     {
         InitializeComponent();
+        TelemetryTheme.Attach(this);
         RestorePlacement();
     }
 
@@ -153,11 +158,17 @@ public partial class UsageHudWindow : Window
 
     private void OnClose(object sender, RoutedEventArgs e) => Close();
 
-    private void OnPinChanged(object sender, RoutedEventArgs e) => Topmost = PinToggle.IsChecked == true;
+    private PinnedWindowOwner? _ownership;
 
-    /// <summary>Hand off to the full-screen wall. Owner is this window's owner rather than the HUD itself, so
+    private void OnPinChanged(object sender, RoutedEventArgs e)
+    {
+        Topmost = PinToggle.IsChecked == true;
+        _ownership?.Apply(PinToggle.IsChecked == true);
+    }
+
+    /// <summary>Hand off to the full-screen wall. Owner is the main window rather than the HUD itself, so
     /// the wall picks the display the MAIN window is not on - parking it beside the HUD would defeat it.</summary>
-    private void OnOpenWall(object sender, RoutedEventArgs e) => UsageDashboardWindow.Open(Owner ?? this);
+    private void OnOpenWall(object sender, RoutedEventArgs e) => UsageDashboardWindow.Open(_ownership?.VisibleOwner ?? Owner ?? this);
 
     private void OnMetricChanged(object sender, RoutedEventArgs e)
     {

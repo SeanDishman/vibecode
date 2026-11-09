@@ -41,15 +41,20 @@ public sealed partial class ChatViewModel
         return true;
     }
 
-    internal string? ManagedWorkerResumeError => Status == "closed" ? "The worker's chat is closed. Reopen it before restarting work."
+    internal string? ManagedWorkerResumeError => ManagedWorkerRestartError(allowProviderRetry: false);
+
+    internal string? ManagedWorkerRetryError => ManagedWorkerRestartError(allowProviderRetry: true);
+
+    private string? ManagedWorkerRestartError(bool allowProviderRetry) => Status == "closed" ? "The worker's chat is closed. Reopen it before restarting work."
         : IsWorking || _interruptRequested && _session is { HasExited: false } ? "The worker is still stopping or connecting. Wait for its turn to settle before restarting."
         : AuthNeeded ? "The worker needs sign-in before it can restart."
-        : WaitingForLimitReset || WaitingForBridgeRetry ? "Stop the worker's automatic recovery before explicitly restarting it."
-        : RewindHoldsDispatch || _steerSubmitting || _steerQueueHold ? "The worker is still settling a prompt or workspace change."
+        : WaitingForLimitReset || WaitingForBridgeRetry && !allowProviderRetry ? "Stop the worker's automatic recovery before explicitly restarting it."
+        : ModelRestartHoldsDispatch || _steerSubmitting || _steerQueueHold ? "The worker is still settling a prompt or workspace change."
         : null;
 
     internal void ResumeManagedWorker()
     {
+        CancelBridgeErrorRecovery();
         _interruptRequested = false;
         ManagedWorkerStopAwaitingReport = false;
         if (BridgeTaskState == "interrupted") BridgeTaskState = "ready";

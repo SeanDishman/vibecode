@@ -117,12 +117,11 @@ class BridgeFlowTest {
         api.setFastMode("fixture-a", true)
         api.sendQueuedNow("fixture-a", 0)
         api.cancelQueued("fixture-a", 1)
-        assertEquals("Fixture rewind complete", api.undoPrompt("fixture-a", 0))
         assertTrue(api.togglePin("fixture-a"))
         api.rename("fixture-a", "Renamed fixture")
         api.close("fixture-new")
         val actions = fixture("/fixture/state").getJSONArray("actions")
-        assertEquals(16, actions.length())
+        assertEquals(15, actions.length())
         val send = (0 until actions.length()).map { actions.getJSONObject(it) }.single { it.getString("path").endsWith("/send") }
         assertEquals("Synthetic prompt: café ☕\nsecond line", send.getJSONObject("body").getString("text"))
         api.unpair()

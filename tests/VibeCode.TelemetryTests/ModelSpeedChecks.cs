@@ -14,6 +14,32 @@ internal static partial class Program
         // The production cache is prefilled in this isolated process, so native captures make no network requests.
         SpeedCache["openai/gpt-6.1"] = (new ModelSpeed(97.4, 8.3), DateTime.UtcNow);
         SpeedCache["anthropic/claude-opus-5"] = (new ModelSpeed(56.8, 2.4), DateTime.UtcNow);
+        // The wall also watches every agent's own model. Fixture chats run "GPT" (codex) and the "Opus" alias.
+        SpeedCache["openai/gpt"] = (new ModelSpeed(97.4, 8.3), DateTime.UtcNow);
+        SpeedCache["anthropic/claude-opus-5.5"] = (new ModelSpeed(56.8, 2.4), DateTime.UtcNow);
+        // Opening a fixture chat fills its model picker, which prefetches speeds for the whole provider catalog.
+        // Recording those as "no public stats" keeps the entire run offline.
+        var catalogs = typeof(ModelChoice).Assembly.GetType("VibeCode.UI.ProviderModelCatalog", throwOnError: true)!;
+        const System.Reflection.BindingFlags Static = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static;
+        foreach (var provider in new[] { "claude", "codex", "glm" })
+        {
+            var catalog = ((IEnumerable<ModelChoice>)catalogs.GetMethod("For", Static, [typeof(string)])!.Invoke(null, [provider])!).ToList();
+            if (provider == "claude") catalogs.GetMethod("EnsureClaudeModelsVisible", Static)!.Invoke(null, [catalog]);
+            foreach (var id in catalog.Select(ModelSpeedService.OpenRouterId).OfType<string>())
+                SpeedCache.TryAdd(id, (null, DateTime.UtcNow));
+        }
+        SeededSpeeds = SpeedCache.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    static HashSet<string> SeededSpeeds = [];
+
+    /// <summary>Run last: every speed the walls read came from the seeded cache, and nothing was fetched.</summary>
+    static void VerifyNoSpeedRequests()
+    {
+        var inFlight = (HashSet<string>)typeof(ModelSpeedService).GetField("_inFlight", Flags)!.GetValue(ModelSpeedService.Instance)!;
+        var fetched = SpeedCache.Keys.Where(id => !SeededSpeeds.Contains(id)).ToArray();
+        Check("Fixture walls never request OpenRouter speeds" + (fetched.Length > 0 ? ": " + string.Join(", ", fetched) : ""),
+            inFlight.Count == 0 && fetched.Length == 0);
     }
 
     static void VerifyModelSpeeds()

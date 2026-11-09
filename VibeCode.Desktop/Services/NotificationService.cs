@@ -67,6 +67,19 @@ public static class NotificationService
         Show(chat, ToastKind.Waiting, title, body + WithChatName(chat), isError: false);
     }
 
+    /// <summary>Discord's in-game overlay has hooked VibeCode and leaks memory there (see <see cref="OverlayHookWatch"/>).
+    /// Shown whatever the opt-in toasts are set to, and it stays until closed: the fix is a switch in another app, and a
+    /// toast that fades after eight seconds would simply be missed.</summary>
+    public static void NotifyDiscordOverlayHooked(long privateBytes)
+    {
+        var held = privateBytes >= 4L << 30
+            ? $" VibeCode is holding {privateBytes / (double)(1L << 30):0} GB now; restarting it frees that."
+            : "";
+        Show(null, ToastKind.Warning, "Discord's overlay is leaking memory",
+            "It can't draw on VibeCode and leaks in bursts. In Discord, turn the game overlay off for VibeCode, then restart VibeCode."
+            + held, isError: true);
+    }
+
     /// <summary>" — <chat title>" for plain chats, so a waiting toast names the chat it belongs to; bridge panes
     /// already carry their agent label in the title.</summary>
     private static string WithChatName(ChatViewModel chat) =>
@@ -150,12 +163,12 @@ public static class NotificationService
 
     // ---------------- the toast surface ----------------
 
-    private enum ToastKind { Finished, Waiting }
+    private enum ToastKind { Finished, Waiting, Warning }
 
     private static readonly List<ToastWindow> Open = new();
     private const int MaxOpenToasts = 4;
 
-    private static void Show(ChatViewModel chat, ToastKind kind, string title, string body, bool isError)
+    private static void Show(ChatViewModel? chat, ToastKind kind, string title, string body, bool isError)
     {
         // Raised from provider event handlers that are already marshalled to the UI thread, but stay defensive:
         // a toast created on a worker thread would crash the whole app, not just skip a notification.
@@ -221,12 +234,12 @@ public static class NotificationService
 
     private sealed class ToastWindow : Window
     {
-        public ChatViewModel Chat { get; }
+        public ChatViewModel? Chat { get; }
         public ToastKind Kind { get; }
         private readonly DispatcherTimer _dismissTimer;
         private bool _closing;
 
-        public ToastWindow(ChatViewModel chat, ToastKind kind, string title, string body, bool isError)
+        public ToastWindow(ChatViewModel? chat, ToastKind kind, string title, string body, bool isError)
         {
             Chat = chat;
             Kind = kind;
@@ -259,7 +272,7 @@ public static class NotificationService
                 FontSize = 11.5,
                 Foreground = BrushRes("Muted", "#9EA0A8"),
                 TextWrapping = TextWrapping.Wrap,
-                MaxHeight = 48,
+                MaxHeight = kind == ToastKind.Warning ? 96 : 48,   // a warning carries its fix, so it gets the room
                 Margin = new Thickness(0, 3, 0, 0),
             };
             var glyph = new TextBlock
@@ -330,14 +343,16 @@ public static class NotificationService
             {
                 if (_closing) return;
                 Dismiss(immediate: true);
-                ActivateChat(Chat);
+                if (Chat is { } chat) ActivateChat(chat);
             };
 
+            // A warning stays until it is closed or clicked; everything else fades after eight seconds.
+            var sticky = kind == ToastKind.Warning;
             _dismissTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
             _dismissTimer.Tick += (_, _) => Dismiss(immediate: false);
-            _dismissTimer.Start();
+            if (!sticky) _dismissTimer.Start();
             MouseEnter += (_, _) => _dismissTimer.Stop();          // reading it - don't yank it away
-            MouseLeave += (_, _) => { if (!_closing) _dismissTimer.Start(); };
+            MouseLeave += (_, _) => { if (!_closing && !sticky) _dismissTimer.Start(); };
 
             SourceInitialized += (_, _) =>
             {

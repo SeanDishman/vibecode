@@ -9,9 +9,19 @@ internal sealed class SpeechTranscription(bool useGroq)
     private bool _finished;
     private bool _running;
     private DateTime? _startedAtUtc;
+    private DateTime? _fallbackAtUtc;
     private CancellationTokenSource? _attempt;
 
     public DateTime? StartedAtUtc { get { lock (_gate) return _startedAtUtc; } }
+
+    /// <summary>When the current attempt handed its recording to Windows' recognizer as well; null until then.</summary>
+    public DateTime? FallbackStartedAtUtc { get { lock (_gate) return _fallbackAtUtc; } }
+
+    /// <summary>Restart the current attempt's clock once its one-time model download is done, so the download's
+    /// minutes never count against the transcription deadline or the composers' watchdogs.</summary>
+    public void RestartClock() { lock (_gate) if (_attempt is not null) _startedAtUtc = DateTime.UtcNow; }
+
+    public void MarkFallback() { lock (_gate) if (_attempt is not null) _fallbackAtUtc = DateTime.UtcNow; }
 
     public void SwitchProvider(bool useGroq)
     {
@@ -55,6 +65,7 @@ internal sealed class SpeechTranscription(bool useGroq)
                     groq = _useGroq;
                     _attempt = stop = new CancellationTokenSource();
                     _startedAtUtc = DateTime.UtcNow;
+                    _fallbackAtUtc = null;
                 }
                 Task<string>? work = null;
                 try

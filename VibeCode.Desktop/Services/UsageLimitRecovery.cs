@@ -48,12 +48,14 @@ public static partial class UsageLimitRecovery
     public static DateTimeOffset? RetryAt(JsonNode result, DateTimeOffset now)
     {
         var error = result["provider_error"] as JsonObject;
-        foreach (var node in new[] { result, error, error?["data"] })
+        foreach (var obj in RetrySources(result, error))
         {
-            if (node is not JsonObject obj) continue;
             foreach (var key in new[] { "retry_after_seconds", "retryAfterSeconds", "retry_after" })
                 if (Number(obj[key]) is > 0 and var seconds && seconds < 366 * 86400)
                     return now.AddSeconds(seconds);
+            foreach (var key in new[] { "retryDelay", "retry_delay" })
+                if (DurationSeconds(obj[key]) is > 0 and var retryDelay && retryDelay < 366 * 86400)
+                    return now.AddSeconds(retryDelay);
             foreach (var key in new[] { "resetsAt", "reset_at", "retry_at" })
                 if (ParseReset(obj[key]?.ToString(), now) is { } reset && reset > now) return reset;
         }
@@ -114,6 +116,28 @@ public static partial class UsageLimitRecovery
         if (!string.IsNullOrEmpty(bucket["rateLimitReachedType"]?.ToString()))
             return snapshot with { Available = false };
         return snapshot;
+    }
+
+    private static IEnumerable<JsonObject> RetrySources(JsonNode result, JsonObject? error)
+    {
+        foreach (var node in new JsonNode?[] { result, error, error?["data"], error?["error"], error?["data"]?["error"] })
+            if (node is JsonObject obj) yield return obj;
+        foreach (var host in new JsonNode?[] { error, error?["data"], error?["error"] })
+        {
+            if (host is not JsonObject obj || obj["details"] is not JsonArray details) continue;
+            foreach (var detail in details.OfType<JsonObject>()) yield return detail;
+        }
+    }
+
+    private static double? DurationSeconds(JsonNode? node)
+    {
+        if (Number(node) is { } value) return value;
+        var text = node?.ToString();
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var match = Regex.Match(text.Trim(), @"^(\d+(?:\.\d+)?)\s*s$", RegexOptions.IgnoreCase);
+        return match.Success && double.TryParse(match.Groups[1].Value, CultureInfo.InvariantCulture, out var seconds)
+            && double.IsFinite(seconds)
+            ? seconds : null;
     }
 
     private static double? Number(JsonNode? node) => double.TryParse(node?.ToString(), NumberStyles.Float,

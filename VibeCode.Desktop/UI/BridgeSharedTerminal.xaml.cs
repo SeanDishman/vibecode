@@ -20,7 +20,28 @@ public partial class BridgeSharedTerminal : UserControl
     {
         InitializeComponent();
         RefreshMessageDividers();
+        DataContextChanged += OnTerminalDataContextChanged;
     }
+
+    // An agent team has no roster column at all. The width follows the window for ordinary rosters, so the team
+    // switch is watched here too: the column has to close the moment a regular Bridge becomes a team. The view model
+    // outlives a rebuilt shell, so the subscription is weak and never keeps a closed window alive.
+    private void OnTerminalDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        const string property = nameof(BridgeSharedTerminalViewModel.IsAgentTeam);
+        if (e.OldValue is BridgeSharedTerminalViewModel previous)
+            System.ComponentModel.PropertyChangedEventManager.RemoveHandler(previous, OnTerminalPropertyChanged, property);
+        if (e.NewValue is BridgeSharedTerminalViewModel next)
+            System.ComponentModel.PropertyChangedEventManager.AddHandler(next, OnTerminalPropertyChanged, property);
+        UpdateRosterColumn(ActualWidth);
+    }
+
+    private void OnTerminalPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) =>
+        UpdateRosterColumn(ActualWidth);
+
+    private void UpdateRosterColumn(double width) =>
+        RosterColumn.Width = new GridLength(DataContext is BridgeSharedTerminalViewModel { IsAgentTeam: true } ? 0
+            : width < 620 ? 166 : width < 820 ? 192 : 232);
 
     public void RefreshMessageDividers()
     {
@@ -52,6 +73,5 @@ public partial class BridgeSharedTerminal : UserControl
             sender is ComboBox { DataContext: ChatViewModel agent, SelectedValue: string level } && agent.BridgeReviewLevel != level)
             model.SetReviewLevel(agent, level);
     }
-    private void OnPanelSizeChanged(object sender, SizeChangedEventArgs e) =>
-        RosterColumn.Width = new GridLength(e.NewSize.Width < 620 ? 166 : e.NewSize.Width < 820 ? 192 : 232);
+    private void OnPanelSizeChanged(object sender, SizeChangedEventArgs e) => UpdateRosterColumn(e.NewSize.Width);
 }

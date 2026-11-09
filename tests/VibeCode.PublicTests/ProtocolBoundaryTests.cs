@@ -12,6 +12,11 @@ internal static class ProtocolBoundaryTests
     {
         McpChoicesStayIsolated();
         ApprovalResolutionKeepsWorking();
+        foreach (var reason in new[] { "Content policy", "Safety policy", "Safety refusal", "Request refused", "Model refusal" })
+            Require(!BridgeErrorRecovery.CanRetry(new JsonObject { ["is_error"] = true, ["result"] = reason }),
+                "Policy stops must never schedule an automatic continuation");
+        Require(BridgeErrorRecovery.CanRetry(new JsonObject { ["is_error"] = true, ["result"] = "HTTP 503 service unavailable" }),
+            "Ordinary provider outages retain recovery");
         Console.WriteLine("PASS: configured MCP servers, per-chat isolation, and approval resolution");
     }
 

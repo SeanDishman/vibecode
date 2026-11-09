@@ -11,7 +11,7 @@
     <!-- THE version number. MSBuild stamps it onto the assembly and Settings > About reads it back through
          AppVersion.Current. Keep it Major.Minor.Patch - AppVersion parses a leading 'v' and a 4th part, but
          nothing else. -->
-    <Version>1.1.4</Version>
+    <Version>1.2.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\assets\logo.ico</ApplicationIcon>
     <!-- Program.Main starts the headless MCP helpers before WPF exists, then runs App exactly as the generated
@@ -24,9 +24,15 @@
     <!-- Whisper.net ships native whisper/ggml DLLs; without this they aren't extracted from the single-file exe
          and load fails with "Native Library not found in default paths". -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Helpers enter through this assembly too. Compression inflates its large embedded resources into a
+         separate pagefile-backed mapping for EVERY session. Leave assemblies file-backed so Windows can
+         demand-page and share them across the desktop and helpers. Keep the publisher's flag in sync. -->
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
+    <Resource Include="Assets\terminal-logo.png" />
+    <EmbeddedResource Include="Assets\terminal-logo.ico" LogicalName="VibeCode.Terminal.logo.ico" />
     <!-- Desktop embeds the MCP assembly and owns the self-contained single-file host. The standalone MCP
          executable intentionally has UseAppHost=false; forwarding Desktop's publish flags makes it fail NETSDK1067. -->
     <ProjectReference Include="..\VibeCode.AgentStatus.Mcp\VibeCode.AgentStatus.Mcp.csproj" GlobalPropertiesToRemove="SelfContained;PublishSingleFile">
@@ -34,7 +40,8 @@
            otherwise be copied beside VibeCode.exe and break the installer's single-file contract. -->
       <AdditionalProperties Condition="'$(PublishSingleFile)' == 'true'">GenerateDependencyFile=false;GenerateRuntimeConfigurationFiles=false</AdditionalProperties>
     </ProjectReference>
-    <PackageReference Include="MdXaml" Version="1.27.0"/>
+    <PackageReference Include="MdXaml" Version="1.27.0" />
+    <PackageReference Include="QRCoder" Version="1.8.1" />
     <!-- Already arrives with MdXaml, which renders every fenced code block as an AvalonEdit editor. Named here
          because UI/MarkdownView.cs matches on that type by name to swap those editors back into plain text. -->
     <PackageReference Include="AvalonEdit" Version="6.3.0.90"/>
@@ -47,14 +54,13 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49"/>
     <PackageReference Include="Whisper.net" Version="1.9.1"/>
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1"/>
-    <!-- The GPU whisper build. Measured on this box (Ryzen 3600 + GTX 1660 SUPER) with a 4.6 s clip: 1.33 s on the
-         CPU build vs 0.19 s on Vulkan idle, and 1.4 s vs 0.22 s with all 12 hardware threads saturated by other
-         processes — 6-7x either way. Costs ~17 MB in the compressed single-file exe. Vulkan rather than CUDA
-         deliberately: it needs only a normal GPU driver, where Whisper.net's CUDA runtime needs a CUDA toolkit
-         install the user does not have. A machine with no usable Vulkan device falls back to the CPU build on its
-         own — see WhisperNativeRuntime. -->
-    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1"/>
-    <PackageReference Include="NAudio" Version="2.2.1"/>
+    <!-- GPU speech recognition uses Vulkan and a normal graphics driver, without requiring a CUDA toolkit. -->
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- Windows' own speech recognizer (SAPI), dictation's fallback when local Whisper is too slow. The engine ships
+         with Windows, so there is no model to download and nothing to run on the GPU. MIT. See
+         Services/WindowsSpeechFallback.cs. -->
+    <PackageReference Include="System.Speech" Version="8.0.0" />
     <!-- Local natural British stock voice; engine MIT, Kokoro model/voices Apache-2.0. -->
     <PackageReference Include="KokoroSharp.CPU" Version="0.8.4"/>
     <!-- DPAPI for API-key accounts: keys are sealed to the current Windows user, never stored in the clear. -->
@@ -62,7 +68,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\background.gif"/>
+    <Resource Include="Assets\background.gif" />
+    <!-- Wall style previews for Settings › Appearance, rendered from the views by the telemetry tests (wall-thumbnails flag). -->
+    <Resource Include="Assets\WallStyles\*.png" />
     <!-- Embed stock British voices so the single-file app needs no loose package content folder. -->
     <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\b*.npy" LogicalName="VibeCode.JarvisVoices.%(Filename)%(Extension)"/>
     <EmbeddedResource Include="$(NuGetPackageRoot)kokorosharp\0.8.4\content\voices\LICENSE" LogicalName="VibeCode.JarvisVoices.LICENSE"/>

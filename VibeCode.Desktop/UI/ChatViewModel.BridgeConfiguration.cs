@@ -24,10 +24,14 @@ public sealed partial class ChatViewModel
     {
         if (!string.Equals(configuration.Provider, Provider, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("An existing agent cannot change provider. Start a new agent with the selected provider.");
+        // Older bridge snapshots may still contain a retired provider's role settings.
+        // Keep that pane readable without restoring a launch configuration for it.
+        if (IsRemovedProvider) return;
         configuration = BridgeAgentConfigurationPolicy.Normalize(configuration);
         _applyingBridgeConfiguration = true;
         try
         {
+            LeaveClaudeFallback();
             Model = configuration.Model;
             Effort = configuration.Effort;
             BridgeReviewLevel = configuration.ReviewLevel;

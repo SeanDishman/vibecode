@@ -1,3 +1,5 @@
+using VibeCode.Services;
+
 namespace VibeCode.UI;
 
 public sealed partial class MainViewModel
@@ -6,6 +8,11 @@ public sealed partial class MainViewModel
     public bool SecondaryIsSingleTerminalBridge => SecondaryBridgePanes.FirstOrDefault()?.BridgeSingleTerminal == true;
     public string BridgeTerminalsText => $"Agents ({BridgePanes.Count})";
     public string SecondaryBridgeTerminalsText => $"Agents ({SecondaryBridgePanes.Count})";
+    public bool CanUseSeparateBridgeTerminals(bool secondary = false) =>
+        !RequiresSingleBridgeTerminal(PanesFor(SurfaceRoster(secondary)));
+
+    private static bool RequiresSingleBridgeTerminal(IReadOnlyList<ChatViewModel> panes) =>
+        BridgeAgentPolicy.RequiresSingleTerminal(panes.Count) && panes.Any(p => p.IsBridgeManager);
     private BridgeSharedTerminalViewModel? _sharedBridgeTerminal;
     private BridgeSharedTerminalViewModel? _secondarySharedBridgeTerminal;
     public BridgeSharedTerminalViewModel SharedBridgeTerminal
@@ -38,12 +45,48 @@ public sealed partial class MainViewModel
     {
         if (panes.Count == 0) return;
         ReconcileBridgeGroups(panes);
-        var single = panes[0].BridgeSingleTerminal;
-        var selected = panes.FirstOrDefault(p => p.BridgeTerminalSelected) ?? panes[0];
+        ReconcilePaneTeams(panes);
+        // An agent team is always one terminal whose composer stays on the chat it grew from.
+        var team = IsAgentTeamRoster(panes);
+        var single = team || panes[0].BridgeSingleTerminal || RequiresSingleBridgeTerminal(panes);
+        var selected = team ? panes[0] : panes.FirstOrDefault(p => p.BridgeTerminalSelected) ?? panes[0];
         foreach (var pane in panes)
         {
             pane.BridgeSingleTerminal = single;
             pane.BridgeTerminalSelected = ReferenceEquals(pane, selected);
+        }
+    }
+
+    /// <summary>
+    /// Keep every team inside a classic Bridge whole. A team whose pane left the Bridge moves to its next member, which
+    /// becomes the team's pane; and a pane whose team has grown past one agent shows the team's one terminal in place of
+    /// its own transcript, while the summoned agents stay out of the grid. Teams that are a whole Bridge need none of this.
+    /// </summary>
+    private static void ReconcilePaneTeams(IReadOnlyList<ChatViewModel> panes)
+    {
+        foreach (var team in panes.Where(p => p.AgentTeamAnchorId is not null).GroupBy(p => p.AgentTeamAnchorId!).ToList())
+        {
+            if (team.Any(p => p.BridgeAgentId == team.Key)) continue;
+            var heir = team.First().BridgeAgentId;
+            foreach (var member in team) member.AgentTeamAnchorId = heir;
+        }
+        AssignTeamSeats(panes);
+        foreach (var pane in panes)
+        {
+            var members = pane.AgentTeamAnchorId == pane.BridgeAgentId
+                ? panes.Where(p => p.AgentTeamAnchorId == pane.BridgeAgentId).OrderBy(p => ReferenceEquals(p, pane) ? 0 : 1).ToList()
+                : null;
+            if (members is { Count: >= 2 })
+            {
+                // The terminal is the team's own: picking a recipient there must not switch the whole Bridge's layout.
+                pane.TeamTerminal ??= new BridgeSharedTerminalViewModel(_ => { }, (_, _) => { });
+                pane.TeamTerminal.Reconcile(members);
+            }
+            else if (pane.TeamTerminal is { } stale)
+            {
+                pane.TeamTerminal = null;
+                stale.Dispose();
+            }
         }
     }
 
@@ -52,8 +95,9 @@ public sealed partial class MainViewModel
         var roster = SurfaceRoster(secondary);
         var panes = PanesFor(roster);
         if (panes.Count == 0) return;
+        single |= RequiresSingleBridgeTerminal(panes) || IsAgentTeamRoster(panes);
         var selected = (secondary ? SecondaryBridgePanelChat : BridgePanelChat) ?? panes.FirstOrDefault();
-        if (!panes.Contains(selected!)) selected = panes[0];
+        if (!panes.Contains(selected!) || IsAgentTeamRoster(panes)) selected = panes[0];
         foreach (var pane in panes)
         {
             pane.BridgeSingleTerminal = single;
@@ -70,6 +114,9 @@ public sealed partial class MainViewModel
     public void SelectBridgeTerminal(ChatViewModel pane)
     {
         if (!TryGetLiveBridge(pane, out var bridge)) return;
+        if (IsAgentTeamRoster(bridge.Panes)) pane = bridge.Panes[0];   // a team has no agent to switch to
+        if (BridgePanes.Contains(pane)) _sharedBridgeTerminal?.ShowAll();
+        else if (SecondaryBridgePanes.Contains(pane)) _secondarySharedBridgeTerminal?.ShowAll();
         foreach (var peer in bridge.Panes)
         {
             peer.BridgeSingleTerminal = true;
@@ -107,24 +154,18 @@ public sealed partial class MainViewModel
         var replacement = new ChatViewModel(old.Cwd, resume: old.SessionId, title: old.Title,
             accountId: old.AccountId, provider: old.Provider)
         {
-            Pinned = old.Pinned,
-            Draft = old.Draft,
-            ExcludeFromMemory = old.ExcludeFromMemory,
-            BridgeLabel = old.BridgeLabel,
-            IsBridgeHost = old.IsBridgeHost,
-            IsAdvancedBridgeHost = old.IsAdvancedBridgeHost,
+            Pinned = old.Pinned, Draft = old.Draft, ExcludeFromMemory = old.ExcludeFromMemory,
+            BridgeLabel = old.BridgeLabel, IsBridgeHost = old.IsBridgeHost, IsAdvancedBridgeHost = old.IsAdvancedBridgeHost,
             IsBridgeManager = old.IsBridgeManager,
-            BridgeVisible = old.BridgeVisible,
-            BridgeExpanded = old.BridgeExpanded,
-            BridgeMinimized = old.BridgeMinimized,
-            OnSecondMonitor = old.OnSecondMonitor,
-            AppendSystemPrompt = old.AppendSystemPrompt,
-            Prelude = old.Prelude,
+            BridgeVisible = old.BridgeVisible, BridgeExpanded = old.BridgeExpanded,
+            BridgeMinimized = old.BridgeMinimized, OnSecondMonitor = old.OnSecondMonitor,
+            AppendSystemPrompt = old.AppendSystemPrompt, Prelude = old.Prelude,
         };
         replacement.SetMode(old.Mode);
         replacement.ApplyBridgeConfiguration(BridgeAgentConfigurationPolicy.From(old));
         replacement.FastMode = old.FastMode;
         replacement.UltrafastMode = old.UltrafastMode;
+        CopyAgentTeamState(old, replacement);
         replacement.RestoreGoal(old.Goal);
         // Keep retained messages while replacing only the failed provider process.
         replacement.PeerMailbox = old.PeerMailbox;

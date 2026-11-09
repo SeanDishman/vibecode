@@ -65,7 +65,8 @@ public sealed partial class MainViewModel
                   (managers.Length > 1 && !agent.BridgeScopeConfirmed
                       ? work.CentralPlan is null ? " · agreeing scope" : work.CentralPlan.State == "completed" ? " · planning workers" : " · awaiting assignment"
                       : "")
-                : coordinator is not null ? $"Worker for {coordinator.BridgeTerminalIdentity}" : "Independent agent";
+                : coordinator is not null ? $"Worker for {coordinator.BridgeTerminalIdentity}"
+                : agent.IsAgentTeamMember && agent.AgentTeamSeat is { } seat ? $"Agent team · {seat}" : "Independent agent";
             agent.RaiseBridgeGroup();
         }
     }
@@ -107,7 +108,8 @@ public sealed partial class MainViewModel
         var managers = roster.Where(p => p.IsBridgeManager).ToArray();
         if (work.CentralPlan is { } central)
             return central.State == "completed" && central.Assignments.Count == managers.Length && managers.All(m => central.Assignments.Any(a => a.AgentId == m.BridgeAgentId) &&
-                central.PublishedPlans.Contains(m.BridgeAgentId) && work.Confirmed(m.BridgeAgentId));
+                // With Plan steps off the central division is the whole agreement: there is no worker plan to publish.
+                (!work.PlanSteps || central.PublishedPlans.Contains(m.BridgeAgentId) && work.Confirmed(m.BridgeAgentId)));
         return managers.Length <= 1 || managers.All(m => work.Confirmed(m.BridgeAgentId));
     }
 
@@ -118,8 +120,11 @@ public sealed partial class MainViewModel
             throw new StatusValidationException("This worker belongs to another group or is unassigned. Dispatch only to agents whose coordinator_id is your agent_id; use bridge_send_message to coordinate with other orchestrators.");
         if (requireReady && !CoordinationReady(bridge.Panes))
         {
-            if (WorkFor(bridge.Panes).CentralPlan is not null)
-                throw new StatusValidationException("Dispatch is paused until the central handoff succeeds and every orchestrator publishes its own worker plan with bridge_set_plan. Read bridge_list_tasks for the central assignments and current state; do not negotiate duplicate scopes.");
+            if (WorkFor(bridge.Panes) is { CentralPlan: not null } work)
+                throw new StatusValidationException((work.PlanSteps
+                    ? "Dispatch is paused until the central handoff succeeds and every orchestrator publishes its own worker plan with bridge_set_plan. "
+                    : "Dispatch is paused until the central handoff succeeds. ")
+                    + "Read bridge_list_tasks for the central assignments and current state; do not negotiate duplicate scopes.");
             throw new StatusValidationException("The orchestrators must agree on non-overlapping scopes before assigning new work. Message the other orchestrators, read their replies, and have each call bridge_agree_scope.");
         }
     }
@@ -142,14 +147,11 @@ public sealed partial class MainViewModel
                 throw new StatusValidationException("The central handoff has not completed. Read bridge_list_tasks for its state; worker dispatch remains paused.");
             if (scope != assignment.Scope)
                 throw new StatusValidationException("The central orchestrator already assigned your scope. Keep that exact scope and publish only its worker plan with bridge_set_plan.");
-            return new JsonObject
-            {
-                ["agent_id"] = caller.BridgeAgentId,
-                ["scope"] = assignment.Scope,
-                ["coordination_ready"] = CoordinationReady(bridge.Panes),
-                ["plan_version"] = work.PlanVersion,
-                ["next_step"] = "Publish your worker plan with bridge_set_plan. The app opens dispatch when every group's plan is published; no peer scope negotiation is required."
-            };
+            return new JsonObject { ["agent_id"] = caller.BridgeAgentId, ["scope"] = assignment.Scope,
+                ["coordination_ready"] = CoordinationReady(bridge.Panes), ["plan_version"] = work.PlanVersion,
+                ["next_step"] = work.PlanSteps
+                    ? "Publish your worker plan with bridge_set_plan. The app opens dispatch when every group's plan is published; no peer scope negotiation is required."
+                    : "Plan steps are off: assign work to your own workers with bridge_dispatch_task within this scope. No plan or peer scope negotiation is required." };
         }
         if (caller.BridgeScopeConfirmed)
             return new JsonObject
@@ -208,7 +210,7 @@ public sealed partial class MainViewModel
     public IReadOnlyList<ChatViewModel> LaunchBridgeOrchestrators(ChatViewModel template, IReadOnlyList<int> workerAllocation, string objective,
         bool? singleTerminal = null, string? provider = null,
         BridgeAgentConfiguration? orchestratorConfiguration = null, BridgeAgentConfiguration? workerConfiguration = null,
-        BridgeAgentConfiguration? centralConfiguration = null)
+        BridgeAgentConfiguration? centralConfiguration = null, bool? factCheck = null, bool? planSteps = null)
     {
         if (string.IsNullOrWhiteSpace(objective))
             throw new ArgumentException("Choose at least one worker and enter the orchestrator's objective.");
@@ -218,7 +220,8 @@ public sealed partial class MainViewModel
             throw new InvalidOperationException("This run has already dispatched work. Start a new bridge to configure another orchestrator group.");
         if (WorkFor(bridge.Panes).CentralPlan is { State: "planning" or "handing_off" })
             throw new InvalidOperationException("Wait for the central orchestrator to finish the handoff before adding another group.");
-        if (bridge.Panes.Count >= BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit))
+        var seats = BridgeAgentPolicy.Seats(bridge.Panes);
+        if (seats >= BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit))
             throw new InvalidOperationException("The bridge is at its agent limit. Raise it in Settings before adding an orchestrator.");
         var orchestratorSettings = BridgeAgentConfigurationPolicy.Normalize(orchestratorConfiguration ??
             BridgeAgentConfigurationPolicy.Defaults(provider ?? template.Provider, template));
@@ -226,9 +229,9 @@ public sealed partial class MainViewModel
             template.BridgeWorkerConfiguration ?? BridgeAgentConfigurationPolicy.From(template));
         var candidates = bridge.Panes.Count(p => AvailableBridgeWorker(p) && p.Provider == workerSettings.Provider);
         BridgeTeamAllocationPolicy.Validate(workerAllocation,
-            BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit) - bridge.Panes.Count - 1 + candidates);
+            BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit) - seats - 1 + candidates);
         var needed = workerAllocation.Count + Math.Max(0, workerAllocation.Sum() - candidates);
-        if (bridge.Panes.Count + needed > BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit))
+        if (seats + needed > BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit))
             throw new InvalidOperationException("This group would exceed the bridge's agent limit. Choose fewer workers or raise the limit in Settings.");
         var target = BridgePanes.Contains(template) ? null : bridge;
         var before = bridge.Panes.ToHashSet();
@@ -238,7 +241,7 @@ public sealed partial class MainViewModel
         var coordinator = bridge.Panes.FirstOrDefault(p => !before.Contains(p))
             ?? throw new InvalidOperationException("Could not start an orchestrator.");
         return ConfigureBridgeOrchestrators(coordinator, workerAllocation, objective, singleTerminal ?? template.BridgeSingleTerminal,
-            orchestratorSettings, workerSettings, centralConfiguration);
+            orchestratorSettings, workerSettings, centralConfiguration, factCheck, planSteps);
     }
 
     private bool _launchingOrchestratorGroup;
@@ -250,7 +253,7 @@ public sealed partial class MainViewModel
         var available = bridge.Panes.Count(p => !p.IsBridgeManager &&
             (AvailableBridgeWorker(p) || !createNew && p.BridgeCoordinatorAgentId == template.BridgeAgentId) &&
             (createNew || !ReferenceEquals(p, template)));
-        return Math.Max(0, BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit) - bridge.Panes.Count -
+        return Math.Max(0, BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit) - BridgeAgentPolicy.Seats(bridge.Panes) -
             (createNew ? 1 : 0) + available);
     }
 

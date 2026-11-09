@@ -64,6 +64,7 @@ public static class UsagePalette
         // 3 - Claude Haiku. Freed up again when the ninth entity that had taken this slot was removed; there are
         // eight hues, and with eight entities left every one of them gets its own rather than folding into the
         // neutral "Other".
+        ["claude-haiku-5-5"] = 3,
         ["claude-haiku-4-5"] = 3,
         // 4 - OpenAI premium tier. Astra ($10/$50) costs 2.5x the $5/$30 pair under it, but colour follows the
         // entity's tier and not its price, so OpenAI's flagships stay one hue.
@@ -72,7 +73,9 @@ public static class UsagePalette
         ["gpt-6-sol"] = 4,
         ["gpt-5.6-sol"] = 4,
         ["gpt-5.5"] = 4,
+        ["gpt-oss-120b"] = 4,
         // 5 - OpenAI efficient tiers
+        ["gpt-6.1-terra"] = 5,
         ["gpt-6-luna"] = 5,
         ["gpt-5.6-terra"] = 5,
         ["gpt-5.6-luna"] = 5,
@@ -150,9 +153,11 @@ public static class UsagePalette
         "claude-sonnet-5" => "Sonnet 5",
         "claude-sonnet-4-6" => "Sonnet 4.6",
         "claude-sonnet-4-5" => "Sonnet 4.5",
+        "claude-haiku-5-5" => "Haiku 5.5",
         "claude-haiku-4-5" => "Haiku 4.5",
         "gpt-6-astra" => "GPT-6 Astra",
         "gpt-6.1-sol" => "GPT-6.1 Sol",
+        "gpt-6.1-terra" => "GPT-6.1 Terra",
         "gpt-6-sol" => "GPT-6 Sol",
         "gpt-6-luna" => "GPT-6 Luna",
         "gpt-5.6-sol" => "GPT-5.6 Sol",

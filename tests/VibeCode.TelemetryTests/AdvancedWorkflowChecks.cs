@@ -51,12 +51,12 @@ internal static partial class Program
         Capture(wall, 1280, 800, "workflow-advanced-desktop.png"); CheckLayout(graph);
         Capture(wall, 760, 520, "workflow-advanced-compact.png"); CheckLayout(graph);
         activity.Dispose(); central.Activity = null; central.State = "completed";
-        central.LastActivityAt = now.AddMinutes(-9);
+        central.LastActivityAt = now.AddSeconds(-59);
         var restored = System.Text.Json.JsonSerializer.Deserialize<BridgeWorkState>(System.Text.Json.JsonSerializer.Serialize(work))!;
         Check("Completed planner recency survives saving the Bridge", restored.CentralPlan!.LastActivityAt == central.LastActivityAt && restored.CentralPlan.Activity is null);
         Check("Completed planning remains visible for its recent activity window", AgentActivitySnapshot.Build(roster, now).Single().Agents.Any(a => a.IsCentralPlanner && a.Status == "Completed"));
-        central.LastActivityAt = now.AddMinutes(-10);
-        Check("Central planners expire at ten minutes just like chat agents", !AgentActivitySnapshot.Build(roster, now).Single().Agents.Any(a => a.IsCentralPlanner));
+        central.LastActivityAt = now.AddMinutes(-1);
+        Check("Central planners expire at one minute just like chat agents", !AgentActivitySnapshot.Build(roster, now).Single().Agents.Any(a => a.IsCentralPlanner));
         first.Status = "idle"; Activity(first, now.AddMinutes(-30));
         var remaining = AgentActivitySnapshot.Build(roster, now).Single().Agents;
         Check("Working children cannot keep an inactive orchestrator visible", !remaining.Any(a => a.Id == first.BridgeAgentId)

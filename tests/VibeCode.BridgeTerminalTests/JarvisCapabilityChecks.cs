@@ -67,7 +67,6 @@ internal static partial class Program
                 ["url"] = "https://example.com/mcp",
                 ["useClaude"] = false,
                 ["useCodex"] = true,
-                ["useGemini"] = false,
                 ["headers"] = new JsonObject { ["Authorization"] = "Bearer private-existing-secret" },
             }.ToJsonString(),
         });

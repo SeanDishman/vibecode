@@ -22,16 +22,62 @@ public partial class WorkflowTelemetryWindow : Window
     private WorkflowModelSpeedRow[] _speedRows = [];
     private string _speedSelection = "";
     private DateTime _nextSpeedRefresh;
+    private readonly FullScreenPlacement _fullScreen;
+    private readonly WorkflowHistory _history = new();
+    private IReadOnlyList<AgentActivityProject> _filtered = [];
+    private string _view = WorkflowViews.Graph;
     private sealed record ProjectChoice(string Key, string Label);
+    private sealed record SceneChoice(string Key, string Label);
+
+    private static readonly SceneChoice[] SkyChoices =
+        [new("auto", "Sky: your clock"), new("dawn", "Dawn"), new("day", "Day"), new("dusk", "Dusk"), new("night", "Night")];
+    private static readonly SceneChoice[] WeatherChoices =
+    [
+        new("auto", "Weather: auto"), new("clear", "Clear"), new("cloudy", "Cloudy"), new("rain", "Rain"),
+        new("storm", "Thunderstorm"), new("snow", "Snow"), new("fog", "Fog"),
+    ];
+
+    private IWorkflowWallView[] Views => [Graph, Tavern, Office, Floor, Lanes, Board];
+    private IWorkflowWallView ActiveView => _view switch
+    {
+        WorkflowViews.Tavern => Tavern, WorkflowViews.Office => Office, WorkflowViews.Floor => Floor, WorkflowViews.Lanes => Lanes,
+        WorkflowViews.Board => Board, _ => Graph,
+    };
+    /// <summary>The view on screen, as its settings key. Exposed for verification.</summary>
+    public string CurrentView => _view;
+    public bool IsFullScreen => _fullScreen.IsActive;
+    /// <summary>Whether full screen is also holding the wall above the taskbar (only off the app's display).</summary>
+    public bool FullScreenAboveTaskbar => _fullScreen.AboveTaskbar;
 
     public WorkflowTelemetryWindow() : this(null) { }
     public WorkflowTelemetryWindow(MainViewModel? source)
     {
         _source = source;
         InitializeComponent();
+        TelemetryTheme.Attach(this);
+        _fullScreen = new FullScreenPlacement(this);
+        _fullScreen.Changed += OnFullScreenChanged;
+        foreach (var view in Views)
+        {
+            view.AgentSelected += OpenAgent;
+            view.AgentMenuRequested += ShowAccountMenu;
+            view.ProjectSelected += key => ProjectFilter.SelectedValue = key;
+        }
+        // Flow speed comes from the shared OpenRouter cache only; the graph itself never requests anything.
+        Graph.SpeedLookup = id => ModelSpeedService.Instance.ById(id);
+        Board.SpeedLookup = Graph.SpeedLookup;
+        Lanes.History = _history;
+        _updatingFilters = true;
+        ViewPicker.ItemsSource = WorkflowViews.All;
+        ViewPicker.SelectedValue = WorkflowViews.For(AppSettings.Current.WorkflowWallView).Key;
+        SkyPicker.ItemsSource = SkyChoices;
+        SkyPicker.SelectedValue = SkyChoices.Any(c => c.Key == AppSettings.Current.WorkflowSceneSky) ? AppSettings.Current.WorkflowSceneSky : "auto";
+        WeatherPicker.ItemsSource = WeatherChoices;
+        WeatherPicker.SelectedValue = WeatherChoices.Any(c => c.Key == AppSettings.Current.WorkflowSceneWeather) ? AppSettings.Current.WorkflowSceneWeather : "auto";
+        _updatingFilters = false;
+        ApplyScene();
+        ShowView(WorkflowViews.For(AppSettings.Current.WorkflowWallView).Key);
         _ready = true;
-        Graph.AgentSelected += OpenAgent;
-        Graph.ProjectSelected += key => ProjectFilter.SelectedValue = key;
         _tick.Tick += (_, _) => { if (IsVisible && WindowState != WindowState.Minimized) Refresh(); };
     }
 
@@ -44,6 +90,7 @@ public partial class WorkflowTelemetryWindow : Window
             return;
         }
         var wall = new WorkflowTelemetryWindow(AgentActivitySnapshot.ResolveSource(owner)) { Owner = owner };
+        wall._ownership = new PinnedWindowOwner(wall, owner);
         _open = wall;
         if (Environment.GetEnvironmentVariable("VIBECODE_HIDDEN") == "1")
         { wall.WindowStartupLocation = WindowStartupLocation.Manual; wall.Left = 6200; wall.Top = 200; wall.Show(); return; }
@@ -54,6 +101,9 @@ public partial class WorkflowTelemetryWindow : Window
                 && DisplayMonitorService.TryGetCompanionWorkArea(owner, out var target))
                 DisplayMonitorService.PlaceOnMonitor(wall, target, maximize: true);
             else wall.WindowState = WindowState.Maximized;
+            // Full screen means the whole display, taskbar included - not the maximized work area. On a display the
+            // app is not on, the wall also stays over the taskbar while the app has focus.
+            wall._fullScreen.Enter(FullScreenPlacement.OnOtherDisplay(wall, owner));
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         { wall.WindowState = WindowState.Maximized; }
@@ -61,8 +111,9 @@ public partial class WorkflowTelemetryWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        _source ??= AgentActivitySnapshot.ResolveSource(Owner);
+        _source ??= AgentActivitySnapshot.ResolveSource(_ownership?.Anchor ?? Owner);
         _liveWatch ??= LiveTurnTelemetry.Instance.Watch();
+        WorkflowViews.Chosen += OnViewChosen;
         UsageLog.Instance.Changed += OnUsageChanged;
         ModelSpeedService.Instance.Updated += OnModelSpeedsUpdated;
         Refresh();
@@ -74,6 +125,9 @@ public partial class WorkflowTelemetryWindow : Window
         if (!_ready) return;
         var now = DateTimeOffset.Now;
         _projects = AgentActivitySnapshot.Capture(_source, now);
+        // Every snapshot, whichever view is showing, so the swimlanes have the history when they are opened.
+        _history.Record(_projects, now.UtcDateTime);
+        ObserveFleet(now.UtcDateTime);
         Clock.Text = DateTime.Now.ToString("HH:mm:ss");
         var agents = _projects.SelectMany(p => p.Agents).ToArray();
         var working = agents.Count(a => a.State == AgentActivityState.Working);
@@ -135,7 +189,9 @@ public partial class WorkflowTelemetryWindow : Window
 
     private void OnModelSpeedsUpdated()
     {
-        if (_ready && IsVisible && WindowState != WindowState.Minimized) RefreshModelSpeeds();
+        if (!_ready || !IsVisible || WindowState == WindowState.Minimized) return;
+        RefreshModelSpeeds();
+        Graph.RefreshSpeeds();
     }
 
     private void RefreshModelSpeeds()
@@ -148,7 +204,11 @@ public partial class WorkflowTelemetryWindow : Window
             ModelSpeeds.ItemsSource = rows;
         }
         SpeedCaption.Text = WorkflowModelSpeeds.Caption(rows);
-        var ids = rows.Select(r => r.OpenRouterId).OfType<string>().ToArray();
+        // Every agent on the wall streams at its own model's speed, including a model that has not used tokens
+        // this hour yet, so those ids are watched alongside the board's most-used models.
+        var ids = rows.Select(r => r.OpenRouterId).OfType<string>()
+            .Concat(_projects.SelectMany(p => p.Agents).Select(a => a.OpenRouterId).OfType<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var selection = string.Join("|", ids);
         if (selection != _speedSelection || DateTime.UtcNow >= _nextSpeedRefresh)
         {
@@ -188,14 +248,91 @@ public partial class WorkflowTelemetryWindow : Window
                 && (search.Length == 0 || Contains(p.Name) || Contains(p.Directory) || Contains(a.Label)
                     || Contains(a.Task) || Contains(a.Model) || Contains(a.Account))).ToArray() })
             .Where(p => p.Agents.Count > 0).ToArray();
-        Graph.SetProjects(filtered);
+        _filtered = filtered;
+        ActiveView.SetProjects(filtered);
         var count = filtered.Sum(p => p.Agents.Count);
         VisibleCount.Text = $"{count} shown · click an agent to open its chat";
         EmptyState.Visibility = count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyTitle.Text = _projects.Count == 0 ? "No recent agent activity" : "No matching agents";
         EmptyDetail.Text = _projects.Count == 0
-            ? "Agents disappear after 10 minutes without work. Start a task in any project or Bridge."
+            ? "Agents disappear after 1 minute without work. Start a task in any project or Bridge."
             : "Try another project or search, or clear the filters to see every open agent.";
+    }
+
+    private void OnViewChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingFilters || ViewPicker.SelectedValue is not string key || key == _view) return;
+        ShowView(key);
+        WorkflowViews.Choose(key);
+    }
+
+    /// <summary>Settings › Appearance picked a view: an open wall redraws in it at once.</summary>
+    private void OnViewChosen(string key)
+    {
+        if (_ready && key != _view) ShowView(key);
+    }
+
+    /// <summary>Show one view and park the rest. Every view gets the current roster the moment it appears; the
+    /// hidden ones stop their motion through their own visibility handlers.</summary>
+    private void ShowView(string key)
+    {
+        var choice = WorkflowViews.For(key);
+        _view = choice.Key;
+        MapScroll.Visibility = Visible(WorkflowViews.Graph);
+        Tavern.Visibility = Visible(WorkflowViews.Tavern);
+        Office.Visibility = Visible(WorkflowViews.Office);
+        Floor.Visibility = Visible(WorkflowViews.Floor);
+        LanesScroll.Visibility = Visible(WorkflowViews.Lanes);
+        Board.Visibility = Visible(WorkflowViews.Board);
+        MapDots.Visibility = _view is WorkflowViews.Graph or WorkflowViews.Board ? Visibility.Visible : Visibility.Collapsed;
+        SceneControls.Visibility = _view is WorkflowViews.Tavern or WorkflowViews.Office or WorkflowViews.Floor ? Visibility.Visible : Visibility.Collapsed;
+        Legend.Text = choice.Legend;
+        if (!Equals(ViewPicker.SelectedValue, _view))
+        {
+            _updatingFilters = true;
+            ViewPicker.SelectedValue = _view;
+            _updatingFilters = false;
+        }
+        ActiveView.SetProjects(_filtered);
+        foreach (var view in Views) view.UpdateMotion();
+        RestyleRecap();
+
+        Visibility Visible(string view) => _view == view ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Switch views from code; the dropdown follows. For verification and keyboard shortcuts.</summary>
+    public void SelectView(string key)
+    {
+        var choice = WorkflowViews.For(key);
+        if (ViewPicker.Items.OfType<WorkflowViewChoice>().Any(c => c.Key == choice.Key))
+        {
+            ViewPicker.SelectedValue = choice.Key;
+        }
+        else
+        {
+            ShowView(key);
+            WorkflowViews.Choose(key);
+        }
+    }
+
+    private void OnSceneChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingFilters) return;
+        ApplyScene();
+        AppSettings.Current.WorkflowSceneSky = Tavern.SkyMode;
+        AppSettings.Current.WorkflowSceneWeather = Tavern.WeatherMode;
+        AppSettings.Current.Save();
+    }
+
+    private void ApplyScene()
+    {
+        var sky = SkyPicker.SelectedValue as string ?? "auto";
+        var weather = WeatherPicker.SelectedValue as string ?? "auto";
+        Tavern.SkyMode = Office.SkyMode = Floor.SkyMode = sky;
+        Tavern.WeatherMode = Office.WeatherMode = Floor.WeatherMode = weather;
+        Tavern.InvalidateVisual();
+        Office.InvalidateVisual();
+        Floor.InvalidateVisual();
     }
 
     private void OnClear(object sender, RoutedEventArgs e)
@@ -209,7 +346,8 @@ public partial class WorkflowTelemetryWindow : Window
     private void OpenAgent(AgentActivityNode node)
     {
         if (_source is null || !_source.OpenWorkflowAgent(node.Chat)) { Refresh(); return; }
-        for (var window = Owner; window is not null; window = window.Owner)
+        // A pinned wall has no owner, so the main window is found from the window it belongs to.
+        for (var window = _ownership?.Anchor ?? Owner; window is not null; window = window.Owner)
         {
             if (window is not MainWindow) continue;
             if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
@@ -218,26 +356,95 @@ public partial class WorkflowTelemetryWindow : Window
         }
     }
 
-    private void OnPinChanged(object sender, RoutedEventArgs e) => Topmost = Pin.IsChecked == true;
+    /// <summary>The account menu last opened on an agent. Exposed for verification.</summary>
+    public ContextMenu? AccountMenu { get; private set; }
+
+    /// <summary>A right-click on an agent: its provider's saved logins and nothing else, the one it runs under ticked.
+    /// Picking another carries the chat onto it until the next pick (<see cref="MainViewModel.ChooseChatAccount"/>).
+    /// With one login - nothing to choose - no menu opens at all.</summary>
+    private void ShowAccountMenu(AgentActivityNode node)
+    {
+        if (_source is not { } source || source.AccountOptionsFor(node.Chat) is not { Count: > 1 } options) return;
+        // At the pointer, measured from the view: where MousePoint would put it for a real click, without opening the
+        // tests' offscreen wall's menu under the user's own pointer.
+        var view = ActiveView as UIElement;
+        var at = view is null ? new Point() : Mouse.GetPosition(view);
+        var menu = new ContextMenu
+        {
+            PlacementTarget = view, Placement = System.Windows.Controls.Primitives.PlacementMode.Relative,
+            HorizontalOffset = at.X, VerticalOffset = at.Y,
+        };
+        menu.SetResourceReference(StyleProperty, "DarkContextMenu");
+        foreach (var option in options)
+        {
+            // A TextBlock rather than a string header, so a login called "dev_box" keeps its underscore instead of
+            // losing it to an access key. Checkable keeps every name aligned whether or not it carries the tick.
+            var item = new MenuItem
+            {
+                Header = new TextBlock { Text = option.Label, MaxWidth = 280, TextTrimming = TextTrimming.CharacterEllipsis },
+                IsCheckable = true, IsChecked = option.IsCurrent,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(item, option.Label);
+            var chat = node.Chat;
+            var id = option.Id;
+            item.Click += (_, _) => source.ChooseChatAccount(chat, id);
+            menu.Items.Add(item);
+        }
+        AccountMenu = menu;
+        menu.IsOpen = true;
+    }
+
+    private PinnedWindowOwner? _ownership;
+
+    private void OnPinChanged(object sender, RoutedEventArgs e)
+    {
+        Topmost = Pin.IsChecked == true || _fullScreen.AboveTaskbar;
+        _ownership?.Apply(Pin.IsChecked == true);
+    }
+
     private void OnFullScreen(object sender, RoutedEventArgs e) => ToggleFullScreen();
-    private void ToggleFullScreen() => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void ToggleFullScreen()
+    {
+        try { _fullScreen.Toggle(_ownership?.Anchor ?? Owner); }
+        catch (System.ComponentModel.Win32Exception) { WindowState = WindowState.Maximized; }
+    }
+
+    private void OnFullScreenChanged()
+    {
+        var full = _fullScreen.IsActive;
+        FullScreenButton.Content = full ? "\uE73F" : "\uE740";
+        FullScreenButton.ToolTip = full ? "Exit full screen (F11)" : "Full screen (F11)";
+        WindowFrame.BorderThickness = new Thickness(full ? 0 : 1);
+        Topmost = Pin.IsChecked == true || _fullScreen.AboveTaskbar;
+    }
+
     private void OnClose(object sender, RoutedEventArgs e) => Close();
-    private void OnStateChanged(object? sender, EventArgs e) => Graph?.UpdateMotion();
+    private void OnStateChanged(object? sender, EventArgs e)
+    {
+        if (!_ready) return;
+        foreach (var view in Views) view.UpdateMotion();
+    }
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape) { Close(); e.Handled = true; }
+        if (e.Key == Key.Escape) { if (!CloseRecap()) Close(); e.Handled = true; }
         else if (e.Key == Key.F11) { ToggleFullScreen(); e.Handled = true; }
     }
     private void OnClosed(object? sender, EventArgs e)
     {
         _ready = false;
         _tick.Stop();
+        WorkflowViews.Chosen -= OnViewChosen;
         UsageLog.Instance.Changed -= OnUsageChanged;
         ModelSpeedService.Instance.Updated -= OnModelSpeedsUpdated;
         _liveWatch?.Dispose();
+        CloseExtras();
         _liveWatch = null;
-        Graph.MotionEnabled = false;
-        Graph.UpdateMotion();
+        foreach (var view in Views)
+        {
+            view.MotionEnabled = false;
+            view.UpdateMotion();
+        }
         _source = null;
         if (ReferenceEquals(_open, this)) _open = null;
     }

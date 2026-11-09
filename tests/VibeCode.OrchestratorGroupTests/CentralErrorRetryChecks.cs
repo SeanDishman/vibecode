@@ -23,11 +23,11 @@ internal static partial class Program
             var elapsed = Stopwatch.StartNew();
             var frame = new DispatcherFrame();
             var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-            timer.Tick += (_, _) => { if (task.IsCompleted || elapsed.Elapsed > TimeSpan.FromSeconds(85)) frame.Continue = false; };
+            timer.Tick += (_, _) => { if (task.IsCompleted || elapsed.Elapsed > TimeSpan.FromSeconds(10)) frame.Continue = false; };
             timer.Start(); try { Dispatcher.PushFrame(frame); } finally { timer.Stop(); }
-            Check("central provider retries after a real minute even with quota recovery off", task.IsCompletedSuccessfully
-                && waiting.Elapsed >= TimeSpan.FromMinutes(1) && task.Result.Count == 2);
-            Check("central activity explains the delay and resumption", stages.Any(s => s.Contains("Continuing in 1 minute"))
+            Check("central provider retries after a second even with quota recovery off", task.IsCompletedSuccessfully
+                && waiting.Elapsed >= TimeSpan.FromSeconds(1) && task.Result.Count == 2);
+            Check("central activity explains the delay and resumption", stages.Any(s => s.Contains("Retrying breath"))
                 && stages.Any(s => s.Contains("after the provider error")));
             VerifyTransientPlannerTrace(before, resumed: true);
             Console.WriteLine($"Central planner retry delay: {waiting.Elapsed.TotalSeconds:F2} seconds.");

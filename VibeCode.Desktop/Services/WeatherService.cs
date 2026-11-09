@@ -382,6 +382,24 @@ public sealed class WeatherService : Observable
         };
     }
 
+    /// <summary>
+    /// Automatically detects the user's approximate network location and sets it.
+    /// </summary>
+    public async Task<bool> AutoDetectLocationAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var hit = await GetMyLocationAsync(ct);
+            SetLocation(hit.Display, hit.Lat, hit.Lon, hit.CountryCode);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Error = ex is InvalidOperationException ? ex.Message : "Could not determine location automatically.";
+            return false;
+        }
+    }
+
     private static double? ReadDouble(JsonNode? value) =>
         double.TryParse(value?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
             ? number
@@ -392,7 +410,11 @@ public sealed class WeatherService : Observable
 
     public async Task RefreshAsync(CancellationToken ct = default)
     {
-        if (!HasLocation) return;
+        if (!HasLocation)
+        {
+            await AutoDetectLocationAsync(ct);
+            return;
+        }
         IsLoading = true;
         try
         {

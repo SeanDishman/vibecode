@@ -5,58 +5,51 @@ namespace VibeCode.UI;
 
 public sealed partial class ChatViewModel
 {
-    private string? _claudeModelRestartId;
+    // Recognize recovery prompts in older saved transcripts.
     private const string ClaudeModelRestartHeader = "[VIBECODE CLAUDE MODEL RECOVERY]";
+    // Model shows the refusal fallback Claude actually runs. The user's own choice is kept beside it, so copying,
+    // saving or restarting this agent never turns a temporary fallback into its model.
+    private bool _claudeFallbackActive;
+    private string? _claudeFallbackChosenModel;
+    private string? _claudeFallbackModel;
 
-    private void ApplyClaudeModelRecovery(JsonNode message)
+    /// <summary>The model the user chose. The same as <see cref="Model"/> except while Claude runs a refusal fallback:
+    /// an agent team's newcomer, a saved roster and a restarted process use this, never the fallback.</summary>
+    public string? ChosenModel => _claudeFallbackActive ? _claudeFallbackChosenModel : _model;
+
+    private void ShowClaudeFallback(string? fallbackModel)
     {
-        if (_session is not ClaudeSession session || Status == "closed"
-            || NodeString(message["recovery_id"]) is not { } id) return;
-        var phase = NodeString(message["phase"]);
-        var current = message["selection_version"]?.GetValue<long>() is { } version && session.IsCurrentModelSelection(version);
-        if (phase is "waiting" or "fallback" or "selected")
+        if (!_claudeFallbackActive)
         {
-            if (!current || _interruptRequested) return;
-            // Cooldown and exhausted retries leave the current turn, steering, and queued prompts running normally.
-            if (phase is "fallback" or "selected")
-            {
-                Model = NodeString(message["model"]);
-                RebuildEffortOptions();
-            }
-            InsertBeforeQueued(new BannerItem { Level = "info", Text = NodeString(message["message"])! });
+            _claudeFallbackChosenModel = _model;
+            _claudeFallbackActive = true;
         }
-        else if (phase == "stopping")
-        {
-            if (!current || _interruptRequested) return;
-            _claudeModelRestartId = id;
-            CancelGoalCheck();
-            InsertBeforeQueued(new BannerItem { Level = "info", Text = NodeString(message["message"])! });
-        }
-        else
-        {
-            if (_claudeModelRestartId != id) return;
-            _claudeModelRestartId = null;
-            if (phase == "ready" && current && !_interruptRequested)
-            {
-                Model = NodeString(message["model"]);
-                RebuildEffortOptions();
-                InsertBeforeQueued(new BannerItem { Level = "info", Text = NodeString(message["message"])! });
-                SendAutomaticContinuation(ClaudeModelRestartHeader +
-                    "\nThe previous turn was stopped after Claude switched to Opus 4.8. Opus 5.5 is now selected. " +
-                    "Continue the user's current task from the conversation and existing workspace state. " +
-                    "Keep completed work, check any interrupted operation before retrying it, and do not repeat completed actions.");
-            }
-            else if (phase == "failed" && current)
-            {
-                // Keep queued user requests from silently starting on the fallback after a failed switch.
-                if (!session.CanSteer) Status = "error";
-                PauseGoal();
-                InsertBeforeQueued(new BannerItem { Level = "warn", Text = NodeString(message["message"])! });
-            }
-            else if (!session.CanSteer && Status == "running") Status = "idle";
-        }
-        Raise(nameof(CanSendQueuedNow));
-        Raise(nameof(CanSteer));
-        ItemsChanged?.Invoke();
+        _claudeFallbackModel = fallbackModel;
+        Model = fallbackModel;
+        RebuildEffortOptions();
     }
+
+    private void LeaveClaudeFallback()
+    {
+        _claudeFallbackActive = false;
+        _claudeFallbackChosenModel = _claudeFallbackModel = null;
+    }
+
+    /// <summary>The CLI reported the model it runs. Any model but the fallback means the fallback is over.</summary>
+    private void ObserveClaudeRunningModel(string? model)
+    {
+        if (_claudeFallbackActive && model is { Length: > 0 }
+            && ClaudeModelCatalog.CanonicalId(model) != ClaudeModelCatalog.CanonicalId(_claudeFallbackModel))
+            LeaveClaudeFallback();
+    }
+
+    /// <summary>A new process starts on the model VibeCode passes it, so a restart leaves any fallback behind.</summary>
+    private void RestoreChosenModelForLaunch()
+    {
+        if (!_claudeFallbackActive) return;
+        var chosen = _claudeFallbackChosenModel;
+        LeaveClaudeFallback();
+        Model = chosen;
+    }
+
 }

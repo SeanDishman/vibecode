@@ -64,6 +64,13 @@ public static class CodexEnvironment
             LinkDirectory(homeDirectory, "skills");
             LinkDirectory(homeDirectory, "plugins");
             LinkDirectory(homeDirectory, "rules");
+            // Codex keeps its memories per CODEX_HOME, so each account home links to one VibeCode-owned folder instead:
+            // a chat that moves accounts keeps what Codex learned. Existing memories are copied in once, never moved,
+            // and a home that already has its own folder keeps it.
+            var ownMemories = Path.Combine(homeDirectory, "memories");
+            var memories = CliNativeMemory.PrepareCodex(new[] { Path.Combine(StandaloneHomeDirectory, "memories"), ownMemories }
+                .Where(source => Directory.Exists(source) && !CliNativeMemory.IsReparse(source)), DateTimeOffset.UtcNow);
+            if (memories is not null) LinkDirectory(homeDirectory, "memories", memories);
         }
     }
 
@@ -116,8 +123,7 @@ public static class CodexEnvironment
 
     /// <summary>Create an app-server process that is branded and isolated for VibeCode.</summary>
     public static ProcessStartInfo CreateAppServerStartInfo(string? workingDirectory = null, string? homeDirectory = null,
-        bool? swarmsEnabled = null, int swarmMaxWorkers = SwarmPolicy.DefaultMaxWorkers,
-        IReadOnlyList<McpServerDefinition>? mcpServers = null, string? accountId = null)
+        bool? subagentsEnabled = null, IReadOnlyList<McpServerDefinition>? mcpServers = null, string? accountId = null)
     {
         var targetHome = string.IsNullOrWhiteSpace(homeDirectory) ? HomeDirectory : Path.GetFullPath(homeDirectory);
         Prepare(targetHome);
@@ -149,6 +155,9 @@ public static class CodexEnvironment
         psi.ArgumentList.Add("app-server");
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("cli_auth_credentials_store=\"file\"");
+        // VibeCode deliberately enables its supported feature integrations. Avoid repeating Codex's generic
+        // under-development notice for each account/session; this does not suppress runtime errors or denials.
+        AddConfigOverride(psi, "suppress_unstable_features_warning=true");
         // VibeCode supplies the approval UI and forwards each thread/turn's read-only, workspace-write, or
         // full-access policy through app-server. Do not inherit `windows.sandbox = "elevated"` from a mirrored
         // standalone config: that backend performs administrator-approved setup and can raise a UAC prompt for
@@ -170,18 +179,12 @@ public static class CodexEnvironment
             "mcp_servers.node_repl.env.BROWSER_USE_CODEX_APP_BUILD_FLAVOR=" + TomlString(BrowserBuildFlavor));
         AddConfigOverride(psi,
             "mcp_servers.node_repl.env.BROWSER_USE_CODEX_APP_VERSION=" + TomlString(BrowserAppVersion));
-        if (swarmsEnabled is not null)
+        if (subagentsEnabled is not null)
         {
             // Pin the stable tool family so an experimental user-level feature cannot silently change the protocol
-            // shape under the UI. max_depth=1 prevents nested NÃ—N fan-out; max_threads is the runtime backstop even
-            // if a model disregards VibeCode's per-turn instruction.
-            AddConfigOverride(psi, $"features.multi_agent={swarmsEnabled.Value.ToString().ToLowerInvariant()}");
+            // shape under the UI. How many subagents run is left to Codex.
+            AddConfigOverride(psi, $"features.multi_agent={subagentsEnabled.Value.ToString().ToLowerInvariant()}");
             AddConfigOverride(psi, "features.multi_agent_v2=false");
-            if (swarmsEnabled.Value)
-            {
-                AddConfigOverride(psi, $"agents.max_threads={SwarmPolicy.ClampMaxWorkers(swarmMaxWorkers)}");
-                AddConfigOverride(psi, "agents.max_depth=1");
-            }
         }
         McpCatalog.EnsureLaunchReady(mcpServers, "codex");
         // Keep reporting in the isolated home so Settings changes can reload it at turn boundaries.
@@ -435,9 +438,9 @@ public static class CodexEnvironment
         return result.Append('"').ToString();
     }
 
-    private static void LinkDirectory(string homeDirectory, string name)
+    private static void LinkDirectory(string homeDirectory, string name, string? linkTarget = null)
     {
-        var source = Path.Combine(StandaloneHomeDirectory, name);
+        var source = linkTarget ?? Path.Combine(StandaloneHomeDirectory, name);
         var destination = Path.Combine(homeDirectory, name);
         try
         {

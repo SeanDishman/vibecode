@@ -29,6 +29,8 @@ internal static partial class Program
     {
         if (args.Contains("app-server") && Environment.GetEnvironmentVariable("VIBECODE_WORKER_CONTROL_FIXTURE_LOG") is not null) return RunWorkerControlFixture();
         if (args.Contains("app-server")) return RunProviderFixture();
+        if (args.Contains("--terminal-input-only")) return RunTerminalInputChecks(false);
+        if (args.Contains("--terminal-rendering-only")) return RunTerminalRenderingChecks(false);
         var recoveryChild = args.Contains("--crash-seed") || args.Contains("--crash-resume");
         var live = args.Contains("--live-simulations") || args.Contains("--jarvis-knowledge-live");
         var taskTitles = args.Contains("--task-title-only") || args.Contains("--task-title");
@@ -41,7 +43,7 @@ internal static partial class Program
         Environment.SetEnvironmentVariable("VIBECODE_DATA_DIR", Path.Combine(_root, recoveryChild ? "data" : "settings-" + Guid.NewGuid().ToString("N")));
         if (live) Environment.SetEnvironmentVariable("VIBECODE_CODEX_LEGACY_HOME", Environment.GetEnvironmentVariable("CODEX_HOME"));
         Environment.SetEnvironmentVariable("VIBECODE_HIDDEN", "1");
-        if (args.Contains("--bridge-accounts-only"))
+        if (args.Contains("--readme-captures") || args.Contains("--bridge-accounts-only") || args.Any(a => a.StartsWith("--terminal-", StringComparison.Ordinal)))
             IsolateBridgeAccountStores();
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
@@ -51,6 +53,32 @@ internal static partial class Program
         AppSettings.Current.BridgeAgentLimit = 9;
         try
         {
+            if (args.Contains("--readme-captures"))
+            {
+                CapturePublicReadme();
+                return 0;
+            }
+            if (args.Contains("--terminal-reuse-only"))
+            {
+                VerifyTerminalAgentReuse();
+                VerifyTerminalMode(headless: true);
+                VerifyTerminalControls(headless: true);
+                VerifyTerminalAttachments(headless: true);
+                Console.WriteLine($"PASS: {_checks} Terminal reuse, controls, attachments and settings checks. Offline fixtures only.");
+                return 0;
+            }
+            if (args.Contains("--terminal-windows-only"))
+            {
+                VerifyTerminalWindows();
+                Console.WriteLine($"PASS: {_checks} Terminal window lifecycle checks. Offline fixtures only.");
+                return 0;
+            }
+            if (args.Contains("--terminal-mode-only"))
+            {
+                VerifyTerminalMode();
+                Console.WriteLine($"PASS: {_checks} Terminal console and chat entry checks. Offline fixtures only.");
+                return 0;
+            }
             if (args.Contains("--cli-setup-only"))
             {
                 VerifyCliSetup();
@@ -176,6 +204,13 @@ internal static partial class Program
                 Console.WriteLine($"PASS: {_checks} per-chat fast mode checks. No live model calls.");
                 return 0;
             }
+            if (args.Contains("--fast-mode-visibility-only"))
+            {
+                VerifyFastModeVisibility();
+                VerifyFastModeIsolation();
+                Console.WriteLine($"PASS: {_checks} fast-mode capability, visibility, theme and persistence checks. No live model calls. Evidence: {_root}");
+                return 0;
+            }
             if (args.Contains("--codex-user-input-only"))
             {
                 VerifyCodexUserInput();
@@ -287,6 +322,13 @@ internal static partial class Program
             {
                 VerifyReviewRuntimeChanges();
                 Console.WriteLine($"PASS: {_checks} review settings runtime checks. No live model calls.");
+                return 0;
+            }
+            if (args.Contains("--review-navigation-only"))
+            {
+                VerifySharedActivity();
+                VerifyReviewNavigation();
+                Console.WriteLine($"PASS: {_checks} shared-terminal Review navigation and rendering checks. Local fixtures only.");
                 return 0;
             }
             if (live)
@@ -501,7 +543,11 @@ internal static partial class Program
         var registration = (McpServerDefinition)Call(endpoint, "Registration")!;
         Check("built-in helper is enabled for every CLI provider", registration.UseClaude && registration.UseCodex);
         Check("Codex projection approves only known bridge tools", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides.Any(c => c.Contains("bridge_dispatch_task") && c.Contains("bridge_read_chat") && c.Contains("approval_mode")));
-        Check("Claude receives built-in endpoint", McpCatalog.BuildClaudeConfig([registration]).ToJsonString().Contains("--bridge-mcp"));
+        var claudeEndpoint = McpCatalog.BuildClaudeConfig([registration])["mcpServers"]?[registration.RuntimeName];
+        Check("Claude receives built-in endpoint", registration.IsStdio
+            ? claudeEndpoint?["args"]?.ToJsonString().Contains("--bridge-mcp") == true
+            : claudeEndpoint?["url"]?.ToString() == registration.Url
+                && claudeEndpoint?["headers"]?["Authorization"]?.ToString() == registration.Headers["Authorization"]);
         using var glm = new GlmSession(new GlmSessionOptions { Cwd = _root, ApiKeys = ["offline-fixture"], BridgeMcpPipe = (string)Property(endpoint, "PipeName")! });
         Check("GLM advertises the same bridge contract", ((JsonArray)Call(glm, "ToolSchema")!).Any(t => t?["function"]?["name"]?.ToString() == "bridge_read_chat"));
         var host = new AgentStatusMcpHost(BridgeMcpTools.Create((_, _) => new JsonObject { ["ok"] = true }), serverName: "vibecode-bridge", instructions: BridgeMcpTools.Instructions);
@@ -516,7 +562,8 @@ internal static partial class Program
         Check("MCP initializes with bridge instructions", init?["result"]?["instructions"]?.ToString().Contains("bridge_send_message") == true);
         host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" });
         var listing = host.Dispatch(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 2, ["method"] = "tools/list" });
-        Check("MCP tools list includes full peer transcripts, chat naming, task titles, broadcast, scope agreement, final review, live status and file edit history", listing?["result"]?["tools"]?.AsArray().Count == 18 &&
+        Check("MCP tools list includes checkpoints, todos, peer transcripts, chat naming, task titles, broadcast, scope agreement, final review, live status and file edit history", listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "chat_checkpoint") == true &&
+            listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "todo_write") == true &&
             listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "bridge_read_chat") == true &&
             listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "bridge_agent_status") == true &&
             listing?["result"]?["tools"]?.AsArray().Any(t => t?["name"]?.ToString() == "bridge_file_edits") == true &&
@@ -667,10 +714,16 @@ internal static partial class Program
         Check("review keeps the full roster and filters the existing viewport", sharedList.Items.Cast<BridgeTranscriptEntry>().All(p => ReferenceEquals(p.Owner, team[1])) &&
             ((ListBox)sharedPanel.FindName("AgentRoster")).Items.Count == 4 && ReferenceEquals(sharedList.ItemsSource, vm.SharedBridgeTerminal.Activity));
         Check("copying an agent review follows the visible filter", !((string)Call(shell, "SharedConversationText", vm.SharedBridgeTerminal)!).Contains("Agent 3:"));
-        vm.SharedBridgeTerminal.ShowAll();
+        ((ListBox)sharedPanel.FindName("AgentRoster")).SelectedItem = team[2];
+        shell.UpdateLayout();
+        Check("clicking a different roster agent leaves Review and restores the shared terminal", !vm.SharedBridgeTerminal.IsReviewing
+            && vm.SharedBridgeTerminal.Target == team[2] && sharedList.Items.Cast<BridgeTranscriptEntry>().Select(entry => entry.Owner).Distinct().Count() > 1);
+        vm.SharedBridgeTerminal.Review(team[1]);
         var recipientPicker = Descendants<ComboBox>(sharedPanel).Single(picker => picker.Name == "SharedRecipientPicker");
         recipientPicker.SelectedItem = team[2];
         Check("composer recipient picker selects the correct conversation", team[2].BridgeTerminalSelected && ReferenceEquals(vm.BridgePanelChat, team[2]));
+        Check("choosing a composer recipient also returns to All activity", !vm.SharedBridgeTerminal.IsReviewing
+            && vm.SharedBridgeTerminal.ActivityTitle == "All activity");
         shell.UpdateLayout();
         Check("changing prompt recipient retains activity from all agents", sharedList.Items.Count == vm.SharedBridgeTerminal.Activity.Cast<BridgeTranscriptEntry>().Count() &&
             Descendants<TextBox>(sharedPanel).Single(t => t.Name == "PaneInput").DataContext == team[2]);
@@ -750,6 +803,12 @@ internal static partial class Program
     private static JsonObject Tool(ChatViewModel chat, string name, JsonObject? args = null) =>
         BridgeMcpTools.Create((tool, input) => ((Func<string, JsonObject, JsonObject>)Property(chat, "BridgeToolHandler")!)(tool, input))
             .Single(t => t.Name == name).Invoke(args ?? new());
+    private static string[] ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+    }
     private static FakeSession Session(ChatViewModel chat) => (FakeSession)typeof(ChatViewModel).GetField("_session", Flags)!.GetValue(chat)!;
     private static object? Call(object target, string name, params object?[] args) => target.GetType().GetMethods(Flags)
         .Single(m => m.Name == name && m.GetParameters().Length == args.Length).Invoke(target, args);

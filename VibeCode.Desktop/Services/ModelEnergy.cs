@@ -106,18 +106,20 @@ public static class ModelEnergy
         ["claude-sonnet-5"] = 60,
         ["claude-sonnet-4-6"] = 60,
         ["claude-sonnet-4-5"] = 60,
-        ["claude-haiku-4-5"] = 15,
+        ["claude-haiku-5-5"]  = 15,
+        ["claude-haiku-4-5"]  = 15,
 
         // OpenAI, scaled off Epoch AI's GPT-4o figure by this lineup's own short-context output prices,
         // i.e. 5B active params per dollar of output. Astra's $50 puts it at 250. GPT-6 Luna's $0.50 rounds to 3.
         // Deliberately this lineup's own scale rather than the 600 the identically-priced Anthropic frontier pair
         // carries, since those are separate per-model estimates and not price-derived.
-        ["gpt-6-astra"] = 250,
-        ["gpt-6.1-sol"] = 50,
-        ["gpt-6-sol"] = 50,
-        ["gpt-6-luna"] = 3,
-        ["gpt-5.6-sol"] = 100,
-        ["gpt-5.5"] = 150,
+        ["gpt-6-astra"]   = 250,
+        ["gpt-6.1-sol"]   = 50,
+        ["gpt-6.1-terra"] = 25,
+        ["gpt-6-sol"]     = 50,
+        ["gpt-6-luna"]    = 3,
+        ["gpt-5.6-sol"]   = 100,
+        ["gpt-5.5"]       = 150,
         ["gpt-5.6-terra"] = 60,
         ["gpt-5.6-luna"] = 6,
 

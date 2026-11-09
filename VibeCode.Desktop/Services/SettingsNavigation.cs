@@ -10,11 +10,14 @@ public static class SettingsNavigation
     [
         new("General", "General", null, "Settings > General"),
         new("Appearance", "Appearance", null, "Settings > Appearance"),
+        new("Telemetry", "Appearance", "SectionTelemetry", "Settings > Appearance > Live telemetry"),
         new("Notifications", "General", "SectionNotifications", "Settings > General > Notifications"),
         new("Bridge", "Bridge and agents", null, "Settings > Bridge & agents"),
         new("Usage", "Usage", null, "Settings > Usage"),
+        new("Developer", "Developer", null, "Settings > Developer"),
         new("Projects", "General", "SectionProjects", "Settings > General > Projects"),
         new("MCP servers", "MCP and extensions", "McpServersCard", "Settings > MCP & extensions > MCP servers"),
+        new("Skills", "MCP and extensions", "SkillsCard", "Settings > MCP & extensions > Skills"),
         new("Extensions", "MCP and extensions", "SectionExtensions", "Settings > MCP & extensions > Extensions"),
         new("Jarvis", "Jarvis", null, "Settings > Jarvis"),
         new("Privacy", "General", "SectionPrivacy", "Settings > General > Privacy"),
@@ -30,6 +33,7 @@ public static class SettingsNavigation
             "bridge & agents" or "bridge and agents" => "Bridge",
             "mcp and extensions" => "MCP & extensions",
             "mcp" => "MCP servers",
+            "skill" => "Skills",
             _ => name,
         };
         if (string.Equals(canonical, "Hidden projects", StringComparison.OrdinalIgnoreCase))

@@ -81,7 +81,7 @@ internal static partial class Program
             Session(worker).Sent[0].Contains("checks explicitly requested by the user still apply"));
         Reject("None still waits for active worker assignments", () => Tool(manager, "bridge_review_scope", new()
         { ["verdict"] = "approved", ["summary"] = "No extra inspection requested." }));
-        Call(worker, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = true });
+        Call(worker, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = true, ["result"] = "Invalid request: the assignment could not be completed." });
         PumpUntil(() => Session(manager).Sent.Count == 2);
         Call(manager, "ApplyResult", new JsonObject { ["type"] = "result", ["is_error"] = false });
         Reject("None cannot mark failed work complete", () => Tool(manager, "bridge_review_scope", new()

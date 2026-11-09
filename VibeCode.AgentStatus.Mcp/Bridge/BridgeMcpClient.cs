@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using VibeCode.AgentStatus.Mcp.Contracts;
 
@@ -20,6 +21,8 @@ public static class BridgeMcpClient
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(RequestTimeout);
+        var writeStarted = false;
+        var phase = "connect";
         try
         {
             using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
@@ -34,20 +37,51 @@ public static class BridgeMcpClient
             }
             using var reader = new StreamReader(pipe, new UTF8Encoding(false), leaveOpen: true);
             using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+            phase = "send";
+            writeStarted = true;
             await writer.WriteLineAsync(new JsonObject { ["tool"] = tool, ["arguments"] = arguments.DeepClone() }
                 .ToJsonString().AsMemory(), timeout.Token).ConfigureAwait(false);
+            phase = "receive";
             var line = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
             var response = line is null ? null : JsonNode.Parse(line) as JsonObject;
-            if (response?["error"] is JsonValue error)
-                throw new StatusValidationException(error.GetValue<string>());
+            if (response?["error_details"] is JsonObject details)
+            {
+                if (new[] { "code", "message", "next_action", "request_status" }
+                    .Any(key => string.IsNullOrWhiteSpace(AgentStatusReport.Text(details[key]))))
+                    throw new BridgeMcpException("invalid_response", "VibeCode returned an incomplete Bridge error receipt.",
+                        BridgeMcpException.CheckReceipt, "unknown").WithContext(tool, phase);
+                throw BridgeMcpException.FromDetails(details).WithContext(tool, "execution");
+            }
+            if (AgentStatusReport.Text(response?["error"]) is { } error)
+                throw new BridgeMcpException("request_rejected", error, BridgeMcpException.CheckReceipt, "unknown")
+                    .WithContext(tool, "execution");
             // The MCP host owns the returned node when it wraps structuredContent. Detach it from the pipe envelope.
-            if (response?["result"] is not JsonObject result) throw new StatusValidationException("Bridge returned no receipt.");
+            if (response?["result"] is not JsonObject result)
+                throw new BridgeMcpException(line is null ? "connection_closed" : "invalid_response",
+                    line is null ? "The VibeCode Bridge connection closed before returning a receipt. The chat or app may have closed."
+                        : "VibeCode returned a response without a valid Bridge receipt.", BridgeMcpException.CheckReceipt, "unknown")
+                    .WithContext(tool, phase);
             response.Remove("result");
             return result;
         }
-        catch (Exception ex) when (ex is IOException or OperationCanceledException)
+        catch (JsonException)
         {
-            throw new StatusValidationException("Bridge connection is unavailable or timed out. Check bridge_list_agents before retrying a send; delivery may already have occurred.");
+            throw new BridgeMcpException("invalid_response", "VibeCode returned malformed JSON instead of a Bridge receipt.",
+                BridgeMcpException.CheckReceipt, "unknown").WithContext(tool, phase);
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or UnauthorizedAccessException)
+        {
+            var code = ex is OperationCanceledException
+                ? cancellationToken.IsCancellationRequested ? "request_cancelled" : "connection_timeout"
+                : ex is UnauthorizedAccessException ? "connection_access_denied" : "connection_unavailable";
+            var reason = ex is OperationCanceledException
+                ? cancellationToken.IsCancellationRequested ? "The Bridge call was cancelled" : "The Bridge call timed out after 30 seconds"
+                : ex is UnauthorizedAccessException ? "Access to the local Bridge connection was denied" : "The local Bridge connection was lost or is unavailable";
+            throw new BridgeMcpException(code, reason + (writeStarted
+                    ? " while waiting for a receipt. The request may already have taken effect."
+                    : " before the request was sent. The chat may have closed or the MCP connection may be stale."),
+                writeStarted ? BridgeMcpException.CheckReceipt : "Refresh bridge_list_agents. If the connection stays unavailable, reconnect the chat's MCP server in VibeCode.",
+                writeStarted ? "unknown" : "not_started").WithContext(tool, phase);
         }
     }
 

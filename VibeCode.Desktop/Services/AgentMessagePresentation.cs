@@ -54,6 +54,13 @@ public static class AgentMessagePresentation
             card = new AgentMessageCard("👑", "Bridge", "Coordination update", text[coordinationHeader.Length..].Trim());
             return card.Body.Length > 0;
         }
+        // Its own kind rather than a coordination update: those are hidden in the shared terminal, and the user should
+        // see the app asking whether the work is really done.
+        if (text.StartsWith(BridgeFactCheckPolicy.Header, StringComparison.Ordinal))
+        {
+            card = new AgentMessageCard("👑", "Bridge", BridgeFactCheckPolicy.CardKind, text[BridgeFactCheckPolicy.Header.Length..].Trim());
+            return card.Body.Length > 0;
+        }
         if (text.StartsWith(goalHeader, StringComparison.Ordinal))
         {
             card = new AgentMessageCard("👑", "Orchestrator setup", "Goal", text[goalHeader.Length..].Trim());

@@ -10,7 +10,8 @@ public sealed partial class MainViewModel
     private void ScheduleBridgePlanReminder(ChatViewModel member, LiveBridge bridge)
     {
         var work = WorkFor(bridge.Panes);
-        if (work.IdlePlanReminderScheduled || work.IdlePlanRemindersPaused
+        // With Plan steps off there is no plan to finish: the orchestrator works from its workers' reports alone.
+        if (!work.PlanSteps || work.IdlePlanReminderScheduled || work.IdlePlanRemindersPaused
             || !work.Tasks.Any(t => t.State != "completed")
             || !bridge.Panes.Any(p => p.IsBridgeManager && p.BridgeCoordinatesOnly)) return;
 
@@ -28,7 +29,7 @@ public sealed partial class MainViewModel
     private void RemindIdleBridgeOrchestrators(LiveBridge bridge)
     {
         var work = WorkFor(bridge.Panes);
-        if (work.IdlePlanRemindersPaused || work.CentralPlan is { State: not "completed" }
+        if (!work.PlanSteps || work.IdlePlanRemindersPaused || work.CentralPlan is { State: not "completed" }
             || bridge.Panes.Any(p => !p.SettledForBridgePlanReminder)) return;
 
         try { StartReadyBridgeTasks(bridge); }

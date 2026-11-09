@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Input;
 using VibeCode.UI;
 
 internal static partial class Program
@@ -68,7 +69,10 @@ internal static partial class Program
         Pump("restoring viewport height settles");
         Check(AtBottom(scroll), $"a larger viewport stays at the bottom ({Position(scroll)})");
 
-        // Queue user scrolling and growth together so WPF reports both changes in one layout pass.
+        // Include user input: virtualization itself can also move the measured offset upward.
+        // Queue the wheel event, offset request and new output before WPF processes either command.
+        scroll.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
+            { RoutedEvent = UIElement.MouseWheelEvent });
         scroll.ScrollToVerticalOffset(1200);
         rows.Add(new TranscriptRow { Height = 220 });
         Pump("scrolling up during incoming output settles");

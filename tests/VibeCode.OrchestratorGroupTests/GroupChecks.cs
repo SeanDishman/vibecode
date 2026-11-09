@@ -65,7 +65,7 @@ internal static partial class Program
         panel.Configure(host, 11, advancedOnly: true);
         ((ComboBox)panel.FindName("OrchestratorProviderBox")).SelectedValue = orchestratorProvider;
         var options = (BridgeAgentOptionsPanel)panel.FindName("AgentOptions");
-        Choose(options, "OrchestratorModelBox", orchestratorProvider == "codex" ? "gpt-6.1-sol" : "claude-fable-5");
+        Choose(options, "OrchestratorModelBox", orchestratorProvider == "codex" ? "gpt-6.1-sol" : "claude-fable-5-1");
         Effort(options, "OrchestratorEffortBox", orchestratorProvider == "codex" ? "high" : null);
         ((ComboBox)options.FindName("WorkerProviderBox")).SelectedValue = workerProvider;
         Choose(options, "WorkerModelBox", workerProvider == "codex" ? "gpt-6-luna" : "claude-opus-5");
@@ -172,14 +172,15 @@ internal static partial class Program
         spare.BridgeLabel = "Codex " + (vm.BridgePanes.Count + 1); vm.BridgePanes.Add(spare); Call(vm, "Track", spare);
         var before = vm.BridgePanes.Count;
         var added = vm.LaunchBridgeOrchestrators(host, [1, 2], "Coordinate an additional pair of groups", false,
-            "claude", new("claude", "claude-fable-5", null), new("codex", "gpt-6-luna", "medium"));
+            "claude", new("claude", "claude-fable-5-1", null), new("codex", "gpt-6-luna", "medium"));
         foreach (var pane in vm.BridgePanes) Chats.Add(pane);
         Check("add-group path creates requested managers and reuses only unassigned worker", added.Count == 2 && vm.BridgePanes.Count == before + 4 && spare.BridgeCoordinatorAgentId == added[0].BridgeAgentId);
         Check("add-group path preserves old worker ownership", oldOwners.All(pair => pair.Key.BridgeCoordinatorAgentId == pair.Value));
         Check("add-group path creates unequal new worker groups", added.Select(m => vm.BridgePanes.Count(p => p.BridgeCoordinatorAgentId == m.BridgeAgentId)).SequenceEqual(new[] { 1, 2 }));
         Pump(() => vm.BridgePanes.All(p => p.Status == "idle" && p.SessionId is not null) && added.All(p => UserRequests(p).Any()));
         foreach (var manager in added) AssertAcknowledged(manager, "added default-effort manager " + manager.BridgeLabel);
-        Check("adding groups preserves multiple-terminal choice", vm.BridgePanes.All(p => !p.BridgeSingleTerminal));
+        Check("adding groups beyond nine switches to single terminal", vm.BridgePanes.Count == 10
+            && vm.BridgePanes.All(p => p.BridgeSingleTerminal) && !vm.CanUseSeparateBridgeTerminals());
         Check("all old and new orchestrators must agree again", oldManagers.Concat(added).All(p => !(bool)Property(p, "BridgeScopeConfirmed")!));
         Check("additional central split preserves earlier scopes", oldManagers.All(p => p.BridgeOrchestrationScope.StartsWith("Own bounded area")));
         var owners = vm.BridgePanes.ToDictionary(p => p, p => p.BridgeCoordinatorAgentId);

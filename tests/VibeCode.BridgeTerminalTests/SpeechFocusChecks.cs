@@ -69,7 +69,7 @@ internal static partial class Program
                 input.Text = draft;
                 input.Select(5, 8);
 
-                SeedSpeechCapture(shell, mic, scenario.Layout == "main" ? null : chat, scenario.Bytes);
+                SeedSpeechCapture(shell, mic, chat, scenario.Bytes);
                 Check(scenario.Name + ": mic can receive keyboard focus", mic.Focus() && mic.IsKeyboardFocused);
                 mic.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 PumpUntil(() => service.State == SpeechState.Idle && (int)typeof(MainWindow).GetField("_micToken", Flags)!.GetValue(shell)! == 0);
@@ -120,5 +120,6 @@ internal static partial class Program
             (object?)owner ?? typeof(MainWindow).GetField("MainComposerOwner", Flags)!.GetValue(null));
         typeof(MainWindow).GetField("_micButton", Flags)!.SetValue(shell, mic);
         typeof(MainWindow).GetField("_micActive", Flags)!.SetValue(shell, true);
+        typeof(MainWindow).GetField("_micBusySince", Flags)!.SetValue(shell, DateTime.UtcNow);
     }
 }

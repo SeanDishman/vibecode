@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using VibeCode.Protocol;
+using VibeCode.Services;
 
 namespace VibeCode.UI;
 
@@ -11,6 +12,36 @@ public sealed partial class ChatViewModel
     private bool _handlingManualCompactionResult;
     public bool IsCompactingContext => _manualCompactCommand is not null || _handlingManualCompactionResult;
 
+    // An agent-team newcomer copied from a teammate past the fork ceiling compacts that copy before its first prompt
+    // (see TeamMemoryPolicy). The command waits here until the first idle flush starts it.
+    private string? _compactBeforeFirstPrompt;
+    private bool _compactingCopyForFirstPrompt;
+
+    /// <summary>Compact this newcomer's copied conversation before anything else is sent. Its first prompt queues behind it.</summary>
+    internal void CompactCopyBeforeFirstPrompt() =>
+        _compactBeforeFirstPrompt = IsCodex ? "/compact" : "/compact " + TeamMemoryPolicy.CopyCompactionFocus;
+
+    /// <summary>The newcomer's first idle flush: start the copy's compaction, the queued prompt still waiting. True when it
+    /// started. Tried once - a prompt the user sent on with "Send now" while the agent was starting goes out as is.</summary>
+    private bool StartCopyCompaction()
+    {
+        if (_compactBeforeFirstPrompt is not { } command) return false;
+        _compactBeforeFirstPrompt = null;
+        if (_status != "idle" || !StartManualCompaction(command, null, recovering: true)) return false;
+        _compactingCopyForFirstPrompt = true;
+        return true;
+    }
+
+    /// <summary>The copy could not be compacted: the first prompt goes with the whole copy rather than waiting behind an
+    /// error. A usage limit is different - limit recovery retries the compaction and the prompt still waits for it.</summary>
+    private void ReleaseFirstPromptAfterFailedCopyCompaction()
+    {
+        if (Status != "error" || WaitingForLimitReset || WaitingForBridgeRetry || !HasQueued) return;
+        Items.Add(new BannerItem { Level = "info", Text = "Compacting the copied conversation failed, so the first prompt goes with the whole copy." });
+        ItemsChanged?.Invoke();
+        Status = "idle";   // the setter flushes the queue
+    }
+
     private static bool IsCompactCommand(string text) => text.Trim() is var command
         && command.StartsWith("/compact", StringComparison.OrdinalIgnoreCase)
         && (command.Length == 8 || char.IsWhiteSpace(command[8]));
@@ -20,7 +51,7 @@ public sealed partial class ChatViewModel
         string? problem = null;
         var instructions = command.Trim()[8..].Trim();
         if (_session is not ICompactableSession) problem = $"/compact is not supported by {ProviderDisplay}.";
-        else if (IsWorking || (!recovering && HasPendingDispatch) || RewindHoldsDispatch || _pendingPerms.Count > 0)
+        else if (IsWorking || (!recovering && HasPendingDispatch) || ModelRestartHoldsDispatch || _pendingPerms.Count > 0)
             problem = "Wait for the current turn and queued messages to finish, then use /compact.";
         else if (attachments is { Count: > 0 }) problem = "Remove attachments before using /compact.";
         else if ((IsCodex || IsGemini) && instructions.Length > 0) problem = $"Use /compact on its own for {ProviderDisplay}. Claude also accepts focus instructions.";
@@ -38,7 +69,7 @@ public sealed partial class ChatViewModel
         _manualCompactCommand = instructions.Length == 0 ? "/compact" : "/compact " + instructions;
         _manualCompactSucceeded = false;
         _promptHistory.Record(_manualCompactCommand);
-        Items.Add(new UserItem { Text = _manualCompactCommand, Owner = this });
+        Items.Add(new UserItem { Text = _manualCompactCommand, Owner = this, IsLocalSubmission = true });
         _interruptRequested = false;
         AuthNeeded = false;
         Status = "running";
@@ -76,12 +107,14 @@ public sealed partial class ChatViewModel
         if (_manualCompactBanner is not null) Items.Remove(_manualCompactBanner);
         _manualCompactBanner = null;
         if (!failed && !_manualCompactSucceeded)
-            Items.Add(new BannerItem
-            {
-                Level = "info",
-                Text = interrupted ? "Compaction stopped."
-                : result["result"]?.ToString() is { Length: > 0 } detail ? detail : "Compaction finished."
-            });
+            Items.Add(new BannerItem { Level = "info", Text = interrupted ? "Compaction stopped."
+                : result["result"]?.ToString() is { Length: > 0 } detail ? detail : "Compaction finished." });
+        if (_compactingCopyForFirstPrompt)
+        {
+            _compactingCopyForFirstPrompt = false;
+            // Posted: the result is still being applied, and only afterwards does the failed turn show as an error.
+            if (failed) Post(ReleaseFirstPromptAfterFailedCopyCompaction);
+        }
         return command;
     }
 }

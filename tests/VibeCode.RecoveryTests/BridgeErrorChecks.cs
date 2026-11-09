@@ -29,7 +29,8 @@ internal static partial class Program
     private static void BridgeErrorRecoveryChecks()
     {
         foreach (var text in new[] { CapacityError, "HTTP 503 Service Unavailable", "API Error: 529 overloaded_error", "Internal server error",
-            "Bad gateway", "Gateway timeout", "stream disconnected before completion", "connection reset by peer", "request timed out" })
+            "Bad gateway", "Gateway timeout", "stream disconnected before completion", "connection reset by peer", "request timed out",
+            "Could not reach the GLM endpoint: An error occurred while sending the request.", "Failed to send request" })
             Check("temporary provider failure is retryable: " + text, BridgeErrorRecovery.IsTransient(Error(text)));
         foreach (var code in new[] { "httpConnectionFailed", "serverOverloaded", "responseStreamDisconnected" })
             Check("structured provider failure is retryable: " + code, BridgeErrorRecovery.IsTransient(new JsonObject
@@ -43,6 +44,31 @@ internal static partial class Program
             Check("non-transient failure does not retry: " + text, !BridgeErrorRecovery.IsTransient(Error(text)));
         Check("successful text and transport warnings do not trigger retries", !BridgeErrorRecovery.IsTransient(new JsonObject
         { ["is_error"] = false, ["result"] = "Falling back from WebSockets to HTTPS: 503 Service Unavailable" }));
+        foreach (var text in new[] { "HTTP 401: connection reset", "Invalid API key", "usage limit", "invalid request",
+            "context window exceeded", "user interrupted", "request cancelled" })
+            Check("generic fallback cannot bypass user action: " + text, !BridgeErrorRecovery.CanRetry(Error(text)));
+
+        var (unknown, unknownSession) = AdvancedRetryChat("unknown-terminal-error");
+        End(unknown, Error("Unexpected terminal provider failure"));
+        Check("an unclassified terminal provider error gets a generic fallback", unknown.WaitingForBridgeRetry);
+        RetryNow(unknown); Pump(() => unknownSession.Sent.Count == 1);
+        End(unknown, Error("Unexpected terminal provider failure"));
+        Check("unclassified failures do not create an endless generic retry loop", !unknown.WaitingForBridgeRetry);
+        End(unknown, new JsonObject { ["is_error"] = false });
+        End(unknown, Error("Unexpected terminal provider failure"));
+        Check("a successful turn rearms fallback for a later unrelated failure", unknown.WaitingForBridgeRetry);
+        unknown.Close();
+
+        var (connecting, connectingSession) = AdvancedRetryChat("stop-reconnect");
+        connecting.Send("Finish this task."); Pump(() => connectingSession.Sent.Count == 1);
+        connecting.Send("Preserve this queued request.");
+        End(connecting, Error(CapacityError));
+        Field(connecting, "_bridgeRetryReconnecting", true);
+        connecting.Status = "starting";
+        connecting.Interrupt();
+        Check("Stop during reconnect cancels startup without losing pending input", !connecting.WaitingForBridgeRetry
+            && connecting.Status == "error" && connectingSession.HasExited && connecting.HasQueued && connectingSession.Sent.Count == 1);
+        connecting.Close();
 
         AppSettings.Current.ContinueAfterLimitResets = false;
         foreach (var provider in new[] { "codex", "claude", "glm" })
@@ -53,10 +79,10 @@ internal static partial class Program
                 var before = DateTimeOffset.Now;
                 End(chat, Error(CapacityError));
                 var deadline = ReadField<DateTimeOffset>(chat, "_bridgeRetryAt");
-                Check(provider + " advanced role schedules a full minute independently of quota settings: " + manager,
-                    chat.WaitingForBridgeRetry && deadline >= before.AddMinutes(1) && deadline <= DateTimeOffset.Now.AddMinutes(1));
+                Check(provider + " advanced role schedules a second independently of quota settings: " + manager,
+                    chat.WaitingForBridgeRetry && deadline >= before.AddSeconds(1) && deadline <= DateTimeOffset.Now.AddSeconds(1));
                 Check("waiting role remains visibly pending and stoppable", chat.BridgeTaskState == "waiting" && chat.CanInterrupt
-                    && chat.ShowWorkingText && chat.WorkingText.StartsWith("Retrying in ") && chat.BridgeAvailabilityText.StartsWith("Retrying in "));
+                    && chat.ShowWorkingText && chat.WorkingText == BridgeErrorRecovery.RetryingText && chat.BridgeAvailabilityText == BridgeErrorRecovery.RetryingText);
                 Call(chat, "CheckBridgeErrorRecovery");
                 Check("no prompt before the deadline", session.Sent.Count == 0);
                 var selectedModel = chat.Model;
@@ -64,6 +90,9 @@ internal static partial class Program
                 Call(chat, "CheckBridgeErrorRecovery");
                 Check("one continuation keeps the same model and task", session.Sent.Count == 1 && !chat.WaitingForBridgeRetry
                     && session.Sent[0].Contains(BridgeErrorRecovery.ContinuePrompt) && chat.Model == selectedModel && chat.BridgeTaskState == "working");
+            Check("fallback explains the role without requesting diagnosis " + manager,
+                session.Sent[0].Contains(manager ? BridgeErrorRecovery.OrchestratorContinuePrompt : BridgeErrorRecovery.WorkerContinuePrompt)
+                && !session.Sent[0].Contains("Figure out why", StringComparison.OrdinalIgnoreCase));
                 chat.Close();
             }
         foreach (var ordinaryBridge in new[] { false, true })
@@ -78,7 +107,7 @@ internal static partial class Program
         for (var i = 0; i < 3; i++)
         {
             var before = DateTimeOffset.Now; End(repeat, Error(CapacityError));
-            Check("repeated capacity errors get a new minute, never an immediate loop " + i, ReadField<DateTimeOffset>(repeat, "_bridgeRetryAt") >= before.AddMinutes(1));
+            Check("repeated capacity errors get a new second, never an immediate loop " + i, ReadField<DateTimeOffset>(repeat, "_bridgeRetryAt") >= before.AddSeconds(1));
             RetryNow(repeat); var count = i + 1; Pump(() => repeatedSession.Sent.Count == count);
         }
         End(repeat, new JsonObject { ["is_error"] = false });
@@ -168,14 +197,14 @@ internal static partial class Program
 
     private static void BridgeErrorRetryTimerChecks()
     {
-        var (chat, session) = AdvancedRetryChat("real-one-minute-retry");
+        var (chat, session) = AdvancedRetryChat("real-one-second-retry");
         chat.Status = "running"; var clock = Stopwatch.StartNew(); End(chat, Error(CapacityError));
         var frame = new DispatcherFrame();
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-        timer.Tick += (_, _) => { if (session.Sent.Count > 0 || clock.Elapsed > TimeSpan.FromSeconds(75)) frame.Continue = false; };
+        timer.Tick += (_, _) => { if (session.Sent.Count > 0 || clock.Elapsed > TimeSpan.FromSeconds(10)) frame.Continue = false; };
         timer.Start(); try { Dispatcher.PushFrame(frame); } finally { timer.Stop(); }
-        Check("production dispatcher waits a real minute before continuing", clock.Elapsed >= TimeSpan.FromMinutes(1)
-            && clock.Elapsed < TimeSpan.FromSeconds(75) && session.Sent.Count == 1);
+        Check("production dispatcher waits a second before continuing", clock.Elapsed >= TimeSpan.FromSeconds(1)
+            && clock.Elapsed < TimeSpan.FromSeconds(10) && session.Sent.Count == 1);
         Check("production retry releases its timer after one continuation", !chat.WaitingForBridgeRetry
             && ReadField<object?>(chat, "_bridgeRetryTimer") is null && session.Sent.Single().Contains(BridgeErrorRecovery.ContinuePrompt));
         Console.WriteLine($"Observed delay: {clock.Elapsed.TotalSeconds:F2} seconds.");

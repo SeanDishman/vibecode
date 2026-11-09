@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace VibeCode.Services;
@@ -5,10 +6,15 @@ namespace VibeCode.Services;
 /// <summary>The user's persistent objective for one chat, independent of its provider.</summary>
 public sealed record ChatGoal(string Id, string Text, bool Completed = false, bool Paused = false);
 
+public enum GoalControl { Status, Pause, Resume, Clear }
+
 public static class GoalPolicy
 {
     public const string CheckHeader = "[VIBECODE GOAL CHECK]";
     private const string CheckGoalPrefix = CheckHeader + "\nGoal: ";
+    // The objective is quoted for a model, not embedded in HTML. The default encoder turned apostrophes, quotes and
+    // all non-ASCII text into \uXXXX, and a goal check carries no other copy of the user's words.
+    private static readonly JsonSerializerOptions PromptJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     public static bool TryParseCommand(string text, out string goal)
     {
@@ -20,6 +26,20 @@ public static class GoalPolicy
         return true;
     }
 
+    public static bool TryParseControl(string text, out GoalControl control)
+    {
+        GoalControl? parsed = TryParseCommand(text, out var argument) ? argument.ToLowerInvariant() switch
+        {
+            "status" => GoalControl.Status,
+            "pause" => GoalControl.Pause,
+            "resume" => GoalControl.Resume,
+            "clear" => GoalControl.Clear,
+            _ => null,
+        } : null;
+        control = parsed.GetValueOrDefault();
+        return parsed is not null;
+    }
+
     public static ChatGoal? Normalize(ChatGoal? goal) => goal is not null
         && Guid.TryParseExact(goal.Id, "N", out _) && !string.IsNullOrWhiteSpace(goal.Text)
             ? goal with { Text = goal.Text.Trim() } : null;
@@ -29,14 +49,14 @@ public static class GoalPolicy
 
     public static string TurnContext(ChatGoal goal) =>
         "[VIBECODE ACTIVE GOAL]\n"
-        + "The user set this goal for this chat (JSON string): " + JsonSerializer.Serialize(goal.Text)
+        + "The user set this goal for this chat (JSON string): " + Quote(goal.Text)
         + "\nWork toward it while respecting the user's latest instructions. Report the goal's status "
         + "in this turn when it is finished or needs user input; do not wait for a separate goal check. "
         + "Do not treat a turn ending as proof that the goal is complete."
         + StatusInstructions(goal)
         + "\n[/VIBECODE ACTIVE GOAL]";
 
-    public static string BuildCheck(ChatGoal goal) => CheckGoalPrefix + JsonSerializer.Serialize(goal.Text)
+    public static string BuildCheck(ChatGoal goal) => CheckGoalPrefix + Quote(goal.Text)
         + "\nDid you finish this user's goal?"
         + "\nReview the actual work and verification before answering. If the goal is unfinished, "
         + "continue doing the remaining work now; another normal stop will trigger this check again. "
@@ -49,6 +69,9 @@ public static class GoalPolicy
         + "\nIf you cannot continue without a user answer, approval, credentials, or an external change, "
         + "explain what is needed and end with this exact standalone line instead:\n" + WaitingMarker(goal)
         + "\nNever claim completion merely to stop the reminders. Follow all permission and safety requirements.";
+
+    // Still a single line: newlines stay escaped, so TryReadCheckGoal can find the end of the objective.
+    private static string Quote(string text) => JsonSerializer.Serialize(text, PromptJson);
 
     public static bool TryReadCheckGoal(string text, out string goal)
     {

@@ -237,11 +237,6 @@ data class Message(
     val questions: List<BridgeQuestion> = emptyList(),
     /** Position among this chat's user prompts (or queued prompts). -1 for every other row. */
     val ordinal: Int = -1,
-    /** Whether tapping rewind on this prompt would currently do anything. */
-    val canUndo: Boolean = false,
-    val wasUndone: Boolean = false,
-    /** How many later prompts would be rewound along with this one. */
-    val cascades: Int = 0,
     /** Whether this permission offers a rule to remember, i.e. whether "Always allow" is real here. */
     val canAlways: Boolean = false,
     val diff: List<DiffLine> = emptyList(),
@@ -276,9 +271,6 @@ data class Message(
                 quiet = o.optBoolean("quiet", true),
                 questions = questions,
                 ordinal = o.optInt("ord", -1),
-                canUndo = o.optBoolean("undo"),
-                wasUndone = o.optBoolean("undone"),
-                cascades = o.optInt("cascades"),
                 canAlways = o.optBoolean("always"),
                 diff = o.optJSONArray("diff").mapObjects { DiffLine(it.optString("s"), it.optString("t")) },
             )

@@ -123,9 +123,9 @@ internal static partial class Program
         Find<ComboBox>(panel, "WorkerCountBox").SelectedItem = 3;
         Find<RadioButton>(panel, "SeparateTerminalsChoice").IsChecked = true;
         Check("manual count and terminal choice are preserved", panel.WorkerCount == 3 && !panel.SingleTerminal &&
-            Find<TextBlock>(panel, "TeamSizeText").Text == "1 orchestrator + 3 workers");
-        Find<ComboBox>(panel, "OrchestratorProviderBox").SelectedValue = "gemini";
-        Check("advanced provider determines orchestrator selection", panel.Provider == "gemini");
+            Find<TextBlock>(panel, "TeamSizeText").Text == "1 orchestrator + 3 workers · 4 agents");
+        Find<ComboBox>(panel, "OrchestratorProviderBox").SelectedValue = "claude";
+        Check("advanced provider determines orchestrator selection", panel.Provider == "claude");
         var workerProvider = (ComboBox)options.FindName("WorkerProviderBox");
         workerProvider.SelectedValue = "claude";
         workerProvider.SelectedValue = host.Provider;
@@ -137,7 +137,7 @@ internal static partial class Program
         panel.Suspend();
         panel.Configure(host, 8);
         Check("dismissing and reopening setup preserves the unsent task", panel.Objective.StartsWith("Repair account") &&
-            panel.IsAdvanced && panel.WorkerCount == 3 && panel.Provider == "gemini");
+            panel.IsAdvanced && panel.WorkerCount == 3 && panel.Provider == "claude");
         Check("dismissing and reopening preserves both review choices", panel.OrchestratorConfiguration.ReviewLevel == "none" &&
             panel.WorkerConfiguration.ReviewLevel == "low");
         CaptureSetup(panel, 460, "start-bridge-advanced.png");

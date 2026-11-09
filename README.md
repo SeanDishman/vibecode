@@ -1,54 +1,75 @@
-# VibeCode
+<div align="center">
+  <img src="assets/logo.png" width="80" alt="VibeCode logo">
+  <h1>VibeCode</h1>
+  <p><strong>Your coding agents, in one Windows workspace.</strong></p>
+  <p>Claude Code &middot; OpenAI Codex &middot; GLM</p>
+  <p><a href="https://github.com/SeanDishman/vibecode/releases/latest"><strong>Download for Windows</strong></a> &middot; <a href="#get-started">Get started</a> &middot; <a href="#build-it-yourself">Build from source</a> &middot; <a href="https://github.com/SeanDishman/vibecode/issues">Report a bug</a></p>
+</div>
 
-A Windows desktop app for Claude Code, OpenAI Codex, and GLM. Run coding chats and teams of agents, share MCP tools, switch accounts, and track provider-reported usage in one place.
+![VibeCode workspace with a coding conversation, tool results and project tasks](docs/images/workspace.png)
 
-This repository contains the public source. Personal accounts, credentials, chat history, downloaded tools, and compiled app payloads are not included.
+VibeCode brings coding chats, project files, tool approvals, accounts, and agent teams into a desktop app. Follow one conversation, run several agents on a project, or move a chat into **Vibe Code Terminal**. Your work stays attached to its project and conversation.
 
-## Getting started
+## Get started
 
-Download the Windows executable from the [latest release](https://github.com/SeanDishman/vibecode/releases/latest) and open it. The .NET Desktop Runtime is included. To build from source, use the steps below.
+1. Download the Windows x64 executable from the [latest release](https://github.com/SeanDishman/vibecode/releases/latest) and open it. The .NET runtime is included.
+2. Open the account menu in the lower-left corner. Choose Claude Code or Codex, use the built-in CLI installer if needed, and complete the provider's sign-in. For GLM, add an API account.
+3. Choose a project folder, create a chat, and describe what you want to build.
 
-1. Open the account menu in the lower-left corner and choose a provider.
-2. If its CLI is missing, click **Install Claude Code CLI** or **Install Codex CLI**. Setup downloads the official CLI and required tools, verifies that the CLI starts, and continues to sign-in.
-3. Complete the provider's sign-in flow, choose a project folder, and start a chat.
+Windows 10/11 x64 is supported. The managed CLI installer runs for your Windows user and needs an internet connection. Existing compatible CLI installations also work. Provider access, subscriptions, and API usage are separate from VibeCode.
 
-Setup supports cancellation and retry. It installs tools for the current Windows user under `%LOCALAPPDATA%\VibeCode\runtimes`; it does not require an administrator, a global npm installation, or manual copying into native-assets folders. Existing compatible CLIs and explicit path overrides remain supported. Installation needs an internet connection. GLM connects through an API account and does not need a CLI.
+| Provider | How it connects |
+| --- | --- |
+| Claude Code | Official Claude Code CLI and your Claude account |
+| OpenAI Codex | Official Codex CLI and your ChatGPT account |
+| GLM | Your Z.ai Coding Plan, Z.ai API, or Baseten account |
 
-Provider accounts, subscriptions, and model access are managed by the provider. Installing a CLI does not include a subscription.
+## Work the way the project needs
 
-| Provider | Connection | Setup |
-| --- | --- | --- |
-| Claude Code | Official Claude Code CLI | Install in the account menu, then sign in with Claude |
-| OpenAI Codex | Official Codex CLI | Install in the account menu, then sign in with ChatGPT |
-| GLM | Z.ai Coding Plan, Z.ai API, or Baseten | Add an API account in the account menu |
+**One chat, with the details visible.** Stream responses and reasoning, inspect tool calls and file changes, attach files, queue follow-ups, and choose the model and reasoning level for each chat. Saved conversations and recovery checkpoints help you pick work back up.
 
-Install sources: [Claude Code](https://code.claude.com/docs/en/setup) and [Codex](https://learn.chatgpt.com/docs/codex/cli). The managed installer obtains Node.js from nodejs.org. Provider CLIs retain their own licenses.
+**Several agents, one project.** Bridges put agents side by side with task names, activity, messages, and per-agent accounts. Advanced Bridges add orchestrators, workers, dependencies, and review settings. Agent teams can also share a terminal. [Managed worker controls](docs/managed-worker-controls.md)
 
-## Coding and collaboration
+**Your development tools.** Connect MCP servers in Settings, inspect the tools an agent uses, and handle approvals in the conversation. The app includes a file viewer, task checklists, per-turn file undo, and controls to stop or steer work.
 
-- **Chats:** streamed answers, tool calls, permission prompts, file changes, attachments, reasoning controls, saved sessions, recovery, and queued follow-ups.
-- **Bridges:** independent agents in one project, with shared activity, peer messages, task names, file-edit history, and per-agent accounts. Advanced bridges add orchestrators, workers, task dependencies, review settings, and recovery.
-- **Provider subagents:** Claude and Codex can delegate when you request it. The app's current child-agent policy controls the worker limit and coordination.
-- **MCP:** configure servers once in Settings. VibeCode maps the catalog to each provider's supported transport and exposes its bridge and status tools.
-- **Usage:** token totals, estimated cost, and provider quota information stay distinct. Streaming estimates reconcile with reported totals, including cached tokens, completed turns, partial turns, and restored sessions. Unavailable quota stays unavailable rather than appearing as zero usage.
-- **Speed controls:** Codex fast and ultrafast controls sit beside reasoning effort. Availability follows model and account capability; ultrafast requires the qualifying account entitlement. Cost estimates and subscription usage use their respective multipliers.
-- **Organization:** pin and lock chats, group them by directory, and use **Close All** on a directory to close its chats. Saved history remains available; locked-chat protection still applies.
+**Usage you can follow.** Watch tokens, estimated cost, and provider quota separately. Open the compact HUD or a telemetry wall for a wider view. Estimates reconcile with the usage a provider reports; unavailable quota is shown as unavailable.
 
-Gemini CLI support has been removed. Existing saved Gemini conversations open as read-only history; no Google CLI or Antigravity download is required.
+## Vibe Code Terminal
 
-## Desktop features
+![Vibe Code Terminal settings in the public desktop app](docs/images/terminal-settings.png)
 
-**Jarvis** provides a separate desktop-assistant conversation, configurable provider and voice, and supported Windows actions. Dictation uses the selected speech service; local speech models download when needed. Native speech work is serialized to avoid overlapping model lifetimes.
+The terminal is included in the public release.
 
-**Second Brain** is an optional extension with per-chat access controls. It requires a compatible memory service and must be enabled in Settings before use.
+1. Open **Settings > Developer > CLI** and enable **Vibe Code Terminal**.
+2. Right-click an individual chat and choose **Open in Terminal**.
+3. Keep working with its project, conversation, provider, and MCP tools. Type `/help` for the available commands.
 
-**Phone access** pairs the Android companion with the desktop app. Build the optional unpaired mobile template before publishing if you want APK generation included. Pairing state, signing keys, and preconfigured enrollment data must never be committed.
+Use `/agents` to inspect the team, `/message` to address an agent, `/attach` to add files, and `/requests` to review pending input or approvals. `/desktop` brings the desktop back; `/exit` closes the terminal while agents keep working. An available agent can be reused for a follow-up.
 
-Closing the window can leave work running in the system tray when **Run in background** is enabled. Use **Quit** to exit, or disable background running in Settings.
+Individual chats and agent teams support Terminal. Bridge and Advanced Bridge chats use the desktop views.
 
-## Build and test
+## See the work happening
 
-Requirements: Windows 10/11 x64, the .NET 8 and .NET 10 SDKs (some regression projects target .NET 10), and Git. Provider CLIs are not needed for the offline regression suite.
+![Workflow Telemetry Wall showing a demo project's agents](docs/images/workflow.png)
+
+The **Workflow Telemetry Wall** shows recent activity across projects: which agents are working, what they are doing, and what they finished last. Filter by project or task and open an agent's chat from the wall.
+
+Choose a graph, board, lanes, or one of the animated scenes. The wall supports a second display, full screen, and reduced motion. [Workflow wall guide](docs/workflow-telemetry-wall.md)
+
+*Screenshots show the public app with fictional demo projects and conversations.*
+
+## More on the desktop
+
+- **Dictation and Jarvis:** voice input, a separate desktop-assistant conversation, and supported Windows actions. Speech services and local models are configured in Settings.
+- **Optional Second Brain:** enable the extension and configure a compatible memory service to use it. Per-chat controls govern access.
+- **Phone companion:** pair an Android device with the desktop. Building the optional mobile template enables APK generation; see below.
+- **Workspace organization:** pin or lock chats, group them by directory, and use multiple windows or displays.
+
+With **Run in background** enabled, closing the window leaves work in the system tray. Choose **Quit** to exit the app.
+
+## Build it yourself
+
+You need Windows x64, Git, and the .NET 8 and .NET 10 SDKs. The desktop targets .NET 8; some test projects use .NET 10.
 
 ```powershell
 git clone https://github.com/SeanDishman/vibecode.git
@@ -57,62 +78,33 @@ cd vibecode
 ./scripts/Publish.ps1
 ```
 
-The publish script produces a self-contained Windows build in `artifacts/windows-x64/`. Its runtime dependencies are packaged by the build; the destination computer does not need the .NET SDK. Build outputs stay outside source control.
-
-To run the development app:
+The publish script writes a self-contained app to `artifacts/windows-x64/`. To run from source:
 
 ```powershell
 dotnet run --project VibeCode.Desktop
 ```
 
-For an optional network integration check that downloads both CLIs into an isolated temporary directory, without signing in or making model calls:
+The regression suite uses isolated accounts and local provider fixtures. It covers the public provider catalog, approvals, account selection, chat UI, bridges, usage, Terminal, workflow telemetry, and undo without paid model calls.
+
+To exercise the official CLI downloads in a temporary directory without signing in:
 
 ```powershell
 dotnet run --project tests/VibeCode.CliInstallTests -- --install
 ```
 
-The default test script covers provider catalogs, saved Gemini history compatibility, CLI setup behavior, accounting, chat closing, bridges, orchestration, scrolling, and the unpaired mobile template. It makes no live model calls. Live account access and platform-specific audio hardware still need testing on the destination machine.
+### Optional Android build
 
-## Android template
-
-Install JDK 17 and the Android SDK required by `mobile/VibeCodeMobile/app/build.gradle.kts`, then run:
+Install JDK 17 and the Android SDK specified by `mobile/VibeCodeMobile/app/build.gradle.kts`, then run:
 
 ```powershell
 ./scripts/Build-Mobile.ps1
 ./scripts/Publish.ps1 -IncludeMobile
 ```
 
-The mobile build script downloads the Gradle distribution named in the wrapper properties and verifies its published SHA-256 checksum. `-Offline` uses an already cached distribution. No compiled Gradle wrapper or APK is committed. The desktop publish script validates that an included template is unpaired.
+The checked-in enrollment template is unpaired. Each user's pairing happens locally. Signing material, paired APKs, and enrollment credentials stay outside source control.
 
-## Configuration
+## Contributing
 
-Settings and runtime data belong to the current Windows user, outside this checkout. Saved API keys use Windows user-bound encryption. Do not share your app-data or provider credential folders as part of a source update.
+Open an [issue](https://github.com/SeanDishman/vibecode/issues) with the app version, what you expected, what happened, and steps to reproduce it. Remove credentials and private conversation content from logs and screenshots.
 
-| Variable | Purpose |
-| --- | --- |
-| `VIBECODE_DATA_DIR` | Override the app's settings and data directory |
-| `VIBECODE_RUNTIME_DIR` | Override the managed CLI tools directory |
-| `VIBECODE_CLAUDE_PATH`, `VIBECODE_CODEX_PATH` | Use a specific provider CLI |
-| `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | Provider configuration locations; managed accounts may select an account-specific home |
-
-Do not put secrets in these paths inside the repository. The source policy check rejects credentials, compiled payloads, and private feature material before the normal test run. Review staged changes and run a secret scanner before publishing.
-
-## Repository layout
-
-```text
-VibeCode.Desktop/        WPF app, provider protocols, UI, and services
-VibeCode.AgentStatus.Mcp/ MCP bridge and agent-status contracts
-mobile/VibeCodeMobile/  Android companion source and unpaired enrollment slot
-tests/                 Isolated protocol, UI, accounting, and installation checks
-scripts/               Source checks, build, test, and publish scripts
-assets/                App branding
-```
-
-## Troubleshooting
-
-- **CLI missing:** select the provider in the account menu and use its Install CLI button. A failed download can be retried from the same button.
-- **Signed out or quota unavailable:** sign in through the provider's account flow. Model access and quota depend on that account; an unavailable quota response is not a zero balance.
-- **Copied app fails to launch:** use the output of `scripts/Publish.ps1`, not a development build copied without its dependencies.
-- **Bug or crash:** [open an issue](https://github.com/SeanDishman/vibecode/issues) with the app version, provider, and steps to reproduce. Remove account details, chat contents, and tokens from any logs you share.
-
-VibeCode is under active development. See [LICENSE](LICENSE) for the source license.
+For a pull request, describe the behavior change and run `./scripts/Test.ps1`. Keep generated builds and local account state out of commits. VibeCode is [MIT licensed](LICENSE); provider CLIs and other dependencies retain their own licenses.

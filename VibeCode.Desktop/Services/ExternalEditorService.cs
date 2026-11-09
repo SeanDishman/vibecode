@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace VibeCode.Services;
 
@@ -320,16 +321,22 @@ public static class ExternalEditorService
                     break;
             }
 
-            // .cmd/.bat shims (VS Code, Toolbox) can't be started without a shell.
+            // .cmd/.bat shims (VS Code and its forks, JetBrains Toolbox) can't be started without a shell, and the
+            // shell re-parses the command line: a space splits a path in two, and & or %VAR% in a file name - which
+            // comes from whatever repository an agent edited - runs as part of a command. So start the program the
+            // shim wraps directly; only when that can't be found go through cmd.exe, with every argument quoted.
             var ext = Path.GetExtension(editor.Executable).ToLowerInvariant();
             if (ext is ".cmd" or ".bat")
             {
-                var args = string.Join(" ", psi.ArgumentList.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
-                psi.ArgumentList.Clear();
-                psi.FileName = "cmd.exe";
-                psi.ArgumentList.Add("/c");
-                psi.ArgumentList.Add(editor.Executable);
-                foreach (var a in args.Split(' ', StringSplitOptions.RemoveEmptyEntries)) psi.ArgumentList.Add(a.Trim('"'));
+                if (ShimTarget(editor.Executable) is { } target)
+                {
+                    psi.FileName = target;
+                    psi.Environment.Remove("ELECTRON_RUN_AS_NODE");
+                }
+                else if (!RouteThroughCmd(psi, editor.Executable))
+                {
+                    return false;
+                }
             }
 
             Process.Start(psi);
@@ -340,5 +347,56 @@ public static class ExternalEditorService
         {
             return false;
         }
+    }
+
+    private static readonly Regex QuotedExe = new("\"(?<path>[^\"]+?\\.exe)\"",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>Interpreters a shim may name before its real target; starting one of these with the editor's
+    /// arguments would not open the editor.</summary>
+    private static readonly HashSet<string> NotEditors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cmd.exe", "node.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "conhost.exe",
+    };
+
+    /// <summary>The program a .cmd/.bat editor shim starts, when the script names it as a quoted path: VS Code's
+    /// <c>"%~dp0..\Code.exe" "%~dp0..\resources\app\out\cli.js" %*</c> (likewise Cursor, Windsurf, Trae, VSCodium)
+    /// or JetBrains Toolbox's <c>start "" "C:\...\rider64.exe" %*</c>. Null when none can be resolved.</summary>
+    private static string? ShimTarget(string shim)
+    {
+        try
+        {
+            var info = new FileInfo(shim);
+            if (!info.Exists || info.Length > 64 * 1024) return null;
+            var folder = info.DirectoryName ?? "";
+            foreach (Match match in QuotedExe.Matches(File.ReadAllText(shim)))
+            {
+                var path = match.Groups["path"].Value
+                    .Replace("%~dp0", folder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+                if (path.Contains('%')) continue;   // depends on a variable only the shell would know
+                var full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(folder, path));
+                if (!NotEditors.Contains(Path.GetFileName(full)) && File.Exists(full)) return full;
+            }
+        }
+        catch { /* unreadable shim: the quoted cmd.exe route still works */ }
+        return null;
+    }
+
+    /// <summary>Start <paramref name="shim"/> through cmd.exe with the shim and every argument quoted, which keeps
+    /// spaces, &amp; | ^ ( ) &lt; &gt; literal. cmd still expands %VAR% inside quotes and cannot escape it there, so
+    /// an argument containing % (or a quote or a line break) is refused instead of launched.</summary>
+    private static bool RouteThroughCmd(ProcessStartInfo psi, string shim)
+    {
+        var parts = new List<string> { shim };
+        parts.AddRange(psi.ArgumentList);
+        if (parts.Any(part => part.IndexOfAny(['%', '"', '\r', '\n', '\0']) >= 0)) return false;
+
+        psi.ArgumentList.Clear();
+        psi.FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        // /s /c "<line>": cmd removes exactly the outer pair of quotes and runs the rest as written.
+        psi.Arguments = "/d /v:off /s /c \"" + string.Join(" ", parts.Select(part => "\"" + part + "\"")) + "\"";
+        // Never the edited file's folder: that would let a bare command name resolve to a program sitting next to it.
+        psi.WorkingDirectory = Path.GetDirectoryName(shim) ?? Environment.SystemDirectory;
+        return true;
     }
 }

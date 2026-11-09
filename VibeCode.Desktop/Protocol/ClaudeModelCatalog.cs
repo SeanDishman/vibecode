@@ -8,16 +8,18 @@ internal static class ClaudeModelCatalog
     public const string Opus = "claude-opus-5-5";
     public const string Sonnet = "claude-sonnet-5-5";
     public const string Fable = "claude-fable-5-1";
-    public const string Haiku = "claude-haiku-4-5";
+    public const string Haiku = "claude-haiku-5-5";
+    /// <summary>Claude Code supports Haiku 5.5 from 2.1.293 (https://code.claude.com/docs/en/model-config). 2.1.286 still runs
+    /// its explicit ID (checked 2026-11-01), only warning "unrecognized_model" and budgeting a 200K window instead of 1M.
+    /// This floor stays lower: when no installed runtime meets it, the first candidate is kept, which can be older still.</summary>
     public static readonly Version MinimumCliVersion = new(2, 1, 284);
 
     internal sealed record Spec(string Id, string Name, string Description,
         IReadOnlyList<string> EffortLevels, bool Fast = false);
 
     private static readonly string[] AdaptiveEfforts = ["low", "medium", "high", "xhigh", "max"];
-    private static readonly string[] OlderEfforts = ["low", "medium", "high", "max"];
 
-    // Anthropic's public lineup and Claude Code capabilities, verified 2026-10-01:
+    // Anthropic's public lineup and Claude Code capabilities, verified 2026-10-29 (Haiku 5.5 on 2026-11-01):
     // https://platform.claude.com/docs/en/models/overview
     // https://code.claude.com/docs/en/model-config
     // https://code.claude.com/docs/en/fast-mode
@@ -27,12 +29,20 @@ internal static class ClaudeModelCatalog
         new(Opus, "Opus 5.5", "Latest Opus for complex coding and long-running agent work.", AdaptiveEfforts, true),
         new(Fable, "Fable 5.1", "Most capable Claude for demanding reasoning and long-running tasks.", AdaptiveEfforts),
         new(Sonnet, "Sonnet 5.5", "Latest Sonnet for everyday coding, balancing speed and capability.", AdaptiveEfforts),
-        new(Haiku, "Haiku 4.5", "Fast, efficient Claude for smaller tasks.", Array.Empty<string>()),
+        // Offered by request in place of Haiku 4.5, which an older CLI's "haiku" alias still resolves to.
+        new(Haiku, "Haiku 5.5", "Latest Haiku, the fastest Claude for quick answers and high-volume tasks.", AdaptiveEfforts),
         // Retain the explicit choices older VibeCode builds offered.
         new("claude-opus-5", "Opus 5", "Previous Opus for complex coding and agent work.", AdaptiveEfforts, true),
         new("claude-opus-4-8", "Opus 4.8", "Earlier Opus for autonomous coding and knowledge work.", AdaptiveEfforts, true),
-        new("claude-opus-4-6", "Opus 4.6", "Earlier Opus with extended thinking and fixed thinking budgets.", OlderEfforts),
     };
+
+    /// <summary>Models the picker leaves out even when Claude Code still lists them - either superseded, or kept off by
+    /// request (Sonnet 4.6, Haiku 4.5 and the old non-.1 Fable 5). A chat already on one keeps running it; it just is not
+    /// offered again.</summary>
+    private static readonly string[] Unlisted =
+        ["claude-sonnet-5", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5"];
+
+    public static bool IsUnlisted(string? id) => Unlisted.Contains(CanonicalId(id), StringComparer.Ordinal);
 
     private static readonly Spec Mythos = new("claude-mythos-5-1", "Mythos 5.1",
         "Current Mythos for accounts with Project Glasswing access.", AdaptiveEfforts);

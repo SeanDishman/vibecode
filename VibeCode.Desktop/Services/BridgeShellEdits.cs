@@ -95,10 +95,12 @@ public sealed class BridgeShellEdits
         lock (_gate) _open.Remove((owner, toolId));
     }
 
-    /// <summary>An edit tool reported a change to this file; the shell windows that saw it must not claim it too.</summary>
+    /// <summary>An edit tool reported a change to this file; the shell windows that saw it must not claim it too. The
+    /// watcher sees a file at its real location, so a report made through a junction is matched by its target.</summary>
     public void NoteReported(string fullPath)
     {
-        lock (_gate) _reported.Add((DateTime.UtcNow, Path.GetFullPath(fullPath)));
+        var real = BridgeEditLedger.Canonical(Path.GetFullPath(fullPath));
+        lock (_gate) _reported.Add((DateTime.UtcNow, real));
     }
 
     /// <summary>A shell command finished: claim the source files that changed while it ran and nobody has claimed yet.

@@ -138,8 +138,11 @@ internal static partial class Program
         finally { Environment.SetEnvironmentVariable("VIBECODE_CLAUDE_PATH", previousCli); }
         var launch = start.ArgumentList.ToList();
         var allowed = launch.IndexOf("--allowedTools");
-        Check("Claude pre-approves exactly the chat-name and task-title tools", allowed >= 0 && launch[allowed + 1].EndsWith("__chat_set_title")
-            && launch[allowed + 2] == TaskTitleTool("claude") && launch[allowed + 3].StartsWith("--", StringComparison.Ordinal));
+        var expectedAllowed = new[] { "chat_set_title", "bridge_set_task_title", "bridge_set_name", "todo_write" }
+            .Select(tool => TaskTitleTool("claude").Replace("bridge_set_task_title", tool));
+        Check("Claude pre-approves only the exact built-in naming and checklist tools", allowed >= 0
+            && launch.Skip(allowed + 1).TakeWhile(value => !value.StartsWith("--", StringComparison.Ordinal))
+                .SequenceEqual(expectedAllowed));
         Check("Codex approves the task-title tool through the bridge projection", McpCatalog.BuildCodexProjection([registration]).ConfigOverrides
             .Any(c => c.Contains("bridge_set_task_title") && c.Contains("approval_mode")));
         VerifyHostTaskTitle();

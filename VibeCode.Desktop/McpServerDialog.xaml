@@ -44,12 +44,29 @@
                             </StackPanel>
                         </Grid>
                         <DockPanel Margin="0,12,0,0">
-                            <Button x:Name="AiGenerateButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Draft configuration" Padding="15,7" Click="OnGenerateWithAi" AutomationProperties.Name="Draft MCP configuration with AI"/>
-                            <TextBlock x:Name="AiWorkingText" Text="Researching and drafting configurationâ€¦" Foreground="{StaticResource Muted}" FontSize="10.5" VerticalAlignment="Center" Visibility="Collapsed"/>
+                            <Button x:Name="AiGenerateButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}"
+                                    Content="Draft configuration" Padding="15,7" Click="OnGenerateWithAi"
+                                    AutomationProperties.Name="Draft MCP configuration with AI" />
+                            <TextBlock x:Name="AiWorkingText" Text="Researching and drafting configuration…"
+                                       Foreground="{StaticResource Muted}" FontSize="10.5" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
+                                       Visibility="Collapsed" />
                         </DockPanel>
-                        <ProgressBar x:Name="AiProgress" Height="3" Margin="0,10,0,0" IsIndeterminate="True" Visibility="Collapsed"/>
-                        <Border x:Name="AiStatusPanel" Background="{StaticResource GreenSoft}" CornerRadius="{StaticResource Rad9}" Padding="10,7" Margin="0,10,0,0" Visibility="Collapsed">
-                            <TextBlock x:Name="AiStatusText" Foreground="{StaticResource Green}" FontSize="10.5" TextWrapping="Wrap"/>
+                        <ProgressBar x:Name="AiProgress" Height="3" Margin="0,10,0,0" IsIndeterminate="True"
+                                     Visibility="Collapsed" />
+                        <Border x:Name="AiLogPanel" Background="{StaticResource Bg0}" BorderBrush="{StaticResource BorderSoft}"
+                                BorderThickness="1" CornerRadius="{StaticResource Rad9}" Padding="10,7" Margin="0,10,0,0"
+                                Visibility="Collapsed">
+                            <ScrollViewer x:Name="AiLogScroll" MaxHeight="84" VerticalScrollBarVisibility="Auto">
+                                <TextBlock x:Name="AiLogText" Foreground="{StaticResource Muted}" FontFamily="{StaticResource Mono}"
+                                           FontSize="10" TextWrapping="Wrap" AutomationProperties.Name="MCP AI activity log" />
+                            </ScrollViewer>
+                        </Border>
+                        <Border x:Name="AiStatusPanel" Background="{StaticResource GreenSoft}"
+                                CornerRadius="{StaticResource Rad9}" Padding="10,7" Margin="0,10,0,0"
+                                Visibility="Collapsed">
+                            <TextBlock x:Name="AiStatusText" Foreground="{StaticResource Green}" FontSize="10.5"
+                                       TextWrapping="Wrap" />
                         </Border>
                     </StackPanel>
                 </Border>
@@ -76,10 +93,20 @@
                                 <TextBox x:Name="CommandBox" AutomationProperties.Name="MCP command"/>
                                 <Button Grid.Column="1" Style="{StaticResource GhostButton}" Content="Browse…" Margin="8,0,0,0" Click="OnBrowseCommand" AutomationProperties.Name="Browse for MCP command"/>
                             </Grid>
-                            <TextBlock Text="Arguments · one exact argument per line" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,13,0,6"/>
-                            <TextBox x:Name="ArgumentsBox" AcceptsReturn="True" MinHeight="78" MaxHeight="150" VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource Mono}" AutomationProperties.Name="MCP command arguments"/>
-                            <TextBlock Text="Environment · NAME=value, one per line" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,13,0,6"/>
-                            <TextBox x:Name="EnvironmentBox" AcceptsReturn="True" MinHeight="70" MaxHeight="140" VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource Mono}" AutomationProperties.Name="MCP environment variables"/>
+                            <TextBlock Text="Arguments · one exact argument per line" Foreground="{StaticResource Muted}"
+                                       FontSize="11.5" Margin="2,13,0,6" />
+                            <TextBox x:Name="ArgumentsBox" AcceptsReturn="True" MinHeight="78" MaxHeight="150"
+                                     VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource Mono}"
+                                     AutomationProperties.Name="MCP command arguments" />
+                            <TextBlock Text="Environment · NAME=value, one per line" Foreground="{StaticResource Muted}"
+                                       FontSize="11.5" Margin="2,13,0,6" />
+                            <TextBox x:Name="EnvironmentBox" AcceptsReturn="True" MinHeight="70" MaxHeight="140"
+                                     VerticalScrollBarVisibility="Auto" FontFamily="{StaticResource Mono}"
+                                     AutomationProperties.Name="MCP environment variables" />
+                            <CheckBox x:Name="ShareCheck" Content="Share one instance across agents" Margin="0,14,0,0"
+                                      AutomationProperties.Name="Share one instance across agents" />
+                            <TextBlock Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="2,4,0,0"
+                                       Text="VibeCode starts this server once and connects every agent to it over a private local address, instead of one copy per agent. Use it only for a server that keeps no per-chat state, such as Blender's app connector (shared by default). Godot MCP is not one: each copy keeps one running game, so a shared copy lets one agent stop or read another's game. The shared copy starts in your user folder, not a project folder, and cannot ask agents for sampling, roots or input; a server that does is marked not shareable in the list. " />
                         </StackPanel>
 
                         <StackPanel x:Name="RemotePanel" Visibility="Collapsed">

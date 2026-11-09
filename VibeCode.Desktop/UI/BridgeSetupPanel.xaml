@@ -162,15 +162,21 @@
                         <Grid Margin="0,22,0,12">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <StackPanel>
-                                <Label Content="Orchestrators" Target="{Binding ElementName=OrchestratorCountBox}" Padding="0,0,0,8" FontWeight="SemiBold"/>
-                                <ComboBox x:Name="OrchestratorCountBox" MinHeight="36" SelectionChanged="OnSettingsChanged" AutomationProperties.Name="Number of orchestrators"/>
+                                <Label Content="Orchestrators" Target="{Binding ElementName=OrchestratorCountBox}" Padding="0,0,0,8" FontWeight="SemiBold" />
+                                <ComboBox x:Name="OrchestratorCountBox" MinHeight="36" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                          SelectionChanged="OnSettingsChanged" AutomationProperties.Name="Number of orchestrators" />
                             </StackPanel>
                             <StackPanel Grid.Column="2">
-                                <Label Content="Total workers" Target="{Binding ElementName=WorkerCountBox}" Padding="0,0,0,8" FontWeight="SemiBold"/>
-                                <ComboBox x:Name="WorkerCountBox" MinHeight="36" SelectionChanged="OnSettingsChanged" AutomationProperties.Name="Number of worker AIs"/>
+                                <Label Content="Total workers" Target="{Binding ElementName=WorkerCountBox}" Padding="0,0,0,8" FontWeight="SemiBold" />
+                                <ComboBox x:Name="WorkerCountBox" MinHeight="36" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                          SelectionChanged="OnSettingsChanged" AutomationProperties.Name="Number of worker AIs" />
                             </StackPanel>
                         </Grid>
-                        <TextBlock x:Name="CountNote" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                        <TextBlock x:Name="CountError" Foreground="{DynamicResource Red}" TextWrapping="Wrap"
+                                   Visibility="Collapsed" Margin="0,0,0,8" AutomationProperties.LiveSetting="Polite" />
+                        <TextBlock x:Name="CountNote" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12" />
+                        <TextBlock x:Name="LargeTeamNote" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="Wrap"
+                                   Visibility="Collapsed" Margin="0,0,0,12" />
                     <StackPanel x:Name="AllocationFields" Margin="0,0,0,12" Visibility="Collapsed">
                         <TextBlock Text="Workers in each group" FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <ItemsControl x:Name="GroupAllocation">
@@ -189,12 +195,30 @@
                 <StackPanel x:Name="LayoutFields" Margin="0,16,0,0" Visibility="Collapsed">
                     <TextBlock Text="Terminal layout" FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <Border Background="{DynamicResource Bg0}" CornerRadius="9" Padding="3">
-                        <UniformGrid Columns="2">
-                            <RadioButton x:Name="SingleTerminalChoice" Content="Single terminal" GroupName="BridgeSetupLayout" Style="{StaticResource Choice}" IsChecked="True" Checked="OnSettingsChanged" AutomationProperties.Name="Single terminal bridge"/>
-                            <RadioButton x:Name="SeparateTerminalsChoice" Content="Multiple terminals" GroupName="BridgeSetupLayout" Style="{StaticResource Choice}" Checked="OnSettingsChanged" AutomationProperties.Name="Multiple terminals bridge"/>
+                        <UniformGrid x:Name="TerminalLayoutChoices" Columns="2">
+                            <RadioButton x:Name="SingleTerminalChoice" Content="Single terminal" GroupName="BridgeSetupLayout"
+                                         Style="{StaticResource Choice}" IsChecked="True" Checked="OnSettingsChanged"
+                                         AutomationProperties.Name="Single terminal bridge" />
+                            <RadioButton x:Name="SeparateTerminalsChoice" Content="Multiple terminals" GroupName="BridgeSetupLayout"
+                                         Style="{StaticResource Choice}" Checked="OnSettingsChanged"
+                                         AutomationProperties.Name="Multiple terminals bridge" />
                         </UniformGrid>
                     </Border>
                     <TextBlock x:Name="LayoutNote" Text="One shared view. Switch agents while everyone keeps working." Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                </StackPanel>
+                <StackPanel x:Name="PlanStepsFields" Margin="0,18,0,0">
+                    <CheckBox x:Name="PlanStepsChoice" Content="Plan steps" FontWeight="SemiBold" IsChecked="True"
+                              AutomationProperties.Name="Plan steps"
+                              AutomationProperties.HelpText="Orchestrators publish a step-by-step plan before assigning work, and the team's progress through it shows above the chat. Turn off to have them assign work directly, with no plan or progress bar." />
+                    <TextBlock Text="Orchestrators publish a step-by-step plan before assigning work, and its progress shows above the chat. Turn off to have them assign work directly, with no plan or progress bar."
+                               Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="26,6,0,0" />
+                </StackPanel>
+                <StackPanel x:Name="FactCheckFields" Margin="0,18,0,0">
+                    <CheckBox x:Name="FactCheckChoice" Content="Fact check orchestrator" FontWeight="SemiBold"
+                              AutomationProperties.Name="Fact check orchestrator"
+                              AutomationProperties.HelpText="When every agent has stopped, the orchestrator is asked whether it did everything you asked, and it must confirm the task is done." />
+                    <TextBlock Text="When every agent has stopped, ask the orchestrator whether it did everything you asked. It finishes anything missing, then has to confirm the task is done."
+                               Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="26,6,0,0" />
                 </StackPanel>
                     </StackPanel>
                     <StackPanel x:Name="ModelFields" Grid.Column="2">

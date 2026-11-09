@@ -32,6 +32,8 @@ public partial class MainWindow : Window
         nameof(SurfaceShowBridge), typeof(bool), typeof(MainWindow));
     public static readonly DependencyProperty SurfacePanelChatProperty = DependencyProperty.Register(
         nameof(SurfacePanelChat), typeof(ChatViewModel), typeof(MainWindow));
+    public static readonly DependencyProperty SurfaceCodexAccountProperty = DependencyProperty.Register(
+        nameof(SurfaceCodexAccount), typeof(CodexAccountInfo), typeof(MainWindow));
     public static readonly DependencyProperty BorderlessModeProperty = DependencyProperty.Register(
         nameof(BorderlessMode), typeof(bool), typeof(MainWindow));
 
@@ -54,6 +56,13 @@ public partial class MainWindow : Window
     {
         get => (ChatViewModel?)GetValue(SurfacePanelChatProperty);
         private set => SetValue(SurfacePanelChatProperty, value);
+    }
+    /// <summary>The saved login this window's chat runs on, for its Codex usage pill - never the login new chats use,
+    /// which a chat left on another account would otherwise report as its own.</summary>
+    public CodexAccountInfo? SurfaceCodexAccount
+    {
+        get => (CodexAccountInfo?)GetValue(SurfaceCodexAccountProperty);
+        private set => SetValue(SurfaceCodexAccountProperty, value);
     }
     /// <summary>The borderless look this shell was BUILT with - it stretches the backdrop behind the titlebar and
     /// the side panels, which is only correct while their surfaces are the transparent ones. Fixed for the life of
@@ -99,6 +108,8 @@ public partial class MainWindow : Window
     /// <summary>Set only in the second working shell: the Bridge header's own view of the roster THIS window shows.</summary>
     private BridgeSurfaceContext? _bridgeHeaderContext;
     private MonitorWorkArea? _bridgeMonitorTarget;
+    /// <summary>Second-display shell only: covers that whole display, taskbar included (see BridgeMonitorFullScreen).</summary>
+    private FullScreenPlacement? _bridgeMonitorFullScreen;
     private HwndSource? _windowSource;
     private nint _lastMainMonitor;
     private bool _startupComplete;
@@ -500,10 +511,9 @@ public partial class MainWindow : Window
         catch (InvalidOperationException) { /* the closing window already started the shutdown */ }
     }
 
-    /// <summary>What the icon says it is doing. Recomputed on a timer because the answer changes on its own while
-    /// nobody is looking at the app.</summary>
-    private string BackgroundTooltip() =>
-        BackgroundRunPolicy.Tooltip(_vm.Chats.Concat(_vm.LiveBridgePeers).Distinct().Count(c => c.IsWorking));
+    /// <summary>What the icon says it is doing ("VibeCode — 3 working · 1 needs you"), in the taskbar button's words.
+    /// Recomputed on a timer because the answer changes on its own while nobody is looking at the app.</summary>
+    private string BackgroundTooltip() => WorkflowTaskbar.Tooltip(_vm);
 
     private void StartTrayTooltipUpdates()
     {
@@ -786,6 +796,8 @@ public partial class MainWindow : Window
             or nameof(MainViewModel.PanelChat)
             or nameof(MainViewModel.BridgePanelChat);
         if (surfaceChanged) RefreshSurfaceState();
+        else if (e.PropertyName is nameof(MainViewModel.CodexAccounts) or nameof(MainViewModel.BridgeCodexAccounts)
+                 or nameof(MainViewModel.SecondaryBridgeCodexAccounts)) RefreshCodexUsageSurface();
 
         if ((!_isBridgeMonitor && e.PropertyName == nameof(MainViewModel.ActiveChat))
             || (IsDoubleSessionCompanion && e.PropertyName == nameof(MainViewModel.SecondaryActiveChat)))
@@ -983,7 +995,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                DisplayMonitorService.PlaceOnMonitor(_bridgeMonitorWindow, target, maximize: true);
+                _bridgeMonitorWindow.PlaceBridgeMonitor(target);
                 _bridgeMonitorTarget = target;
             }
             catch (Exception ex)
@@ -1023,6 +1035,7 @@ public partial class MainWindow : Window
             {
                 _randomChoice = _randomChoice, // random backgrounds remain visually identical across both views
             };
+            if (AppSettings.Current.DualMonitorDoubleSessions) _vm.SecondaryActiveChat?.Wake();   // restored asleep
             _bridgeMonitorWindow = companion;
             _bridgeMonitorTarget = target;
             _lastMainMonitor = DisplayMonitorService.MonitorFor(this);
@@ -1045,6 +1058,7 @@ public partial class MainWindow : Window
             if (maximizeAfterShow) companion.WindowState = WindowState.Maximized;
             if (DisplayMonitorService.MonitorFor(companion) != target.Handle)
                 throw new InvalidOperationException("Windows moved the Bridge companion away from the selected display.");
+            companion.EnterBridgeMonitorFullScreen();
         }
         catch (Exception ex)
         {
@@ -1152,6 +1166,7 @@ public partial class MainWindow : Window
     {
         Loaded -= OnLoaded;
         var startupTimer = Stopwatch.StartNew();
+        StartupTimeline.WindowLoaded(Dispatcher);   // the timeline's UI-stall heartbeat runs from here to a minute after ready
         try
         {
             // Yield before doing first-launch work so the loading surface is painted immediately.
@@ -1162,7 +1177,6 @@ public partial class MainWindow : Window
             _hiddenSnapshot = HiddenSnapshot();
 
             await ShowStartupStepAsync("Loading projects and appearance…", 38, 2);
-            _vm.LoadProjects();
             ApplyBackground();
             AppSettings.Changed += OnSettingsChanged;
             AppSettings.ActiveAccountAdopted += OnActiveAccountAdopted;   // another window's newer pick won - re-render
@@ -1202,19 +1216,40 @@ public partial class MainWindow : Window
         }
         finally
         {
-            // Avoid a distracting one-frame flash on unusually fast launches.
-            var minimumVisible = TimeSpan.FromMilliseconds(650);
-            if (startupTimer.Elapsed < minimumVisible)
-                await Task.Delay(minimumVisible - startupTimer.Elapsed);
-            await HideStartupOverlayAsync();
+            using (StartupTimeline.Phase("HideStartupOverlay")) await HideStartupOverlayAsync();
             _startupComplete = true;
             ReconcileDualMonitorBridge();
             // Record readiness only after rendering and input have had a chance to run. Completing OnLoaded
             // alone missed a Loaded-priority auto-scroll loop that left the splash painted over a ready shell.
-            _ = Dispatcher.InvokeAsync(() => CrashLog.Note("StartupReady",
-                $"Workspace rendered and dispatcher idle after {startupTimer.ElapsedMilliseconds} ms."),
-                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                var ready = startupTimer.ElapsedMilliseconds;
+                CrashLog.Note("StartupReady", $"Workspace rendered and dispatcher idle after {ready} ms.");
+                StartupTimeline.Ready(ready);
+            }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            _ = InitializeBackgroundServicesAsync();
         }
+    }
+
+    private async Task InitializeBackgroundServicesAsync()
+    {
+        // Saved chat pointers are sufficient to open the workspace. Catalog discovery and usage
+        // probes start after the shell can paint and receive input, with only one history scan.
+        // Timed: how long Background-priority work queued during restore (history replays among it) holds this back.
+        using (StartupTimeline.Phase("WaitForBackgroundPriority"))
+            await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+        if (_isClosing) return;
+        RunStartupStep("TokenRefresh", () => StartTokenRefresh());
+        RunStartupStep("CodexAccountRefresh", () => StartCodexAccountRefresh());
+        RunStartupStep("AccountUsage", () => StartAccountUsagePolling());
+        // After the usage polls: it only reads what they fetch. It lives in the service, so a reloaded shell keeps it.
+        RunStartupStep("DiscordResetPings", () => DiscordResetPings.Instance.Start(_vm.ReadResetPingSnapshot));
+        RunStartupStep("Spotify", () => StartSpotifyPolling());
+        RunStartupStep("Weather", () => StartWeatherPolling());
+        if (AppSettings.Current.SecondBrainEnabled)
+            RunStartupStep("SecondBrain", () => _ = AgentMemoryService.Instance);
+        RunStartupStep("MemoryRetention", MemoryRetention.Start);
+        await TimeStartupStepAsync("InitializeChatHistoryAsync", _vm.InitializeChatHistoryAsync);
     }
 
     /// <summary>Run one startup step so that its failure costs only that step. Startup is the one place where an
@@ -1222,8 +1257,13 @@ public partial class MainWindow : Window
     /// keeps running (App handles dispatcher exceptions) in a half-built state that autosave will happily persist.</summary>
     private static void RunStartupStep(string name, Action step)
     {
-        try { step(); }
+        var timer = Stopwatch.StartNew();
+        try
+        {
+            using (StartupTimeline.Phase(name)) step();
+        }
         catch (Exception ex) { CrashLog.Note("StartupStepFailed", $"{name}: {ex}"); }
+        finally { CrashLog.Note("StartupPhase", $"{name}: {timer.ElapsedMilliseconds} ms"); }
     }
 
     private Task ShowStartupStepAsync(string text, double progress, int step) =>
@@ -1357,8 +1397,6 @@ public partial class MainWindow : Window
                 foreach (var chat in _vm.Chats.Concat(_vm.LiveBridgePeers).Distinct())
                     chat.SetCompactMode(_compactModeSnapshot);
             }
-            foreach (var chat in _vm.Chats.Concat(_vm.LiveBridgePeers).Distinct())
-                chat.RefreshSwarmSettings();
             _vm.RefreshBridgeLimit();
             // Only the two dual-monitor toggles change what a reconcile would do, but EVERY settings write raises
             // AppSettings.Changed (autosave, window-placement saves on each move/resize, account refreshes…). Running
@@ -1412,6 +1450,8 @@ public partial class MainWindow : Window
             if (s.ActiveBackground is { } active && File.Exists(active)) target = active;
         }
 
+        // Telemetry windows set to fit the theme wear this same wallpaper, random pick included.
+        if (IsPrimaryShell) BackgroundArt.Publish(target);
         var key = target ?? "<builtin>";
         if (key != _appliedBackground)
         {
@@ -1645,8 +1685,57 @@ public partial class MainWindow : Window
 
     private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
-    private void OnMaxRestoreClick(object sender, RoutedEventArgs e) =>
+    private void OnMaxRestoreClick(object sender, RoutedEventArgs e)
+    {
+        // On the second display, maximize means the whole display: in and out of full screen.
+        if (_isBridgeMonitor)
+        {
+            if (_bridgeMonitorFullScreen is { IsActive: true } full) full.Exit();
+            else EnterBridgeMonitorFullScreen();
+            return;
+        }
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    }
+
+    /// <summary>
+    /// The second-display shell is a dedicated Bridge screen, so it covers that display entirely - taskbar included -
+    /// instead of stopping at the work area the way a maximized window does, and stays above the taskbar while the
+    /// primary shell has focus. The restore button returns it to an ordinary window; maximizing it again (the button,
+    /// a caption double-click, Win+Up) goes back to full screen.
+    /// </summary>
+    internal void EnterBridgeMonitorFullScreen()
+    {
+        if (!_isBridgeMonitor || _isClosing) return;
+        if (_bridgeMonitorFullScreen is null)
+        {
+            _bridgeMonitorFullScreen = new FullScreenPlacement(this);
+            _bridgeMonitorFullScreen.Changed += OnBridgeMonitorFullScreenChanged;
+            StateChanged += (_, _) =>
+            {
+                if (WindowState == WindowState.Maximized && _bridgeMonitorFullScreen is { IsActive: false } && !_isClosing)
+                    Dispatcher.BeginInvoke(new Action(EnterBridgeMonitorFullScreen));
+            };
+        }
+        try { _bridgeMonitorFullScreen.Enter(aboveTaskbar: true); }
+        catch (System.ComponentModel.Win32Exception) { /* the display went away; it stays an ordinary window */ }
+    }
+
+    /// <summary>Move the second-display shell to <paramref name="target"/>, full screen there.</summary>
+    internal void PlaceBridgeMonitor(MonitorWorkArea target)
+    {
+        _bridgeMonitorFullScreen?.Exit();
+        DisplayMonitorService.PlaceOnMonitor(this, target, maximize: true);
+        EnterBridgeMonitorFullScreen();
+    }
+
+    private void OnBridgeMonitorFullScreenChanged()
+    {
+        var full = _bridgeMonitorFullScreen?.IsActive == true;
+        if (full) MaxRestoreBtn.Content = "";
+        else MaxRestoreBtn.ClearValue(ContentControl.ContentProperty);
+        MaxRestoreBtn.ToolTip = full ? "Exit full screen" : null;
+        System.Windows.Automation.AutomationProperties.SetName(MaxRestoreBtn, full ? "Exit full screen" : "Maximize");
+    }
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
 
@@ -1721,12 +1810,20 @@ public partial class MainWindow : Window
 
     private void OnChatItemsChanged()
     {
-        if (_stickToBottom) Dispatcher.BeginInvoke(() =>
+        if (_wired?.IsLoadingHistory == true || _chatScrollPending) return;
+        if (_stickToBottom)
         {
-            // A reader can scroll upward between incoming output and this queued callback.
-            if (_stickToBottom) ScrollMsgToBottom();
-        }, System.Windows.Threading.DispatcherPriority.Background);
+            _chatScrollPending = true;
+            Dispatcher.BeginInvoke(() =>
+            {
+                _chatScrollPending = false;
+                // A reader can scroll upward between incoming output and this queued callback.
+                if (_stickToBottom && _wired?.IsLoadingHistory != true) ScrollMsgToBottom();
+            }, System.Windows.Threading.DispatcherPriority.Background);
+        }
     }
+
+    private bool _chatScrollPending;
 
     private void OnMsgScrollChanged(object sender, ScrollChangedEventArgs e)
     {
@@ -1745,7 +1842,10 @@ public partial class MainWindow : Window
     private void ScrollMsgToBottom()
     {
         var sv = FindScrollViewer(MsgList);
-        if (sv is not null) sv.ScrollToBottom();
+        if (sv is not null)
+        {
+            if (!AutoScroll.HasReadingSelection(sv)) sv.ScrollToBottom();
+        }
         else if (MsgList.Items.Count > 0) MsgList.ScrollIntoView(MsgList.Items[MsgList.Items.Count - 1]);
     }
 
@@ -1932,6 +2032,11 @@ public partial class MainWindow : Window
         var list = FindParent<ListBox>(button);
         var owner = item.Owner ?? list?.DataContext as ChatViewModel;
         if (owner is null) return;
+        if (owner.RewindUnavailableReason(item) is { } unavailable)
+        {
+            MessageBox.Show(this, unavailable, "Couldn't undo prompt", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         var isMainComposer = ReferenceEquals(list, MsgList);
         var currentText = isMainComposer ? InputBox.Text : owner.Draft;
         var originalAttachments = item.Attachments ?? Array.Empty<Attachment>();
@@ -2293,6 +2398,8 @@ public partial class MainWindow : Window
         win.PreviewKeyDown += (_, e) =>
         {
             if (e.Key != Key.Escape) return;
+            // Escape in an open drop-down closes only the drop-down; the next one closes the dialog.
+            if (Keyboard.FocusedElement is ComboBoxItem or ComboBox { IsDropDownOpen: true }) return;
             e.Handled = true;
             win.Close();
         };
@@ -2441,6 +2548,8 @@ public partial class MainWindow : Window
         ClaudeProviderToggle.IsChecked = provider == "claude";
         CodexProviderToggle.IsChecked = provider == "codex";
         GlmProviderToggle.IsChecked = provider == Protocol.GlmPreset.ProviderId;
+        var geminiReady = provider != "gemini" || ApiKeyAccountService.Instance.SelectedFor("gemini") is not null
+                                              ;
         CwdHint.Text = provider switch
         {
             "codex" => "AGENTS.md, skills, plugins and MCP servers load through VibeCode's managed Codex runtime.",
@@ -2453,13 +2562,14 @@ public partial class MainWindow : Window
             _ => "CLAUDE.md, skills and MCP servers load exactly like the CLI.",
         };
         CwdHint.Foreground = (Brush)FindResource(
-            provider == Protocol.GlmPreset.ProviderId && !HasGlmKey ? "Muted" : "Faint");
+            provider == Protocol.GlmPreset.ProviderId && !HasGlmKey || !geminiReady ? "Muted" : "Faint");
         if (persist && AppSettings.Current.DefaultProvider != provider)
         {
             AppSettings.Current.DefaultProvider = provider;
             AppSettings.Current.Save();
         }
         _vm.RefreshProviderPresentation();
+        // Account sign-ins, switches and key changes all land here too, so home's account list follows them.
     }
 
     private void OnBrowseFolder(object sender, RoutedEventArgs e)
@@ -2641,7 +2751,8 @@ public partial class MainWindow : Window
     private void OnSendClick(object sender, RoutedEventArgs e)
     {
         // One button: it acts as Stop/Interrupt while a turn is running, and as Send otherwise (incl. during startup).
-        if (ActiveChatForWindow?.CanInterrupt == true) ActiveChatForWindow.Interrupt();
+        // With the robot toggle on, typed text goes to the team (a free agent, or a new one) even while this one is running.
+        if (ActiveChatForWindow is { ShowsStopButton: true } running) _vm.InterruptAgentTeam(running);
         else SendCurrent();
     }
 
@@ -2652,20 +2763,42 @@ public partial class MainWindow : Window
         var text = InputBox.Text.Trim();
         var atts = chat.Attachments.ToList();
         if (text.Length == 0 && atts.Count == 0) return;
-        if (!chat.Send(text, atts)) return;   // session gone / nothing sent - keep the input + staged attachments
+        if (_vm.TryRunAgentTeamCommand(chat, text))
+        {
+            chat.Draft = "";
+            InputBox.Clear();
+            SlashPopup.IsOpen = false;
+            return;
+        }
+        var sent = chat.AgentTeamMode ? _vm.SendToAgentTeam(chat, text, atts) : chat.Send(text, atts);
+        if (!sent) return;   // session gone / nothing sent - keep the input + staged attachments
         chat.Attachments.Clear();
+        // The robot prompt that starts a team moves this chat into the shared terminal while it is being sent, and that
+        // surface change folds the box into Draft before the box is cleared - so the team composer, which shows Draft,
+        // came up still holding the prompt that was just sent.
+        chat.Draft = "";
         InputBox.Clear();
         SlashPopup.IsOpen = false;
         _stickToBottom = true;
         ScrollMsgToBottom();
+        if (chat.AgentTeamMode) FocusSharedComposerSoon();
     }
+
+    /// <summary>The robot prompt that turns a chat into a team moves its composer into the shared terminal. Put the
+    /// caret there once it is laid out, so the next prompt can be typed straight away.</summary>
+    private void FocusSharedComposerSoon() => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        if (!SurfaceShowBridge || BridgeSharedPanel.Visibility != Visibility.Visible) return;
+        BridgeSharedPanel.UpdateLayout();
+        FindVisualDescendant<TextBox>(BridgeSharedPanel, box => box.Name == "PaneInput")?.Focus();
+    }), System.Windows.Threading.DispatcherPriority.Loaded);
 
     // ---------- dictation (offline speech-to-text, push-to-talk) ----------
 
     // Who owns the running capture. Identified by the OWNING VIEW MODEL, not by Button reference: the bridge
-    // ItemsControl regenerates containers when a Claude is added/removed, which used to strand a recording mic with no
-    // way to stop it. The main composer gets an explicit sentinel so that null unambiguously means "owner unknown"
-    // (encoding the main composer as null made it indistinguishable from an orphan). Only one capture runs at a time.
+    // ItemsControl regenerates containers when an agent is added/removed, and a two-agent Bridge becomes a normal
+    // chat when one leaves. Both composers use the SAME chat identity, so neither transition abandons its audio.
+    // A sentinel covers a composer without a chat; null still means "owner unknown". Only one capture runs at a time.
     //
     // OWNERSHIP RULE (the other half of the one written at the top of SpeechService's capture region — keep them
     // identical): SpeechService issues a token per capture. _micToken is the token of the capture THIS window's
@@ -2679,6 +2812,7 @@ public partial class MainWindow : Window
     private int _micToken;        // 0 = we own no capture
     private Button? _micButton;   // the recording button, for the glyph recolor only
     private DateTime _micBusySince;
+    private DateTime _micFallbackHinted;   // the SpeechService.FallbackStartedAtUtc already announced
     // How long a non-Recording busy state may last before a click is allowed to force it back to Idle. Without this,
     // one hung transcription makes every mic in the app permanently unusable.
     // Three seconds past SpeechService's own 180 s budget: that budget almost always expires first and reports WHY it
@@ -2748,6 +2882,12 @@ public partial class MainWindow : Window
             if (svc.State == SpeechState.Transcribing)
                 ShowMicHint(SpeechService.UsesGroq ? "Transcribing with Groq…" : "Transcribing…");
         }
+        // Once per fallback: its transcript is rougher than Whisper's, and this says why before it lands.
+        if (svc.State == SpeechState.Transcribing && svc.FallbackStartedAtUtc is { } fallback && fallback > _micFallbackHinted)
+        {
+            _micFallbackHinted = fallback;
+            ShowMicHint("Whisper is taking too long — finishing with Windows speech recognition…");
+        }
 
         string message;
         if (svc.State == SpeechState.Downloading)
@@ -2770,20 +2910,22 @@ public partial class MainWindow : Window
         var button = _micButton;
         // Read the owner BEFORE releasing: the release clears it, and a bridge pane's message belongs in the bridge
         // header rather than in a composer hint the user cannot see from there.
-        var bridgePane = _micOwner as ChatViewModel;
+        var owner = _micOwner as ChatViewModel;
         svc.ForceReset();                       // burns the token, so the wedged call's continuation stays silent
         if (!ReleaseMicIfOwned(token, button)) return;
-        if (bridgePane is not null) ShowBridgeHint(message);
-        else ShowComposerHint(message);
+        ShowMicHint(owner, message);
     }
 
     /// <summary>Put a mic status message wherever the owner of the running capture can actually see it. The watchdog
     /// has no `hint` closure of its own — it fires on a timer, not from the click — so it resolves the destination
     /// the same way the release path does: a bridge pane's message belongs in the bridge header.</summary>
-    private void ShowMicHint(string message)
+    private void ShowMicHint(string message) => ShowMicHint(_micOwner as ChatViewModel, message);
+
+    private void ShowMicHint(ChatViewModel? owner, string message)
     {
-        if (_micOwner is ChatViewModel) ShowBridgeHint(message);
-        else ShowComposerHint(message);
+        var surface = MainMicSurface(owner) ?? this;
+        if (surface.ShowBridgeForWindow()) surface.ShowBridgeHint(message);
+        else surface.ShowComposerHint(message);
     }
 
     private void ClearMicOwner()
@@ -2823,7 +2965,47 @@ public partial class MainWindow : Window
         => SpeechService.Instance.ArmMic();
 
     private void OnMicClick(object sender, RoutedEventArgs e)
-        => ToggleMic(sender as Button, null, text => InsertAtCaret(InputBox, text), ShowComposerHint);
+    {
+        var owner = ComposerChat();
+        MicLedgerWindow.ToggleMic(sender as Button, owner,
+            text => InsertMicText(owner, text), message => ShowMicHint(owner, message));
+    }
+
+    // A Bridge capture is normally tracked by the primary window. Its chat may subsequently become an ordinary
+    // chat on either surface. The visible stop button must reach the ledger that still owns the original token.
+    private MainWindow MicLedgerWindow => _micToken != 0 ? this
+        : _primaryWindow is { _micToken: not 0 } primary ? primary
+        : _bridgeMonitorWindow is { _micToken: not 0 } companion ? companion : this;
+
+    private bool IsMicChatOpen(ChatViewModel chat) => _vm.Chats.Contains(chat) || _vm.LiveBridgePeers.Contains(chat);
+
+    private MainWindow? MainMicSurface(ChatViewModel? owner)
+    {
+        if (owner is null || ReferenceEquals(ComposerChat(), owner)) return this;
+        if (_primaryWindow is { } primary && ReferenceEquals(primary.ComposerChat(), owner)) return primary;
+        if (_bridgeMonitorWindow is { } companion && ReferenceEquals(companion.ComposerChat(), owner)) return companion;
+        return null;
+    }
+
+    private void InsertMicText(ChatViewModel? owner, string text)
+    {
+        if (owner is not null && !IsMicChatOpen(owner)) return;
+        // Resolve the editor when transcription finishes: the original pane may no longer exist, or the user may
+        // be looking at another chat. Never insert a delayed transcript into that unrelated chat's input box.
+        if (MainMicSurface(owner) is { } surface) InsertAtCaret(surface.InputBox, text);
+        else if (owner is not null) AppendDraft(owner, text);
+    }
+
+    private void OnMicPresentationChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is not Button { IsVisible: true } button) return;
+        var ledger = MicLedgerWindow;
+        var speech = SpeechService.Instance;
+        var owns = ledger._micToken != 0 && speech.Owns(ledger._micToken) && speech.IsBusy
+            && ReferenceEquals(button.DataContext, ledger._micOwner);
+        SetMicVisual(button, owns ? speech.State : SpeechState.Idle);
+        if (owns) ledger._micButton = button; // recreated control, same capture and audio buffer
+    }
 
     private void OnBridgeMicClick(object sender, RoutedEventArgs e)
     {
@@ -2837,7 +3019,8 @@ public partial class MainWindow : Window
         if (Ctx<ChatViewModel>(sender) is { } vm)   // dictation is still typed input
         {
             _vm.SelectBridgePane(vm);
-            ToggleMic(sender as Button, vm, text => AppendDraft(vm, text), ShowBridgeHint);
+            MicLedgerWindow.ToggleMic(sender as Button, vm,
+                text => InsertMicText(vm, text), message => ShowMicHint(vm, message));
         }
     }
 
@@ -2852,7 +3035,8 @@ public partial class MainWindow : Window
         // A mic click takes keyboard focus. Return it to this composer's editor before any
         // asynchronous work, including empty/failed dictation, so Enter sends instead of recording again.
         // Resolve bridge inputs from the clicked button's namescope, including on the companion monitor.
-        var input = owner is null ? InputBox : FindNamedInVisualTree<TextBox>(btn, "PaneInput");
+        var input = Window.GetWindow(btn) is MainWindow surface && ReferenceEquals(btn, surface.MicButton)
+            ? surface.InputBox : FindNamedInVisualTree<TextBox>(btn, "PaneInput");
         input?.Focus();
         var svc = SpeechService.Instance;
         var key = (object?)owner ?? MainComposerOwner;   // never null: null is reserved for "unknown owner"
@@ -2864,11 +3048,15 @@ public partial class MainWindow : Window
             _micBusySince = DateTime.UtcNow;             // restart the wedge clock for the transcription phase
             StartMicWatchdog();                          // …and start something that actually watches it
             SetMicVisual(btn, SpeechState.Transcribing);
-            hint(SpeechService.UsesGroq
+            // Groq is on but out of reach from this connection (a VPN it refuses): the offline model answers instead.
+            // On an address Groq already refused before, that is the normal path there and needs no announcement.
+            var groqOutOfReach = SpeechService.UsesGroq && GroqSpeechService.Instance is { Active: true, Reachable: false };
+            hint(SpeechService.UsesGroq && !groqOutOfReach
                 ? "Transcribing with Groq…"
-                : svc.ReadyWithoutDownload
-                    ? "Transcribing…"
-                    : MicDownloadHint(svc, still: false));
+                : !svc.ReadyWithoutDownload || groqOutOfReach && !svc.ModelReady
+                    ? MicDownloadHint(svc, still: false)
+                    : groqOutOfReach && !GroqSpeechService.Instance.RefusalRemembered
+                        ? "Groq isn't reachable from this connection — transcribing offline…" : "Transcribing…");
             var text = "";
             try { text = await svc.StopAndTranscribeAsync(token); }
             catch (Exception ex)
@@ -2882,7 +3070,13 @@ public partial class MainWindow : Window
             // Don't blank the hint on success: a click that arrived while this capture was transcribing has already
             // posted its own "Still transcribing…", and clearing here would wipe it, making that click look ignored.
             // The hint's own auto-clear timer retires whichever message is actually current.
-            if (!string.IsNullOrWhiteSpace(text)) insert(text);
+            // Done somewhere other than asked (Groq out of reach, so the offline model): say so once, quietly.
+            var note = svc.TakeTranscriptionNote();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                insert(text);
+                if (note is not null) hint(note);
+            }
             else hint("No speech detected — try again, a bit closer to the mic.");
             return;
         }
@@ -2905,7 +3099,7 @@ public partial class MainWindow : Window
             var orphaned = !_micActive
                            || !svc.Owns(_micToken)                                       // our bookkeeping is stale
                            || _micOwner is null                                          // owner truly unknown
-                           || (_micOwner is ChatViewModel o && !_vm.BridgePanes.Contains(o));   // its pane was removed
+                           || (_micOwner is ChatViewModel o && !IsMicChatOpen(o));   // its chat was actually closed
 
             if (svc.State == SpeechState.Recording)
             {
@@ -3032,6 +3226,7 @@ public partial class MainWindow : Window
         KickAccountUsage();
         KickCodexAccountRefresh(forceRefresh: false); // refresh the OpenAI row's plan + rolling usage on every open
         SelectAccountManagerProvider(AppSettings.Current.DefaultProvider);
+        ShowDiscordPings(false);   // the manager always opens on its accounts
         RefreshAccountManagerViews();
         AccountManagerOverlay.Visibility = Visibility.Visible;
         Dispatcher.BeginInvoke(new Action(() =>
@@ -3123,6 +3318,7 @@ public partial class MainWindow : Window
 
         var provider = SelectedAccountManagerProvider;
         var glm = Protocol.GlmPreset.Is(provider);
+        var gemini = provider == "gemini";
         AllAccountsPanel.Visibility = provider == "all" ? Visibility.Visible : Visibility.Collapsed;
         ClaudeAccountsPanel.Visibility = provider == "claude" ? Visibility.Visible : Visibility.Collapsed;
         CodexAccountsPanel.Visibility = provider == "codex" ? Visibility.Visible : Visibility.Collapsed;
@@ -3184,8 +3380,9 @@ public partial class MainWindow : Window
     {
         // GLM's keys are not one of the ListCollectionViews below (they are not accounts), so they are
         // re-filtered here rather than by the shared view refresh - otherwise typing in the search box moved
-        // every other provider's list and left this one alone.
+        // every other provider's list and left this one alone. Gemini's key list works the same way.
         RefreshGlmKeys();
+        if (IsDiscordPingsOpen) RefreshDiscordRows();   // an account added or removed while the Discord page is up
         EnsureAccountManagerViews();
         if (_allAccountManagerView is null || _claudeAccountManagerView is null
             || _codexAccountManagerView is null
@@ -3588,7 +3785,10 @@ public partial class MainWindow : Window
     private void KickAccountUsage() => _ = Task.Run(async () =>
     {
         await _vm.RefreshAccountUsageAsync();
-        await Dispatcher.InvokeAsync(() => RefreshGlmUsage());
+        await Dispatcher.InvokeAsync(() =>
+        {
+            RefreshGlmUsage();
+        });
         // Usage is itself a sort/filter key, so a completed background probe must re-place rows that are currently
         // ordered by availability or attention instead of leaving a stale order until the manager is reopened.
         ScheduleAccountManagerRefresh();
@@ -3617,6 +3817,8 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() != true) return;
 
         Services.ApiKeyAccountService.Instance.Add(provider, dialog.ApiKey, dialog.AccountLabel, dialog.GlmBackend);
+        // A new key is selected for its provider; for Gemini that also makes it the provider for new chats.
+        if (provider == "gemini") SetNewChatProvider("gemini", persist: true);
 
         RefreshAccountManagerViews();
         RefreshGlmKeys();
@@ -3800,6 +4002,27 @@ public partial class MainWindow : Window
 
 
 
+
+    private static bool CookiePasteWasRejected(string? browserError, string? loginError)
+    {
+        var browser = (browserError ?? "").ToLowerInvariant();
+        var login = (loginError ?? "").ToLowerInvariant();
+        if (browser.Contains("rate-limit") || browser.Contains("server error")
+            || login.Contains("rate-limit") || login.Contains("server error"))
+            return false;
+        if (browser.Contains("rejected") || browser.Contains("stale") || browser.Contains("not complete")
+            || browser.Contains("invalid") || browser.Contains("expired") || browser.Contains("no compatible")
+            || browser.Contains("not accepted"))
+            return true;
+        // Cancelling the embedded window is not a cookie check. A finished attempt that never signed in is.
+        if (string.IsNullOrWhiteSpace(browser)
+            && (login.Contains("cancelled") || login.Contains("canceled")))
+            return false;
+        return login.Contains("rejected") || login.Contains("stale") || login.Contains("invalid")
+               || login.Contains("expired") || login.Contains("not accepted")
+               || login.Contains("timed out") || login.Contains("still unavailable")
+               || login.Contains("exited with code");
+    }
 
     /// <summary>
     /// Hand the provider's sign-in URL to a browser and leave the link on screen either way.
@@ -4058,7 +4281,7 @@ public partial class MainWindow : Window
 
     private void OnWeatherChipClick(object sender, RoutedEventArgs e) => RadarWindow.Open(this);
 
-    // ---------- chat header: Bridge button + ⋮ menu (fork / swarm / subagents) ----------
+    // ---------- chat header: Bridge button + ⋮ menu (fork / subagents) ----------
 
     private void OnMoreChecked(object sender, RoutedEventArgs e) => MorePopup.IsOpen = true;
     private void OnMoreUnchecked(object sender, RoutedEventArgs e) => MorePopup.IsOpen = false;
@@ -4219,21 +4442,24 @@ public partial class MainWindow : Window
             ScheduleBridgeGridRows();
             return;
         }
-        var before = _vm.BridgePanes.Count;
+        var before = _vm.BridgePanes.ToHashSet();
         _vm.AddBridgeAgent(provider, accountId);
-        if (_vm.BridgePanes.Count <= before) return;   // refused: already at the agent cap
+        // Refused (already at the agent cap) when nobody new is there. A new pane lands among the panes, ahead of the
+        // agents working inside a pane's team, so it is found by identity rather than as the last one.
+        if (_vm.BridgePanes.FirstOrDefault(pane => !before.Contains(pane)) is not { } added) return;
         // An agent added from the second-monitor window belongs to that display and stays there.
-        _vm.BridgePanes[^1].OnSecondMonitor = _isBridgeMonitor && SplitActive;
+        added.OnSecondMonitor = _isBridgeMonitor && SplitActive;
         RefreshBridgePartitions();
     }
 
     /// <summary>Explain the Bridge agent cap and offer to open Settings so the user can raise it.</summary>
     private void ShowBridgeAgentLimitReached()
     {
-        var count = BridgeRosterForWindow.Count;
+        var count = BridgeAgentPolicy.Seats(BridgeRosterForWindow);
         var limit = AppSettings.Current.BridgeAgentLimit;
         var open = MessageBox.Show(this,
-            $"This Bridge already has {count} agent{(count == 1 ? "" : "s")} — that's the maximum set in Settings ({limit}).\n\n" +
+            $"This Bridge already has {count} agent{(count == 1 ? "" : "s")} with a pane of {(count == 1 ? "its" : "their")} own — that's the maximum set in Settings ({limit}). " +
+            "Agents working inside a pane's team don't count toward it.\n\n" +
             "If you seriously want more, open Settings → Bridge and raise \"Maximum agents per Bridge\".\n\n" +
             "Open Settings now?",
             "Bridge is full",
@@ -4333,7 +4559,8 @@ public partial class MainWindow : Window
 
     private void OnRemoveBridgePane(object sender, RoutedEventArgs e)
     {
-        if (Ctx<ChatViewModel>(sender) is { } vm) _vm.RemoveBridgePane(vm);
+        e.Handled = true;
+        if (Ctx<ChatViewModel>(sender) is { } vm) _vm.CloseBridgePane(vm);
     }
 
     // A bridge pane is a real provider conversation, so it can branch independently without stopping its peers.
@@ -4420,7 +4647,8 @@ public partial class MainWindow : Window
         // One button per pane: Stop/Interrupt while a turn is running, Send otherwise (incl. during startup).
         if (Ctx<ChatViewModel>(sender) is not { } vm) return;
         _vm.SelectBridgePane(vm);
-        if (vm.CanInterrupt) vm.Interrupt();
+        // An agent team's one composer stops every running agent in its terminal; elsewhere just this pane.
+        if (vm.ShowsStopButton) _vm.InterruptAgentTeam(vm);
         else SendBridgePane(vm);
     }
 
@@ -4432,9 +4660,9 @@ public partial class MainWindow : Window
         // Bridge uses the same Send/Stop button and advertises the same Esc shortcut as a normal chat. The normal
         // composer handled it, but this pane-local handler did not, so Esc was silently ignored instead of
         // interrupting the pane whose editor has focus.
-        if (e.Key == Key.Escape && vm.CanInterrupt)
+        if (e.Key == Key.Escape && (vm.CanInterrupt || vm.TeamCanInterrupt))
         {
-            vm.Interrupt();
+            _vm.InterruptAgentTeam(vm);
             e.Handled = true;
             return;
         }
@@ -4463,7 +4691,13 @@ public partial class MainWindow : Window
         var text = vm.Draft.Trim();
         var atts = vm.Attachments.ToList();
         if (text.Length == 0 && atts.Count == 0) return;
-        if (vm.Send(text, atts))
+        if (_vm.TryRunAgentTeamCommand(vm, text))
+        {
+            vm.Draft = "";
+            SlashPopup.IsOpen = false;
+            return;
+        }
+        if (vm.AgentTeamMode ? _vm.SendToAgentTeam(vm, text, atts) : vm.Send(text, atts))
         {
             vm.Draft = "";
             vm.Attachments.Clear();
@@ -4639,15 +4873,23 @@ public partial class MainWindow : Window
             ShowSlashCommands(input, Ctx<ChatViewModel>(sender));
     }
 
+    /// <summary>A command only runs as the first word of a message, so the menu follows that word while the caret is in
+    /// it - even with text already written after it. Going back to the start of a typed message and typing "/mes" offers
+    /// /message exactly as an empty composer does.</summary>
     private void ShowSlashCommands(TextBox input, ChatViewModel? chat)
     {
         var text = input.Text;
-        if (chat is null || !text.StartsWith('/') || text.Any(char.IsWhiteSpace))
+        if (chat is not null && RecipientAt(text, input.CaretIndex) is { } recipient)
+        {
+            ShowTeammateNames(input, chat, recipient);
+            return;
+        }
+        if (chat is null || SlashCommandAt(text, input.CaretIndex) is not { } slash)
         {
             SlashPopup.IsOpen = false;
             return;
         }
-        var filter = text[1..];
+        var filter = text[(slash.Start + 1)..slash.Typed];
         var matches = chat.Commands
             .Where(c => c.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
             .OrderBy(c => c.Name.StartsWith(filter, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
@@ -4660,9 +4902,72 @@ public partial class MainWindow : Window
         SlashPopup.IsOpen = matches.Count > 0;
     }
 
+    /// <summary>The message's first word - leading spaces skipped, as every command parser does - when it starts with
+    /// "/": where it starts and ends. Null for any other message.</summary>
+    private static (int Start, int End)? FirstSlashWord(string text)
+    {
+        var start = 0;
+        while (start < text.Length && char.IsWhiteSpace(text[start])) start++;
+        if (start == text.Length || text[start] != '/') return null;
+        var end = start;
+        while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
+        return (start, end);
+    }
+
+    /// <summary>The command being typed: <see cref="FirstSlashWord"/> and where its typed part ends - the caret while it
+    /// is inside the word, after the slash, or the word's end when the message is nothing but that word (text set from
+    /// code leaves the caret at 0). Null once the caret has left the word, and for any other message.</summary>
+    private static (int Start, int End, int Typed)? SlashCommandAt(string text, int caret)
+    {
+        if (FirstSlashWord(text) is not { } word) return null;
+        if (caret > word.Start && caret <= word.End) return (word.Start, word.End, caret);
+        return word.End == text.Length ? (word.Start, word.End, word.End) : null;
+    }
+
+    /// <summary>The agent name being typed after "/message ", "/msg " or "/stop " in a team composer: where it starts, where the
+    /// word under the caret ends, and what has been typed of it so far. A name can be two words ("Red Fox"), so the typed
+    /// part runs from the name's start to the caret. Null anywhere else, including on a later line.</summary>
+    private static (int Start, int End, string Typed, bool NameRequired)? RecipientAt(string text, int caret)
+    {
+        if (FirstSlashWord(text) is not { } word || word.End >= text.Length || text[word.End] is not (' ' or '\t')) return null;
+        var command = text[word.Start..word.End];
+        var isMessage = AgentTeamPolicy.IsMessageCommand(command);
+        if (!isMessage && !command.Equals("/stop", StringComparison.OrdinalIgnoreCase)) return null;
+        var start = word.End;
+        while (start < text.Length && text[start] is ' ' or '\t') start++;
+        if (caret < start || caret > text.Length) return null;
+        var typed = text[start..caret];
+        if (typed.Contains('\n') || typed.Contains('\r')) return null;
+        var end = caret;
+        while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
+        return (start, end, typed, isMessage);
+    }
+
+    /// <summary>The team's names matching what is typed after "/message " or "/stop ", in the command menu.</summary>
+    private void ShowTeammateNames(TextBox input, ChatViewModel chat, (int Start, int End, string Typed, bool NameRequired) recipient)
+    {
+        // "/stop" on its own stops everyone, so its names wait for a first letter; /message always takes a name.
+        var names = recipient.Typed.Length == 0 && !recipient.NameRequired ? [] : _vm.TeammateChoices(chat, recipient.Typed);
+        // A name already typed out in full needs no menu, so Enter sends "/stop Nova" instead of completing it again.
+        if (names.Any(name => name.Name.Equals(recipient.Typed.Trim(), StringComparison.OrdinalIgnoreCase))) names = [];
+        SlashList.ItemsSource = names;
+        SlashList.SelectedIndex = names.Count > 0 ? 0 : -1;
+        SlashPopup.PlacementTarget = input;
+        SlashPopup.IsOpen = names.Count > 0;
+    }
+
     private bool HandleSlashKey(TextBox input, KeyEventArgs e)
     {
         if (!SlashPopup.IsOpen || SlashPopup.PlacementTarget != input || SlashList.Items.Count == 0) return false;
+        // The caret moved out of the command (End, a click further on) without typing, so the menu is stale: Enter sends
+        // and the arrows move the caret again instead of picking a command the user has moved away from. A menu of names
+        // goes stale the same way once the caret leaves the name.
+        if (SlashList.Items[0] is TeammateChoice ? RecipientAt(input.Text, input.CaretIndex) is null
+                : SlashCommandAt(input.Text, input.CaretIndex) is null)
+        {
+            SlashPopup.IsOpen = false;
+            return false;
+        }
         if (e.Key is Key.Down or Key.Up)
         {
             var delta = e.Key == Key.Down ? 1 : -1;
@@ -4719,6 +5024,7 @@ public partial class MainWindow : Window
         BridgeCodexUsagePopup.PlacementTarget = CodexUsageToggle;
         BridgeCodexUsagePopup.Placement = PlacementMode.Top;
         BridgeCodexUsagePopup.VerticalOffset = -6;
+        BridgeCodexUsagePopup.DataContext = CodexUsageAccountsFor(CodexUsageToggle);
         BridgeCodexUsagePopup.IsOpen = true;
         KickCodexAccountRefresh(forceRefresh: true);
     }
@@ -4726,6 +5032,26 @@ public partial class MainWindow : Window
     {
         if (ReferenceEquals(BridgeCodexUsagePopup.PlacementTarget, CodexUsageToggle))
             BridgeCodexUsagePopup.IsOpen = false;
+    }
+
+    /// <summary>The logins a Codex pill reports: the chat's own for the chat pill, every login this window's Bridge
+    /// runs on for the header pill. Never the login new chats use - that is how the header named an account none
+    /// of its agents was on.</summary>
+    private IReadOnlyList<CodexAccountInfo> CodexUsageAccountsFor(object? pill) =>
+        ReferenceEquals(pill, CodexUsageToggle)
+            ? _vm.CodexAccountsOf([ActiveChatForWindow])
+            : _bridgeHeaderContext?.BridgeCodexAccounts ?? _vm.BridgeCodexAccounts;
+
+    /// <summary>Re-read the chat pill's login and re-point an open breakdown after a chat or pane changes login, a
+    /// pane leaves, or the saved rows refresh - so an open card never keeps showing a login that is gone.</summary>
+    private void RefreshCodexUsageSurface()
+    {
+        SurfaceCodexAccount = CodexUsageAccountsFor(CodexUsageToggle).FirstOrDefault();
+        if (!BridgeCodexUsagePopup.IsOpen) return;
+        var accounts = CodexUsageAccountsFor(BridgeCodexUsagePopup.PlacementTarget);
+        if (accounts.Count == 0) BridgeCodexUsagePopup.IsOpen = false;
+        else if (BridgeCodexUsagePopup.DataContext is not IReadOnlyList<CodexAccountInfo> shown || !shown.SequenceEqual(accounts))
+            BridgeCodexUsagePopup.DataContext = accounts;
     }
 
     // bridge header: the session · week usage pill is clickable → open the full breakdown (and refresh).
@@ -4789,6 +5115,7 @@ public partial class MainWindow : Window
         BridgeCodexUsagePopup.PlacementTarget = BridgeCodexUsageToggle;
         BridgeCodexUsagePopup.Placement = PlacementMode.Bottom;
         BridgeCodexUsagePopup.VerticalOffset = 6;
+        BridgeCodexUsagePopup.DataContext = CodexUsageAccountsFor(BridgeCodexUsageToggle);
         BridgeCodexUsagePopup.IsOpen = true;
         KickCodexAccountRefresh(forceRefresh: true);
     }
@@ -4816,10 +5143,37 @@ public partial class MainWindow : Window
     private void AcceptSlash()
     {
         var input = SlashPopup.PlacementTarget as TextBox ?? InputBox;
-        if (SlashList.SelectedItem is CommandChoice cmd)
+        if (SlashList.SelectedItem is TeammateChoice mate && RecipientAt(input.Text, input.CaretIndex) is { } recipient)
         {
-            input.SetCurrentValue(TextBox.TextProperty, "/" + cmd.Name + " ");
-            input.CaretIndex = input.Text.Length;
+            // The name replaces what was typed of it, through the end of that word, and whatever follows stays, one space
+            // after. As with commands, "/message Ni|are you done?" was typed in front of words already there, so only what
+            // came before the caret is the name.
+            var text = input.Text;
+            var caret = Math.Clamp(input.CaretIndex, recipient.Start, text.Length);
+            var end = caret < recipient.End && !mate.Name.Contains(text[recipient.Start..recipient.End], StringComparison.OrdinalIgnoreCase)
+                ? caret : recipient.End;
+            var named = text[..recipient.Start] + mate.Name + " ";
+            input.SetCurrentValue(TextBox.TextProperty, named + text[end..].TrimStart(' ', '\t'));
+            input.CaretIndex = named.Length;
+        }
+        else if (SlashList.SelectedItem is CommandChoice cmd)
+        {
+            // The command takes the place of the slash word it completes and the rest of the message stays. "/com|pact" is
+            // one partial command, replaced whole; "/mes|are you done?" was typed in front of words already there, so
+            // only what came before the caret is the command.
+            var text = input.Text;
+            var caret = Math.Clamp(input.CaretIndex, 0, text.Length);
+            var rest = text.TrimStart();
+            if (FirstSlashWord(text) is { } word)
+            {
+                var typed = text[(word.Start + 1)..word.End];
+                var end = caret > word.Start && caret < word.End && !cmd.Name.Contains(typed, StringComparison.OrdinalIgnoreCase)
+                    ? caret : word.End;
+                rest = text[end..].TrimStart();
+            }
+            var command = "/" + cmd.Name + " ";
+            input.SetCurrentValue(TextBox.TextProperty, command + rest);
+            input.CaretIndex = command.Length;
         }
         SlashPopup.IsOpen = false;
         input.Focus();
@@ -4984,65 +5338,48 @@ public partial class MainWindow : Window
 
     private void AddAttachmentFromFile(ChatViewModel chat, string path)
     {
-        try
-        {
-            var name = Path.GetFileName(path);
-            var ext = Path.GetExtension(path);
-            if (ImageExts.Contains(ext))
-            {
-                var bytes = File.ReadAllBytes(path);
-                // png/jpeg/gif/webp are sent as-is; bmp isn't an accepted media type, so re-encode to png.
-                var media = ext.ToLowerInvariant() switch
-                {
-                    ".png" => "image/png",
-                    ".gif" => "image/gif",
-                    ".webp" => "image/webp",
-                    ".jpg" or ".jpeg" => "image/jpeg",
-                    _ => "image/png",
-                };
-                if (ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase))
-                {
-                    var bmp = new BitmapImage();
-                    using var ms = new MemoryStream(bytes);
-                    bmp.BeginInit(); bmp.CacheOption = BitmapCacheOption.OnLoad; bmp.StreamSource = ms; bmp.EndInit();
-                    bytes = PngFromBitmap(bmp);
-                }
-                chat.Attachments.Add(new Attachment
-                {
-                    Kind = "image",
-                    FileName = name,
-                    MediaType = media,
-                    Data = bytes,
-                    Preview = LoadThumb(bytes),
-                });
-            }
-            else if (ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
-            {
-                chat.Attachments.Add(new Attachment
-                {
-                    Kind = "document",
-                    FileName = name,
-                    MediaType = "application/pdf",
-                    Data = File.ReadAllBytes(path),
-                });
-            }
-            else
-            {
-                // treat everything else as text; cap absurdly large files
-                var info = new FileInfo(path);
-                if (info.Length > 1_000_000)
-                {
-                    ShowComposerHint($"{name} is too large to attach as text ({info.Length / 1024}KB).");
-                    return;
-                }
-                chat.Attachments.Add(new Attachment { Kind = "text", FileName = name, Text = File.ReadAllText(path) });
-            }
-        }
+        try { chat.Attachments.Add(LoadAttachment(path)); }
         catch (Exception ex)
         {
             ShowComposerHint($"Couldn't attach {Path.GetFileName(path)}: {ex.Message}");
         }
     }
+
+    // Both desktop and terminal use the same file conversion and provider payload. The terminal skips
+    // thumbnails: only lightweight attachment metadata crosses its pipe.
+    internal static Attachment LoadAttachment(string path, bool preview = true)
+    {
+        var name = Path.GetFileName(path);
+        var ext = Path.GetExtension(path);
+        if (ImageExts.Contains(ext))
+        {
+            var bytes = File.ReadAllBytes(path);
+            var media = ext.ToLowerInvariant() switch
+            {
+                ".png" => "image/png", ".gif" => "image/gif", ".webp" => "image/webp",
+                ".jpg" or ".jpeg" => "image/jpeg", _ => "image/png",
+            };
+            if (ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase))
+            {
+                var bmp = new BitmapImage();
+                using var ms = new MemoryStream(bytes);
+                bmp.BeginInit(); bmp.CacheOption = BitmapCacheOption.OnLoad; bmp.StreamSource = ms; bmp.EndInit();
+                bytes = PngFromBitmap(bmp);
+            }
+            return new Attachment { Kind = "image", FileName = name, MediaType = media, Data = bytes,
+                Preview = preview ? LoadThumb(bytes) : null };
+        }
+        if (ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            return new Attachment { Kind = "document", FileName = name, MediaType = "application/pdf", Data = File.ReadAllBytes(path) };
+        var info = new FileInfo(path);
+        if (info.Length > 1_000_000) throw new IOException($"{name} is too large to attach as text ({info.Length / 1024}KB).");
+        return new Attachment { Kind = "text", FileName = name, Text = File.ReadAllText(path) };
+    }
+
+    internal static Attachment LoadClipboardImage(BitmapSource image) => new()
+    {
+        Kind = "image", FileName = "pasted-image.png", MediaType = "image/png", Data = PngFromBitmap(image),
+    };
 
     // A transient status line above the main composer (dictation feedback, attachment errors). This used to write to
     // CwdHint, which lives on the HOME card — invisible once a chat is open, so every message was lost. An empty
@@ -5293,6 +5630,55 @@ public partial class MainWindow : Window
 
     private void OnPaneUltrafastModePick(object sender, RoutedEventArgs e) =>
         ApplySpeedToggle(sender, Ctx<ChatViewModel>(sender), ultrafast: true);
+
+    // The robot beside the lightning. Main composer and Bridge panes share one handler; a team shares one switch.
+    // Only the composer's own chat counts: when a pane composer loses its agent (the Bridge closes), the binding
+    // unchecks the button with no DataContext, and falling back to the active chat would switch ITS robot off.
+    private void OnAgentTeamPick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton toggle || Ctx<ChatViewModel>(sender) is not { } chat) return;
+        var on = toggle.IsChecked == true;
+        // Checked/Unchecked also fire when the one-way binding refreshes; only a real change is a user choice.
+        if (chat.AgentTeamMode != on) _vm.SetAgentTeamMode(chat, on);
+        // A refused switch (an Advanced Bridge role) must not leave the button showing a state the chat is not in.
+        // SetCurrentValue keeps the one-way binding; assigning IsChecked would replace it.
+        if (toggle.IsChecked != chat.AgentTeamMode) toggle.SetCurrentValue(ToggleButton.IsCheckedProperty, chat.AgentTeamMode);
+    }
+
+    /// <summary>Right-click on the robot: the account the agents it brings in join on, for the whole team. Automatic keeps
+    /// the usual rule (this chat's account, another one while it nears its limit). It always opens, so with one account
+    /// it says how to get a choice instead of doing nothing.</summary>
+    private void OnAgentTeamAccountMenu(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is not FrameworkElement toggle || toggle.ContextMenu is not { } menu || Ctx<ChatViewModel>(sender) is not { } chat)
+        {
+            e.Handled = true;
+            return;
+        }
+        menu.SetResourceReference(StyleProperty, "DarkContextMenu");
+        menu.Items.Clear();
+        menu.Items.Add(new MenuItem { Header = new TextBlock { Text = "New agents join on" }, IsEnabled = false });
+        var options = _vm.AgentTeamAccountOptions(chat);
+        var muted = TryFindResource("Muted") as Brush;
+        foreach (var option in options)
+        {
+            // A TextBlock header, so an account called "dev_box" keeps its underscore instead of losing it to an access key.
+            var label = new TextBlock { MaxWidth = 340, TextTrimming = TextTrimming.CharacterEllipsis };
+            label.Inlines.Add(new System.Windows.Documents.Run(option.Label));
+            label.Inlines.Add(new System.Windows.Documents.Run("  ·  " + option.Detail) { Foreground = muted });
+            var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = option.IsChosen, IsEnabled = option.IsUsable };
+            System.Windows.Automation.AutomationProperties.SetName(item, $"{option.Label}, {option.Detail}");
+            var accountId = option.AccountId;
+            item.Click += (_, _) => _vm.SetAgentTeamAccount(chat, accountId);
+            menu.Items.Add(item);
+        }
+        if (options.Count(o => o.AccountId is not null && o.IsUsable) < 2)
+            menu.Items.Add(new MenuItem
+            {
+                Header = new TextBlock { Text = $"Add another {chat.ProviderDisplay} account in AI accounts to pick between them" },
+                IsEnabled = false,
+            });
+    }
 
     private static void ApplySpeedToggle(object sender, ChatViewModel? chat, bool ultrafast)
     {

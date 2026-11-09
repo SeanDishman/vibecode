@@ -218,7 +218,6 @@ private fun App(activity: MainActivity, vm: AppViewModel = viewModel()) {
                         onFast = vm::setFastMode,
                         onSendQueued = vm::sendQueuedNow,
                         onCancelQueued = vm::cancelQueued,
-                        onUndo = vm::undoPrompt,
                         onPin = { state.openChat?.let(vm::togglePin) },
                         onClosePane = { state.openChat?.let(vm::closeChatOnPc) },
                     ),

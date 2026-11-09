@@ -154,7 +154,7 @@ public sealed class CodexSpendLimit
 /// The app-server runs with VibeCode's isolated CODEX_HOME, so login/refresh never changes the standalone
 /// Codex CLI or desktop app account.
 /// </summary>
-public static class CodexAccountLoginService
+public static partial class CodexAccountLoginService
 {
     private static readonly SemaphoreSlim AccountGate = new(1, 1);
 

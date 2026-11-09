@@ -102,14 +102,27 @@ public sealed partial class MainViewModel
                 var count = panes.Count(p => p.BridgeCoordinatorAgentId == manager.BridgeAgentId);
                 var prompt = $"[BRIDGE ORCHESTRATOR] Central orchestrator assignment: {assignment.TaskName}\n" +
                     $"Coordinate {count} worker AI(s) only within your assigned scope. The central orchestrator has divided the task.\n\n" +
-                    assignment.Instructions + "\n\nTeam division (context for boundaries):\n" + division +
-                    "\n\nPublish your group's nonempty worker plan with bridge_set_plan using the current version from bridge_list_tasks. " +
-                    "Do not negotiate or take over another group's scope. The app opens dispatch after every group publishes its plan. " +
-                    "If coordination_ready is false, finish your turn; the app will notify you when all plans are ready.";
+                    assignment.Instructions + "\n\nTeam division (context for boundaries):\n" + division + "\n\n" + (work.PlanSteps
+                        ? "Publish your group's nonempty worker plan with bridge_set_plan using the current version from bridge_list_tasks. " +
+                          "Do not negotiate or take over another group's scope. The app opens dispatch after every group publishes its plan. " +
+                          "If coordination_ready is false, finish your turn; the app will notify you when all plans are ready."
+                        : "Plan steps are off for this team: do not publish a plan. Assign work within your scope directly to your own workers " +
+                          "with bridge_dispatch_task. Do not negotiate or take over another group's scope.");
                 if (!manager.SendBridgeObjective(prompt))
                     throw new InvalidOperationException($"The assignment could not reach {manager.BridgeTerminalIdentity}. Start a new team after reconnecting its account.");
             }
             central.State = "completed";
+            // With Plan steps off there is no worker plan to wait for: each group's scope is agreed the moment it is
+            // delivered, so its orchestrator reads as leading its workers rather than planning them.
+            if (!work.PlanSteps)
+            {
+                foreach (var manager in managers)
+                {
+                    work.ConfirmedVersions[manager.BridgeAgentId] = work.PlanVersion;
+                    manager.BridgeScopeConfirmed = true;
+                }
+                ReconcileBridgeGroups(live.Panes);
+            }
             activity.SetStage("Assignments delivered. Task complete.");
             SaveWork(live);
             host.Items.Remove(status);
@@ -180,7 +193,10 @@ public sealed partial class MainViewModel
             if (panes.Where(p => p.Status is "error" or "closed").Select(p => $"{p.BridgeTerminalIdentity} ({p.Status})").ToArray() is { Length: > 0 } lost)
                 ready.TrySetException(new CentralPlannerException($"The central orchestrator finished the split, but {string.Join(", ", lost)} " +
                     "disconnected before its assignment could be delivered. Reconnect it and start a new team.", "a team session disconnected"));
-            else if (panes.All(p => p.SessionId is not null && p.CanAcceptBridgeObjective)) ready.TrySetResult();
+            // Started, not "has a session id": Claude reports its id only when its first turn begins, and a worker's
+            // first turn is its first assignment, which comes after this handoff. Waiting for ids timed out every
+            // Claude team here.
+            else if (panes.All(p => p.Status != "starting" && p.CanAcceptBridgeObjective)) ready.TrySetResult();
         }
         PropertyChangedEventHandler changed = (_, _) => Check();
         foreach (var pane in panes) pane.PropertyChanged += changed;
@@ -192,8 +208,8 @@ public sealed partial class MainViewModel
         catch (TimeoutException)
         {
             // Name the panes that held it up: the bare TimeoutException only said "The operation has timed out."
-            var waiting = panes.Where(p => p.SessionId is null || !p.CanAcceptBridgeObjective).Select(p =>
-                $"{p.BridgeTerminalIdentity} ({(p.SessionId is null ? "its session never finished starting" : $"still {p.Status}, not ready for an objective")})");
+            var waiting = panes.Where(p => p.Status == "starting" || !p.CanAcceptBridgeObjective).Select(p =>
+                $"{p.BridgeTerminalIdentity} ({(p.Status == "starting" ? "its session never finished starting" : $"still {p.Status}, not ready for an objective")})");
             throw new CentralPlannerException("The central orchestrator finished the split, but not every team session could receive " +
                 $"its assignment within 2 minutes: {string.Join(", ", waiting)}. Let every pane finish starting or go idle, then start a new team.",
                 "a team session was not ready for its assignment");

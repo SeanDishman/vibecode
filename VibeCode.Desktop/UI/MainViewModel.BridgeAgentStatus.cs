@@ -60,6 +60,23 @@ public sealed partial class MainViewModel
     private static bool IsBusyState(string state) =>
         state is "working" or "awaiting_approval" or "queued" or "waiting" or "waiting_for_limit_reset" or "waiting_to_retry";
 
+    /// <summary>Shared by discovery, status checks and delivery receipts. Recency is context, never a send gate.</summary>
+    private static JsonObject WithAgentActivity(JsonObject result, ChatViewModel peer, DateTimeOffset now)
+    {
+        var state = AgentRunState(peer);
+        var working = state is "working" or "awaiting_approval";
+        var lastActive = working ? now : peer.LastAgentActivityAt;
+        result["state"] = state;
+        result["working"] = working;
+        result["busy"] = IsBusyState(state);
+        result["observed_at"] = now.ToString("O");
+        result["last_active_at"] = lastActive?.ToUniversalTime().ToString("O");
+        result["last_active_ago"] = working ? "now" : lastActive is { } active ? Elapsed(now - active) + " ago" : "unknown";
+        result["working_for"] = peer.IsWorking && peer.WorkStartedAtUtc is { } started ? Elapsed(now.UtcDateTime - started) : null;
+        result["idle_for"] = !working && lastActive is { } ended ? Elapsed(now - ended) : null;
+        return result;
+    }
+
     private static JsonObject AgentStatusJson(ChatViewModel caller, ChatViewModel p, LiveBridge bridge,
         IReadOnlyList<BridgeEditEntry> edits, DateTimeOffset now)
     {
@@ -67,12 +84,10 @@ public sealed partial class MainViewModel
         var task = p.BridgeHeaderTaskTitle is { Length: > 0 } title ? title : null;
         var lastEdit = edits.FirstOrDefault(e => e.AgentId == p.BridgeAgentId);
         var workingFor = p.IsWorking && p.WorkStartedAtUtc is { } started ? Elapsed(now.UtcDateTime - started) : null;
-        var idleFor = !p.IsWorking && p.WorkEndedAtUtc is { } ended ? Elapsed(now.UtcDateTime - ended) : null;
-        return new JsonObject
+        var idleFor = !p.IsWorking && p.LastAgentActivityAt is { } ended ? Elapsed(now - ended) : null;
+        return WithAgentActivity(new JsonObject
         {
-            ["agent_id"] = p.BridgeAgentId,
-            ["number"] = BridgeNumberOf(p),
-            ["label"] = p.BridgeLabel,
+            ["agent_id"] = p.BridgeAgentId, ["number"] = BridgeNumberOf(p), ["label"] = p.BridgeLabel,
             ["message_recipient"] = BridgeMessageRecipient(p, bridge.Panes),
             ["you"] = ReferenceEquals(p, caller),
             ["state"] = state,
@@ -88,7 +103,7 @@ public sealed partial class MainViewModel
             ["recent_edits"] = RecentEditsJson(p.BridgeAgentId, edits, now),
             ["reported_activity"] = p.BridgeActivitySummary,
             ["verdict"] = AgentVerdict(p, state, task, workingFor, idleFor),
-        };
+        }, p, now);
     }
 
     private static string AgentVerdict(ChatViewModel p, string state, string? task, string? workingFor, string? idleFor)
@@ -120,10 +135,7 @@ public sealed partial class MainViewModel
         var last = edits.FirstOrDefault(e => e.AgentId == agentId);
         return new JsonObject
         {
-            ["agent_id"] = agentId,
-            ["state"] = "left",
-            ["working"] = false,
-            ["busy"] = false,
+            ["agent_id"] = agentId, ["state"] = "left", ["working"] = false, ["busy"] = false,
             ["last_file_edit"] = last is null ? null : $"{last.File}: {last.Lines} ({Age(now - last.At)})",
             ["verdict"] = (last is null ? "That agent" : last.Label) + " has left this bridge and is not working. Its recorded edits remain in bridge_file_edits.",
         };

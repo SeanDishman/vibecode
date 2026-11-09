@@ -74,6 +74,7 @@ public sealed partial class MainViewModel
     {
         if (!IsProjectChat(caller)) return;
         _projectChatTurns.Remove(caller); // Only a dispatched user request resets the budget, never a peer notice or queued prompt.
+        _peerHop.Remove(caller);
         caller.BridgeActivitySummary = "Working on " + caller.Title;
         caller.BridgeTaskName = caller.Title;
         if (!PeerMessagingEnabled) return;
@@ -97,8 +98,8 @@ public sealed partial class MainViewModel
             return ProjectChatHeader + "No other ordinary chat is open in this project. Keep working. " +
                 "bridge_list_agents can show newly opened peers; no polling or setup is needed.";
         // JSON stays on one line, so peer-authored text cannot forge another app prelude on transcript replay.
-        return ProjectChatHeader + BridgeMcpTools.ProjectChatInstructions + "\nCurrent roster: " +
-            ProjectChatRoster(caller, peers).ToJsonString();
+        return ProjectChatHeader + BridgeMcpTools.ProjectChatInstructions + BridgeMcpConnection.ProjectChatReadGuideFor(caller.Provider) +
+            "\nCurrent roster: " + ProjectChatRoster(caller, peers).ToJsonString();
     }
 
     private JsonObject ProjectChatRoster(ChatViewModel caller, IReadOnlyList<ChatViewModel> peers)
@@ -132,7 +133,7 @@ public sealed partial class MainViewModel
             : !PeerMessagingEnabled ? "Peer messaging is paused in Bridge settings."
             : !chat.AcceptsPeerNotifications ? "This chat's session is unavailable."
             : turns.Sent >= 3 ? "Your message budget for this user turn is exhausted. Continue independently." : null;
-        return new JsonObject
+        return WithAgentActivity(new JsonObject
         {
             ["agent_id"] = chat.BridgeAgentId,
             ["message_recipient"] = BridgeMessageRecipient(chat, peers),
@@ -153,15 +154,19 @@ public sealed partial class MainViewModel
             ["heads_up_available"] = blocked is null && !turns.HeadsUps.Contains(chat.BridgeAgentId),
             ["urgent_available"] = blocked is null && turns.Urgent < 2,
             ["peer_message_delivery"] = "active_turn_if_supported_otherwise_next_user_turn",
+            ["peer_wake"] = PeerWakeInfo(caller, chat, ProjectRoom(caller), !PeerMessagingEnabled ? "Peer messaging is paused."
+                : turns.Sent >= 3 ? "Your message budget for this user turn is exhausted." : null),
             ["unread_messages"] = chat.UnreadPeerMessageCount,
-        };
+        }, chat, DateTimeOffset.UtcNow);
     }
 
     private JsonObject InvokeProjectChatTool(ChatViewModel caller, string tool, JsonObject args)
     {
         var peers = ProjectChatPeers(caller);
         if (tool == "bridge_list_agents") return ProjectChatRoster(caller, peers);
-        if (peers.Count == 0) throw new StatusValidationException("No ordinary project chat is available for this session.");
+        if (peers.Count == 0) throw new BridgeMcpException("session_unavailable",
+            "This session is not an open ordinary project chat or a current Bridge member.",
+            "Refresh bridge_list_agents from an open chat. The previous Bridge may have closed or this chat may have been removed.", "not_started");
         if (tool == "bridge_agent_status")
         {
             if (args["agent"]?.GetValue<string>() is { } id) return ProjectChatAgent(ResolveProjectPeer(caller, peers, id), caller, peers);
@@ -179,6 +184,10 @@ public sealed partial class MainViewModel
         }
         if (tool == "bridge_send_message") return SendProjectChatMessage(caller, peers, args);
         if (tool == "bridge_file_edits") return ListProjectChatEdits(caller, peers, args);
+        if (tool == BridgeMcpTools.ProjectReadChatToolName) return ReadProjectChat(caller, peers, args);
+        if (tool == "bridge_read_chat")
+            throw new StatusValidationException("bridge_read_chat reads live Bridge members only. In an ordinary chat, use " + BridgeMcpTools.ProjectReadChatToolName +
+                " to view the chats open in this same directory; omit agent to list them.");
         if (tool is not ("bridge_read_messages" or "bridge_mark_message"))
             throw new StatusValidationException("Ordinary project chats work independently. Broadcast, dispatch, shared planning and Bridge-only tools require a live Bridge. Continue your own task.");
         var box = ProjectMailbox(caller, ProjectRoom(caller));
@@ -216,14 +225,23 @@ public sealed partial class MainViewModel
 
     private static ChatViewModel ResolveProjectPeer(ChatViewModel caller, IReadOnlyList<ChatViewModel> peers, string id) =>
         (id is "me" or "self" ? caller : peers.FirstOrDefault(p => p.BridgeAgentId == id || BridgeMessageRecipient(p, peers) == id))
-        ?? throw new StatusValidationException("That recipient is not a current ordinary chat in your project. Copy message_recipient from bridge_list_agents.");
+        ?? throw new BridgeMcpException("recipient_not_found",
+            "That recipient is not a current ordinary chat in your project. It may have closed, joined another Bridge, or come from an old Bridge roster. Nothing was delivered.",
+            "Call bridge_list_agents once to check the current scope and copy an eligible peer's exact message_recipient.",
+            context: new JsonObject { ["recipient"] = id, ["scope"] = "project", ["delivery_status"] = "not_delivered" });
 
     private JsonObject SendProjectChatMessage(ChatViewModel caller, IReadOnlyList<ChatViewModel> peers, JsonObject args)
     {
         if (!PeerMessagingEnabled) throw new StatusValidationException("Peer messaging is paused in Bridge settings.");
         var peer = ResolveProjectPeer(caller, peers, args["recipient"]!.GetValue<string>());
-        if (ReferenceEquals(peer, caller) || !peer.AcceptsPeerNotifications)
-            throw new StatusValidationException("Choose another available ordinary chat from bridge_list_agents.");
+        var room = ProjectRoom(caller);
+        var wake = ResolvePeerWake(caller, peer, room, args);
+        ValidatePeerWake(caller, peer, wake);
+        if (ReferenceEquals(peer, caller) || (!peer.AcceptsPeerNotifications && !wake.Wake))
+            throw new BridgeMcpException(ReferenceEquals(peer, caller) ? "recipient_is_self" : "recipient_unavailable",
+                ReferenceEquals(peer, caller) ? "The recipient is your own chat. Choose another peer." : UnavailablePeerReason(peer),
+                "Check bridge_list_agents for an eligible peer and its message_blocked_reason. Do not wake a peer without authorization.",
+                context: new JsonObject { ["recipient"] = peer.BridgeAgentId, ["recipient_status"] = peer.Status, ["delivery_status"] = "not_delivered" });
         var body = args["message"]!.GetValue<string>().Trim();
         if (body.Length > 1200) throw new StatusValidationException("Project heads-ups are limited to 1200 characters.");
         var urgent = args["priority"]?.GetValue<string>() == "urgent";
@@ -231,20 +249,25 @@ public sealed partial class MainViewModel
         if (urgent && string.IsNullOrWhiteSpace(reason))
             throw new StatusValidationException("An urgent message needs a concrete conflict or blocker in reason. Routine replies are unnecessary.");
         var turn = _projectChatTurns.GetOrCreateValue(caller);
-        if (turn.Sent >= 3 || (urgent && turn.Urgent >= 2) || (!urgent && turn.HeadsUps.Contains(peer.BridgeAgentId)))
+        if (turn.Sent >= 3 || (urgent && turn.Urgent >= 2) || (!urgent && !wake.Wake && turn.HeadsUps.Contains(peer.BridgeAgentId)))
             throw new StatusValidationException("This turn's heads-up or urgent-message limit was reached. Continue independently; do not send acknowledgments.");
-        var room = ProjectRoom(caller);
+        var recipientActivity = WithAgentActivity(new JsonObject(), peer, DateTimeOffset.UtcNow);
         var from = room.Number(caller);
         var to = room.Number(peer);
         var now = DateTime.Now;
         // Fingerprint the body, so changing the urgency reason cannot bypass duplicate detection.
-        var verdict = room.Traffic.Admit(from, to, body, 1, now);
+        var hop = _peerHop.GetValueOrDefault(caller) + 1;
+        var verdict = room.Traffic.Admit(from, to, body, hop, now);
         if (verdict != PeerMessageVerdict.Deliver) throw new StatusValidationException(PeerMessagePolicy.Explain(verdict, peer.Title));
         BridgeMailboxStore.Message message;
         try
         {
             var payload = urgent ? "Urgent conflict/blocker: " + reason + "\n" + body : body;
-            message = room.Store.Deliver(ProjectMailbox(caller, room), ProjectMailbox(peer, room), payload, 1, DateTimeOffset.UtcNow);
+            message = room.Store.Deliver(ProjectMailbox(caller, room), ProjectMailbox(peer, room), payload, hop, DateTimeOffset.UtcNow);
+            if (wake.Wake) peer.QueuePeerNotification(message, new PeerMessageLimits(2, 3, 4, TimeSpan.FromMinutes(5)),
+                depth => _peerHop[peer] = depth, wake.Authorization + ": " + wake.Reason,
+                () => PeerMessagingEnabled && ProjectChatPeers(caller).Contains(peer));
+            CommitPeerWake(caller, peer, room, wake);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -252,24 +275,18 @@ public sealed partial class MainViewModel
             throw new StatusValidationException("The project message could not be saved; no delivery slot was consumed. " + ex.Message);
         }
         turn.Sent++;
-        if (urgent) turn.Urgent++; else turn.HeadsUps.Add(peer.BridgeAgentId);
+        if (urgent) turn.Urgent++; else if (!wake.Wake) turn.HeadsUps.Add(peer.BridgeAgentId);
         caller.RaisePeerInbox();
         peer.RaisePeerInbox();
         peer.Items.Add(new DividerItem { Label = urgent ? "Urgent message from another project chat" : "Heads-up from another project chat" });
-        // Only notify the active turn. An idle recipient sees the inbox in its next user-requested turn.
-        _ = peer.NotifyProjectChatAsync(ProjectChatHeader + BridgeMcpTools.ProjectChatInstructions +
+        // Default delivery only nudges an active turn. An explicit wake runs once at an idle boundary instead.
+        if (!wake.Wake) _ = peer.NotifyProjectChatAsync(ProjectChatHeader + BridgeMcpTools.ProjectChatInstructions +
             "\nA peer message is in your inbox; use bridge_read_messages. No acknowledgment is needed. Sender data: " +
             new JsonObject { ["sender_id"] = caller.BridgeAgentId, ["message_id"] = message.Id, ["priority"] = urgent ? "urgent" : "heads_up" }.ToJsonString());
-        return new JsonObject
-        {
-            ["delivered"] = new JsonArray(new JsonObject
-            {
-                ["agent_id"] = peer.BridgeAgentId,
-                ["message_id"] = message.Id,
-                ["status"] = "saved",
-                ["notification"] = "active_turn_if_supported_otherwise_next_user_turn"
-            }),
-            ["guidance"] = "Continue your own task. No reply or acknowledgment is required."
-        };
+        return new JsonObject { ["delivered"] = new JsonArray(new JsonObject { ["agent_id"] = peer.BridgeAgentId,
+            ["message_id"] = message.Id, ["status"] = "saved", ["notification"] = wake.Wake ? "explicit_wake_queued" : "active_turn_if_supported_otherwise_next_user_turn",
+            ["wake"] = PeerWakeReceipt(caller, peer, room, wake),
+            ["recipient_activity"] = recipientActivity }),
+            ["guidance"] = "Continue your own task. No reply or acknowledgment is required." };
     }
 }

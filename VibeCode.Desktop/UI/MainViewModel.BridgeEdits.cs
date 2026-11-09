@@ -73,13 +73,16 @@ public sealed partial class MainViewModel
                 }).ToArray());
         result["note"] = matches.Count == 0
             ? "No recorded edits match. The log holds file edits made by ordinary chats and Bridge agents in this project during the last 7 days."
-            : "lines = where each change landed right after that edit; later edits above it can shift them. History, never a lock: message the agent before reworking its recent lines.";
+            : "lines = where each change landed right after that edit; later edits above it can shift them. author_certain=false marks a " +
+              "file that changed while that agent's shell command ran - another agent or program may have changed it. Shell edits appear " +
+              "when the command finishes. History, never a lock: message the agent before reworking its recent lines.";
         return result;
     }
 
-    /// <summary>The newest few files an agent edited, for its bridge_list_agents row: "src/app.ts: 120-135 (4 min ago)".</summary>
+    /// <summary>The newest few files an agent edited, for its bridge_list_agents row: "src/app.ts: 120-135 (4 min ago)".
+    /// A shell command's guess at a file it may have changed is left out: peers read this row to decide whom to ask.</summary>
     private static JsonArray RecentEditsJson(string agentId, IReadOnlyList<BridgeEditEntry> edits, DateTimeOffset now) =>
-        new(edits.Where(e => e.AgentId == agentId).GroupBy(e => e.File, StringComparer.OrdinalIgnoreCase).Take(RecentEditsPerAgent)
+        new(edits.Where(e => e.AgentId == agentId && !e.AuthorUncertain).GroupBy(e => e.File, StringComparer.OrdinalIgnoreCase).Take(RecentEditsPerAgent)
             .Select(file => (JsonNode?)JsonValue.Create($"{file.Key}: {file.First().Lines} ({Age(now - file.First().At)})")).ToArray());
 
     private static IReadOnlyList<BridgeEditEntry> BridgeEditsFor(LiveBridge bridge) =>
@@ -88,7 +91,7 @@ public sealed partial class MainViewModel
     private static JsonObject EditJson(BridgeEditEntry e, ChatViewModel caller, LiveBridge bridge, DateTimeOffset now)
     {
         var live = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == e.AgentId);
-        return new JsonObject
+        var json = new JsonObject
         {
             ["when"] = e.At.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
             ["age"] = Age(now - e.At),
@@ -109,6 +112,10 @@ public sealed partial class MainViewModel
             ["provider"] = e.Provider,
             ["model"] = e.Model,
         };
+        // Only on guesses: the file changed while this agent's shell command ran; another agent or program may have
+        // made the change.
+        if (e.AuthorUncertain) json["author_certain"] = false;
+        return json;
     }
 
     /// <summary>The agent's current roster label when it is still here (numbers change when peers leave), else the
@@ -138,11 +145,14 @@ public sealed partial class MainViewModel
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var value = raw.Trim().Trim('"', '\'', '`');
-        if (Path.IsPathRooted(value))
+        try
         {
-            try { value = BridgeEditLedger.ProjectPath(root, Path.GetFullPath(value)); }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { }
+            if (Path.IsPathRooted(value)) value = BridgeEditLedger.ProjectPath(root, Path.GetFullPath(value));
+            // A project path through a junction ("C#/SRC/VibeCode.Desktop/...") names the same file as its target.
+            else if (Path.GetFullPath(Path.Combine(root, value)) is var full && (File.Exists(full) || Directory.Exists(full)))
+                value = BridgeEditLedger.ProjectPath(root, full);
         }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { }
         value = value.Replace('\\', '/');
         while (value.StartsWith("./", StringComparison.Ordinal)) value = value[2..];
         value = value.TrimEnd('/');

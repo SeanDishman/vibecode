@@ -122,8 +122,6 @@ public static class BridgeTeamSuggestionService
         BridgeAgentConfiguration? configuration = null, bool dialogueOnly = false, JsonObject? outputSchema = null,
         string? capturedAccountId = null)
     {
-        if ((configuration?.Provider ?? host.Provider) == "gemini")
-            throw new InvalidOperationException(LegacyGeminiHistory.RemovalNotice);
         configuration = BridgeAgentConfigurationPolicy.Normalize(configuration ?? BridgeAgentConfigurationPolicy.From(host));
         var accountId = capturedAccountId ?? PlanningAccountId(host, configuration.Provider);
         var glmAccount = accountId is null ? ApiKeyAccountService.Instance.SelectedFor(GlmPreset.ProviderId)

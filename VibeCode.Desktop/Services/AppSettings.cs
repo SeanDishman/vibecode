@@ -37,6 +37,12 @@ public sealed class OpenChatState
     /// <summary>Chat is held back from the Second Brain. Persisted so a restart cannot quietly start recording a
     /// chat the user deliberately muted.</summary>
     public bool ExcludeFromMemory { get; set; }
+    /// <summary>The composer's robot toggle: a prompt sent while this chat is busy brings in a new agent of its model.</summary>
+    public bool AgentTeamMode { get; set; }
+    /// <summary>The account the robot's new agents join on, picked from its right-click menu. Null is automatic.</summary>
+    public string? AgentTeamAccountId { get; set; }
+    /// <summary>The name this chat's agent picked for itself while the robot toggle was on.</summary>
+    public string? AgentTeamName { get; set; }
 }
 
 /// <summary>One project folder remembered by the new-chat picker, ordered by actual use rather than transcript scan time.</summary>
@@ -80,16 +86,71 @@ public sealed class SavedBridgePane
     public bool ExcludeFromMemory { get; set; }
     /// <summary>Advanced Bridge orchestrator flag. Legacy managers without CoordinatesOnly are retired on restore.</summary>
     public bool IsManager { get; set; }
+    /// <summary>The name an agent-team member picked for itself with bridge_set_name.</summary>
+    public string? AgentTeamName { get; set; }
+    /// <summary>A team inside a classic Bridge: the agent id of the pane whose robot started it (that pane's own id on
+    /// the pane itself). Null outside such a team.</summary>
+    public string? AgentTeamAnchorId { get; set; }
+    /// <summary>That team's robot switch, so a restored team keeps summoning (or keeps it off).</summary>
+    public bool AgentTeamMode { get; set; }
+    /// <summary>The account that team's new agents join on (see <see cref="OpenChatState.AgentTeamAccountId"/>).</summary>
+    public string? AgentTeamAccountId { get; set; }
 }
 
 /// <summary>A saved bridge so a Close / navigate-away / app-restart can resume the peers.
 /// The first agent is a normal chat in OpenChats; this only stores the peers + a link to the host.</summary>
 public sealed class SavedBridgeState
 {
-    public BridgeWorkState? Work { get; set; }
+    private BridgeWorkState? _work;
+    private byte[]? _workJson;
+
+    /// <summary>The Bridge's task journal. On disk it lives in its own file (<see cref="BridgeJournalStore"/>), not in
+    /// settings.json. In memory a snapshot keeps it as the JSON it was serialized to, and the object is only rebuilt
+    /// when something reads it - most saved Bridges are never reopened, so most journals are never parsed.</summary>
+    public BridgeWorkState? Work
+    {
+        get
+        {
+            if (_work is null && _workJson is { } json)
+            {
+                _work = JsonSerializer.Deserialize<BridgeWorkState>(json);
+                _workJson = null;   // the object may be changed from here on, so the bytes no longer describe it
+            }
+            return _work;
+        }
+        set
+        {
+            _work = value;
+            _workJson = null;
+        }
+    }
+
+    /// <summary>The journal as serialized when this snapshot was taken (or as read from its file).</summary>
+    internal byte[]? WorkJson
+    {
+        init => _workJson = value;
+    }
+
+    /// <summary>A journal is attached, without rebuilding it.</summary>
+    internal bool HasWork => _work is not null || _workJson is not null;
+
+    /// <summary>The journal's JSON for a save. Rebuilt objects are serialized afresh: a restored Bridge works on this
+    /// very object, so only a fresh serialization is guaranteed to be current.</summary>
+    internal byte[]? CaptureWorkJson() => _workJson ?? (_work is { } work ? JsonSerializer.SerializeToUtf8Bytes(work) : null);
+
+    /// <summary>Point this snapshot at a journal read from disk.</summary>
+    internal void AttachWorkJson(byte[] json)
+    {
+        _work = null;
+        _workJson = json;
+    }
+
     public string? HostAgentId { get; set; }
     /// <summary>True for a live roster at shutdown; false after the user closes it. Null migrates older snapshots.</summary>
     public bool? ReconnectOnStartup { get; set; }
+    /// <summary>An agent was mid-turn, had prompts queued or a running /goal when this was saved. Only such a background
+    /// roster reconnects at startup; an idle one, or an older snapshot without this, resumes when its host is opened.</summary>
+    public bool Working { get; set; }
     public VibeCode.UI.BridgeAgentConfiguration? HostConfiguration { get; set; }
     public VibeCode.UI.BridgeAgentConfiguration? HostWorkerConfiguration { get; set; }
     public string? HostCoordinatorSessionId { get; set; }
@@ -98,6 +159,18 @@ public sealed class SavedBridgeState
     public string? HostReviewState { get; set; }
     public string? HostReviewSummary { get; set; }
     public bool SingleTerminal { get; set; }
+    /// <summary>Built by the composer's robot toggle: a free agent takes each prompt, and a new one joins the one
+    /// terminal when every agent is busy.</summary>
+    public bool AgentTeam { get; set; }
+    /// <summary>Whether the robot toggle was still on, so the restored team keeps summoning (or keeps it off).</summary>
+    public bool AgentTeamMode { get; set; }
+    /// <summary>The account the team's new agents join on (see <see cref="OpenChatState.AgentTeamAccountId"/>).</summary>
+    public string? AgentTeamAccountId { get; set; }
+    public string? HostAgentTeamName { get; set; }
+    /// <summary>The host's team inside this classic Bridge, as <see cref="SavedBridgePane.AgentTeamAnchorId"/>.</summary>
+    public string? HostAgentTeamAnchorId { get; set; }
+    public bool HostAgentTeamMode { get; set; }
+    public string? HostAgentTeamAccountId { get; set; }
     public string? SelectedTerminalSessionId { get; set; }
     public string? HostActivitySummary { get; set; }
     public string? HostTaskName { get; set; }
@@ -147,11 +220,15 @@ public sealed class SavedBridgeState
 }
 
 /// <summary>Persistent user settings - %APPDATA%\VibeCode\settings.json.</summary>
-public sealed class AppSettings
+public sealed partial class AppSettings
 {
     /// <summary>Last regular Bridge setup. Absent in older settings, which retain one orchestrator and AI sizing.</summary>
     public int BridgeOrchestratorCount { get; set; } = 1;
     public int[]? BridgeOrchestratorWorkerCounts { get; set; }
+    /// <summary>The Fact check orchestrator box as last started; the next Advanced Bridge setup opens with it.</summary>
+    public bool BridgeFactCheckOrchestrators { get; set; }
+    /// <summary>The Plan steps box as last started; the next Advanced Bridge setup opens with it.</summary>
+    public bool BridgePlanSteps { get; set; } = true;
     public HashSet<string> HiddenProjects { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Session ids created or opened inside VibeCode - the only ones shown when ShowOnlyOwnedSessions is on.</summary>
     public HashSet<string> OwnedSessions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -249,13 +326,28 @@ public sealed class AppSettings
     /// Primary account surfaces always use a screen-safe name plus the provider and plan.</summary>
     public bool HideEmails { get; set; }
 
+    /// <summary>Suppress Claude Code's "Co-authored-by: Claude" commit/PR attribution in ~/.claude/settings.json and
+    /// in every session's flag settings. Enabled by default for new users.</summary>
+    public bool NoClaudeCredit { get; set; } = true;
+
     /// <summary>Condense consecutive Bash, edit, web-search, and MCP/browser tool calls into one expandable activity
     /// card. The group opens to a one-line list, and every row can then be opened independently for full details.</summary>
     public bool CompactMode { get; set; }
     /// <summary>Resume quota-failed chats and Bridge panes when their own provider allowance becomes available.</summary>
     public bool ContinueAfterLimitResets { get; set; }
+    private int _idleSleepMinutes = 30;
+    /// <summary>Minutes a chat or Bridge agent may sit idle before its CLI process tree ends. Its transcript stays, and the next
+    /// prompt, opening it or a peer message resumes the same session. 0 never puts an agent to sleep.</summary>
+    public int IdleSleepMinutes
+    {
+        get => _idleSleepMinutes;
+        set => _idleSleepMinutes = Math.Clamp(value, 0, 1440);
+    }
     /// <summary>Show separator lines between messages in the shared Bridge terminal.</summary>
     public bool ShowAgentMessageDividers { get; set; } = true;
+
+    /// <summary>Offer Open in Terminal on supported chat context menus. Enabling this never launches a console.</summary>
+    public bool TerminalEnabled { get; set; }
 
     // Desktop notifications (both off by default). A toast is shown only when the chat it concerns is NOT fully
     // visible on screen - covered by another app, minimized, on another virtual desktop, or simply not the
@@ -281,12 +373,21 @@ public sealed class AppSettings
         get => _bridgeAgentLimit;
         set => _bridgeAgentLimit = BridgeAgentPolicy.ClampLimit(value);
     }
+    private int _pacingThresholdPercent = 85;
+    /// <summary>Share of a provider account's limit window at which a Bridge stops giving that account new assignments and the
+    /// robot adds newcomers on another usable account. 100 waits until the provider refuses.</summary>
+    public int PacingThresholdPercent
+    {
+        get => _pacingThresholdPercent;
+        set => _pacingThresholdPercent = Math.Clamp(value, 50, 100);
+    }
 
     /// <summary>Allow direct agent messages through the Bridge MCP tools. Roster, status and edit history remain available when disabled.</summary>
     public bool BridgePeerMessaging { get; set; } = true;
 
-    /// <summary>Maximum child workers a chat may create for a user-requested swarm.</summary>
-    public int SwarmMaxWorkers { get; set; } = SwarmPolicy.DefaultMaxWorkers;
+    /// <summary>Serve Bridge tools from VibeCode's own loopback MCP endpoint instead of one `--bridge-mcp` helper process
+    /// per agent. Off, or when the endpoint cannot start, every agent gets the stdio helper again.</summary>
+    public bool BridgeToolsInProcess { get; set; } = true;
 
     // ---- agent supervision: the orchestrator actively watches every delegated agent and escalates on a bounded
     // ladder (intervene -> restart on the same task -> take the task over itself). Off means a delegated agent can
@@ -312,6 +413,15 @@ public sealed class AppSettings
 
     public List<McpServerDefinition> McpServers { get; set; } = new();
 
+    /// <summary>Ids of bundled, share-by-default servers (<see cref="McpCatalog.IsKnownShareableServer"/>) the user has
+    /// deliberately opted OUT of sharing in Settings. Stored as the opt-out, not the opt-in, so the shared default is
+    /// derived fresh every normalize (and again after a cross-window merge) and can never be silently reverted.</summary>
+    public List<string> BundledMcpSharingOptOut { get; set; } = new();
+
+    /// <summary>Skills VibeCode installed for Claude Code and Codex (see <see cref="SkillCatalog"/>). The files live in
+    /// the CLIs' skills folders; this list is what Settings shows and what new Claude account homes receive.</summary>
+    public List<SkillDefinition> Skills { get; set; } = new();
+
     // Second Brain (agentmemory). The daemon is a native Windows sidecar; VibeCode talks to its REST API directly
 
     // in AGENTMEMORY_SECRET - never serialize bearer tokens into settings.json.
@@ -323,6 +433,14 @@ public sealed class AppSettings
     // leaves the durable store empty through exactly the turns worth keeping.
     public bool AgentMemoryAutoRemember { get; set; } = true;
     public string AgentMemoryEndpoint { get; set; } = "http://127.0.0.1:3111";
+    /// <summary>Days VibeCode keeps memory and context data (saved and pinned memories, task checkpoints, Bridge prompts,
+    /// review suggestions, CLI memory files, Bridge peer-chat archives). Chats and transcripts are never deleted.</summary>
+    public int MemoryRetentionDays { get; set; } = MemoryRetention.DefaultDays;
+    /// <summary>Context fill at which a running chat is asked once to save its checkpoint; 0 turns the nudge off.</summary>
+    public int ContextCheckpointNudgePercent { get; set; } = ContextCheckpointPolicy.DefaultPercent;
+    /// <summary>Opt-in: idle, closed and compacted chats get a tools-less review on the cheapest model of their own
+    /// signed-in provider. It spends the user's subscription usage, so it stays off until chosen.</summary>
+    public bool BackgroundMemoryReview { get; set; }
 
     // Jarvis is always available from the sidebar. AI selection is independent of ordinary chat defaults.
     public string JarvisProvider { get; set; } = "codex";
@@ -367,6 +485,11 @@ public sealed class AppSettings
     /// credential is never serialized into settings.json (see <see cref="GroqSpeechService"/>).</summary>
     public bool GroqSpeechEnabled { get; set; }
 
+    /// <summary>Dictation without Groq (off, or out of reach) uses the local GPT Whisper medium.en model: accurate, but
+    /// a 1.5 GB load. Off, it uses Windows' default speech to text instead: near instant with nothing to load, rougher
+    /// with names, jargon and punctuation. On by default. See SpeechService.UsesWindowsSpeech.</summary>
+    public bool GptWhisperEnabled { get; set; } = true;
+
     // Telemetry HUD and wall. Both ship ON: this is a window whose entire purpose is to be parked on a spare
     // screen and watched, so landing there and reading as live is the behaviour that should need no discovery.
     /// <summary>Open the telemetry windows on the display VibeCode is NOT on, when there is more than one.
@@ -374,6 +497,7 @@ public sealed class AppSettings
     public bool TelemetryOnCompanionDisplay { get; set; } = true;
     /// <summary>Travel the charts to each new reading instead of snapping, and keep a slow ripple on the
     /// sparklines. Presentation only - every figure still settles on the real one.</summary>
+    public bool TelemetryFitTheme { get; set; }
     public bool TelemetryLiveAnimation { get; set; } = true;
     /// <summary>How far back the telemetry wall looks, in hours - 1 to 720. Remembered because the wall is a
     /// window you set up once and leave running for weeks; re-picking the range at every launch would be a
@@ -383,6 +507,24 @@ public sealed class AppSettings
     /// falls back to its own constant when nothing matches, so leaving this at 24 while the window defaulted to
     /// 1 h would have shipped a "default" no fresh install ever saw.</summary>
     public double TelemetryWallRangeHours { get; set; } = 1;
+    /// <summary>How the Workflow Telemetry Wall draws its agents: graph, tavern, office, lanes or board. Unknown
+    /// values fall back to the graph.</summary>
+    public string WorkflowWallView { get; set; } = "graph";
+    /// <summary>The tavern and office sky: "auto" follows the local clock; dawn, day, dusk or night pins it.</summary>
+    public string WorkflowSceneSky { get; set; } = "auto";
+    /// <summary>The tavern and office weather: "auto" follows the Weather extension or drifts; otherwise clear,
+    /// cloudy, rain, storm, snow or fog.</summary>
+    public string WorkflowSceneWeather { get; set; } = "auto";
+    /// <summary>A short moment on the wall when an agent really finishes: "off", "occasional" (about one finish in
+    /// three, and always a whole Bridge run) or "every". Unknown values read as occasional.</summary>
+    public string WorkflowCelebrations { get; set; } = "occasional";
+    /// <summary>Earcons from the open wall on fleet transitions. Off by default: sound is never a surprise.</summary>
+    public bool WorkflowWallSounds { get; set; }
+    /// <summary>Villagers and office workers wear their provider's colour (Claude amber, Codex teal...) instead of a
+    /// colour hashed from the agent id. Hair and skin stay per agent either way.</summary>
+    public bool WorkflowGuildColours { get; set; } = true;
+    /// <summary>Projects' buildings and rooms show cosmetic upgrades earned from their own usage and edit history.</summary>
+    public bool WorkflowTownImprovements { get; set; } = true;
 
     // session restore: reopen the chats (and window) from last time
     /// <summary>Provider-neutral MRU folders for the five new-chat suggestions. This is updated immediately when a
@@ -497,10 +639,14 @@ public sealed class AppSettings
 
         // The main file first, then the rotated backup. A single bad read used to mean "start fresh", and because the
         // very next save rewrites the whole document, that silently destroyed every chat, bridge and preference.
+        var stamp = FileStamp.Of(FilePath);   // before the read, so a write landing during it is not taken for ours
         if (TryLoadFrom(FilePath, out var loaded))
         {
             StartupOutcome = LoadOutcome.Loaded;
+            loaded!.AttachTombstones(stamp);   // before the history recovery, which filters by them
             RecoverMisclassifiedHistory(loaded!);
+            loaded!.AttachJournals(sweepOrphans: true);
+            SyncClaudeSettings(loaded!.NoClaudeCredit);
             return loaded!;
         }
 
@@ -509,7 +655,10 @@ public sealed class AppSettings
         {
             StartupOutcome = LoadOutcome.RecoveredFromBackup;
             if (mainFileExisted) QuarantinedPath = Quarantine();
+            recovered!.AttachTombstones(FileStamp.Of(FilePath));
             RecoverMisclassifiedHistory(recovered!);
+            recovered!.AttachJournals(sweepOrphans: false);
+            SyncClaudeSettings(recovered!.NoClaudeCredit);
             return recovered!;
         }
 
@@ -526,7 +675,11 @@ public sealed class AppSettings
         // it while we were starting up".
         var fresh = new AppSettings();
         fresh._baseline = fresh.Clone();
+        // settings.json is gone, but the tombstones in their own file are still the user's.
+        fresh.AttachTombstones(FileStamp.Of(FilePath));
         RecoverMisclassifiedHistory(fresh);
+        fresh.AttachJournals(sweepOrphans: false);
+        SyncClaudeSettings(fresh.NoClaudeCredit);
         return fresh;
     }
 
@@ -556,12 +709,14 @@ public sealed class AppSettings
         loaded.NormalizeBridgeState();
         loaded.NormalizeRecentDirectories();
         // Folders still in the MRU must not stay on the hide list — that combo made heavily-used projects
-        // (e.g. WpfApp3) vanish from the five new-chat chips even though RecentDirectories still listed them.
+        // (for example, an older workspace) vanish from the five new-chat chips even though RecentDirectories still listed them.
         loaded.UnhideRecentlyUsedProjects();
-        loaded.NormalizeSwarmSettings();
         loaded.NormalizeProviderModelSlots();
         loaded.NormalizeMcpServers();
+        loaded.Skills ??= new List<SkillDefinition>();
         loaded._baseline = loaded.Clone();
+        // After the baseline, so a one-shot request counts as this process's change and a settings rewrite
+        // from an older build cannot merge it back off.
         settings = loaded;
         return true;
     }
@@ -772,16 +927,8 @@ public sealed class AppSettings
     }
 
     private static bool IsRetiredModelId(string? id) =>
-    !string.IsNullOrWhiteSpace(id) && id.Contains("deepseek", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>Clamp hand-edited or older settings before they reach provider launch arguments.</summary>
-    public bool NormalizeSwarmSettings()
-    {
-        var normalized = SwarmPolicy.ClampMaxWorkers(SwarmMaxWorkers);
-        if (normalized == SwarmMaxWorkers) return false;
-        SwarmMaxWorkers = normalized;
-        return true;
-    }
+        !string.IsNullOrWhiteSpace(id) && (id.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
+            || id.Contains("kimi", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Repair hand-edited/older MCP settings without ever importing or mutating provider-native configs.</summary>
     public bool NormalizeMcpServers()
@@ -792,7 +939,39 @@ public sealed class AppSettings
             return true;
         }
         var dropped = DropRetiredCodeGraphServers();
-        return McpCatalog.NormalizeDefinitions(McpServers) || dropped;
+        var normalized = McpCatalog.NormalizeDefinitions(McpServers);   // ids are final before the share default reads them
+        var shared = ApplyBundledMcpSharingDefaults();
+        return normalized || dropped || shared;
+    }
+
+    /// <summary>Turn "share one instance across agents" on for every bundled Blender server, except ones the user
+    /// opted out (<see cref="BundledMcpSharingOptOut"/>): one shared process serves every agent instead of a copy per
+    /// chat. Deterministic and idempotent, so a cross-window merge adopting an older per-agent copy is corrected the next
+    /// time this runs (<see cref="PrepareForSave"/> re-applies it after the merge).</summary>
+    private bool ApplyBundledMcpSharingDefaults()
+    {
+        BundledMcpSharingOptOut ??= new List<string>();
+        var changed = false;
+        foreach (var server in McpServers)
+        {
+            if (!McpCatalog.IsKnownShareableServer(server)) continue;
+            var shared = !BundledMcpSharingOptOut.Contains(server.Id);
+            if (server.ShareAcrossAgents != shared) { server.ShareAcrossAgents = shared; changed = true; }
+        }
+        return changed;
+    }
+
+    /// <summary>Remember a deliberate "share across agents" choice the user made in Settings for a bundled (Blender)
+    /// server, so <see cref="ApplyBundledMcpSharingDefaults"/> respects it: unticking opts the server out, re-ticking opts
+    /// it back in. Non-bundled servers keep their own <see cref="McpServerDefinition.ShareAcrossAgents"/> and are ignored.</summary>
+    public void RecordBundledSharingChoice(McpServerDefinition server)
+    {
+        BundledMcpSharingOptOut ??= new List<string>();
+        if (!McpCatalog.IsKnownShareableServer(server)) return;
+        if (server.ShareAcrossAgents)
+            BundledMcpSharingOptOut.RemoveAll(id => string.Equals(id, server.Id, StringComparison.OrdinalIgnoreCase));
+        else if (!BundledMcpSharingOptOut.Contains(server.Id))
+            BundledMcpSharingOptOut.Add(server.Id);
     }
 
     /// <summary>
@@ -934,49 +1113,20 @@ public sealed class AppSettings
 
     private Exception? TrySaveCore(bool activeAccountIsDeliberate, bool defaultModeIsDeliberate)
     {
-        NormalizeSwarmSettings();
-        NormalizeProviderModelSlots();
-        NormalizeMcpServers();
-        NormalizeRecentDirectories();
-        var adopted = MergeWithDisk(activeAccountIsDeliberate, defaultModeIsDeliberate);
-        // Again after the merge: the three-way merge can adopt a retired model or server still sitting in a settings
-        // file written by another running instance. Do not publish that stale value back to disk.
-        NormalizeProviderModelSlots();
-        DropRetiredCodeGraphServers();
+        var clock = SaveClock.Start();
+        var adopted = PrepareForSave(merge: true, activeAccountIsDeliberate, defaultModeIsDeliberate);
         Exception? verifyError = null;
         var moved = false;   // once the Move lands the save HAS succeeded - nothing after it may report a failure
         try
         {
-            Directory.CreateDirectory(Dir);
-            // Unique temp name per write: a fixed FilePath + ".tmp" is SHARED across instances, so two windows saving
-            // at once either cross-write (one publishes the other's whole settings object) or race the Move.
-            var tmp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                {
-                    JsonSerializer.Serialize(stream, this, new JsonSerializerOptions { WriteIndented = true });
-                    stream.Flush(flushToDisk: true);
-                }
-                // File.Replace publishes the new file AND rotates the old one into settings.bak.json in a single
-                // operation, so there is always a previous good copy to recover from and never a moment with neither.
-                if (File.Exists(FilePath))
-                {
-                    try { File.Replace(tmp, FilePath, BackupPath, ignoreMetadataErrors: true); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
-                    {
-                        File.Move(tmp, FilePath, overwrite: true);   // Replace needs both files intact; Move always works
-                    }
-                }
-                else File.Move(tmp, FilePath, overwrite: true);
-                moved = true;
-            }
-            catch
-            {
-                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* don't let stray temps pile up */ }
-                throw;
-            }
-            _baseline = Clone();   // disk now matches memory: this is the new merge base
+            var snapshot = CaptureSnapshot();
+            // Journals and tombstones first: settings.json may stop carrying them only once they are safely in files
+            // of their own. A failure before the Move leaves the previous complete save in place.
+            var written = WriteExternalState(snapshot);
+            WriteSettingsFile(snapshot.Settings);
+            moved = true;
+            Published(snapshot);   // disk now matches memory: this is the new merge base
+            clock.Done(snapshot, written);
 
             // Only meaningful for a deliberate account change: catch a clobber landing inside the move→read window, so
             // "Switched to X." is never reported for a write that didn't survive. (The far commoner stale overwrite -
@@ -1011,9 +1161,66 @@ public sealed class AppSettings
                 return ex;   // caller decides whether the user needs to know
             }
         }
+        SyncClaudeSettings(NoClaudeCredit);
         Changed?.Invoke();   // the write itself landed, even on the verify-mismatch path - subscribers must not miss it
         if (adopted) ActiveAccountAdopted?.Invoke();
         return verifyError;
+    }
+
+    /// <summary>Synchronize the "No Claude credit" preference into <c>~/.claude/settings.json</c> (and any saved
+    /// Claude account homes) without disturbing other keys in those files.</summary>
+    public static void SyncClaudeSettings(bool noClaudeCredit, string? specificHome = null)
+    {
+        IEnumerable<string> homes = !string.IsNullOrWhiteSpace(specificHome)
+            ? [Path.GetFullPath(specificHome)]
+            : SessionCatalog.ClaudeHomes().Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var home in homes)
+        {
+            try
+            {
+                Directory.CreateDirectory(home);
+                var path = Path.Combine(home, "settings.json");
+                System.Text.Json.Nodes.JsonObject root;
+                if (File.Exists(path))
+                {
+                    try { root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path)) as System.Text.Json.Nodes.JsonObject ?? new(); }
+                    catch { continue; }   // never overwrite a hand-edited file that currently fails to parse
+                }
+                else
+                {
+                    if (!noClaudeCredit) continue;
+                    root = new System.Text.Json.Nodes.JsonObject();
+                }
+
+                var before = root.ToJsonString();
+                if (noClaudeCredit)
+                {
+                    var attribution = root["attribution"] as System.Text.Json.Nodes.JsonObject ?? new System.Text.Json.Nodes.JsonObject();
+                    attribution["commit"] = "";
+                    attribution["pr"] = "";
+                    root["attribution"] = attribution;
+                    root["includeCoAuthoredBy"] = false;
+                }
+                else
+                {
+                    if (root["attribution"] is System.Text.Json.Nodes.JsonObject attribution)
+                    {
+                        if (attribution["commit"]?.ToString() == "") attribution.Remove("commit");
+                        if (attribution["pr"]?.ToString() == "") attribution.Remove("pr");
+                        if (attribution.Count == 0) root.Remove("attribution");
+                    }
+                    if (root["includeCoAuthoredBy"] is { } inc && inc.ToString().Equals("false", StringComparison.OrdinalIgnoreCase))
+                        root.Remove("includeCoAuthoredBy");
+                }
+
+                if (root.ToJsonString() == before && File.Exists(path)) continue;
+                var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                File.WriteAllText(tmp, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new System.Text.UTF8Encoding(false));
+                File.Move(tmp, path, overwrite: true);
+            }
+            catch { /* best effort */ }
+        }
     }
 
     /// <summary>Deliberately change which account new chats run under and persist it. Marks the change as this
@@ -1037,7 +1244,7 @@ public sealed class AppSettings
     }
 
     private AppSettings Clone() =>
-        JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this))!;
+        JsonSerializer.Deserialize<AppSettings>(JsonSerializer.SerializeToUtf8Bytes(this, BaselineOptions))!;
 
     private static string Json(object? value) => JsonSerializer.Serialize(value);
 
@@ -1107,6 +1314,11 @@ public sealed class AppSettings
         HiddenProjects = MergeCollection(HiddenProjects, disk.HiddenProjects, baseline?.HiddenProjects);
         Backgrounds = MergeCollection(Backgrounds, disk.Backgrounds, baseline?.Backgrounds);
         McpServers = MergeCollection(McpServers, disk.McpServers, baseline?.McpServers);
+        // Opt-outs follow the same "ours if we changed it, else disk's" rule as McpServers; the shared default itself is
+        // re-derived from this list after the merge, so adopting disk's McpServers never loses the shared state.
+        BundledMcpSharingOptOut = MergeCollection(BundledMcpSharingOptOut ?? new List<string>(),
+            disk.BundledMcpSharingOptOut ?? new List<string>(), baseline?.BundledMcpSharingOptOut);
+        Skills = MergeCollection(Skills, disk.Skills ?? new List<SkillDefinition>(), baseline?.Skills);
         OpenChats = MergeCollection(OpenChats, disk.OpenChats, baseline?.OpenChats);
         OpenChats.RemoveAll(chat => chat.SessionId is { } id && DeletedSessions.Contains(id));
         ChatMetadata = global::VibeCode.Services.ChatMetadata.Merge(ChatMetadata, disk.ChatMetadata, baseline?.ChatMetadata);

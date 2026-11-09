@@ -13,7 +13,11 @@ public sealed record SessionEntry(string SessionId, string Title, string Cwd, Da
     public string ProviderBadge => Provider switch { "gemini" => "Gemini", "glm" => "GLM", _ => "" };
 }
 public sealed record ProjectEntry(string Cwd, string Name, DateTime LastModified, List<SessionEntry> Sessions);
-public sealed record TranscriptMessage(string Type, JsonNode Message, string? ParentToolUseId);
+/// <summary><paramref name="Uuid"/> is Claude's message id. A forked session copies its source's messages with their ids,
+/// which is how a teammate's inherited history is told apart from its own work. <paramref name="Timestamp"/> is when
+/// the message was written, which orders several agents' replayed histories in one terminal.</summary>
+public sealed record TranscriptMessage(string Type, JsonNode Message, string? ParentToolUseId, string? Uuid = null,
+    DateTimeOffset? Timestamp = null);
 
 /// <summary>Reads Claude Code's on-disk session store (~/.claude) - same data the CLI uses.</summary>
 public static partial class SessionCatalog
@@ -210,6 +214,24 @@ public static partial class SessionCatalog
     public static List<TranscriptMessage> LoadTranscript(string cwd, string sessionId, int maxMessages = 400)
     {
         var result = new List<TranscriptMessage>();
+        foreach (var n in TranscriptLines(sessionId))
+        {
+            DateTimeOffset? written = n["timestamp"] is JsonValue stamp && stamp.TryGetValue<string>(out var text)
+                && DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var at) ? at : null;
+            result.Add(new TranscriptMessage(n["type"]!.GetValue<string>(), n["message"]!,
+                n["parent_tool_use_id"]?.GetValue<string>(), n["uuid"]?.GetValue<string>(), written));
+            if (result.Count >= maxMessages) break;
+        }
+        return result;
+    }
+
+    /// <summary>The message ids of a Claude session's transcript, read the same way <see cref="LoadTranscript"/> reads it.</summary>
+    public static HashSet<string> LoadMessageIds(string sessionId) => TranscriptLines(sessionId)
+        .Select(n => n["uuid"]?.GetValue<string>()).OfType<string>().ToHashSet(StringComparer.Ordinal);
+
+    private static IEnumerable<JsonNode> TranscriptLines(string sessionId)
+    {
         // Search every Claude home, not just the shared one: a chat that ran under a saved account wrote its
         // transcript into that account's private home, and replaying it from the wrong root silently produced an
         // empty conversation - a chat that opens blank looks exactly like a chat that was deleted.
@@ -227,21 +249,17 @@ public static partial class SessionCatalog
             catch { continue; }
             if (file is not null) break;
         }
-        if (file is null) return result;
+        if (file is null) yield break;
 
         foreach (var line in File.ReadLines(file))
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
             JsonNode? n;
             try { n = JsonNode.Parse(line); } catch { continue; }
-            var type = n?["type"]?.GetValue<string>();
-            if (type is not ("user" or "assistant")) continue;
-            if (n!["isSidechain"]?.GetValue<bool>() == true) continue;
-            var message = n["message"];
-            if (message is null) continue;
-            result.Add(new TranscriptMessage(type!, message, n["parent_tool_use_id"]?.GetValue<string>()));
-            if (result.Count >= maxMessages) break;
+            if (n?["type"]?.GetValue<string>() is not ("user" or "assistant")) continue;
+            if (n["isSidechain"]?.GetValue<bool>() == true) continue;
+            if (n["message"] is null) continue;
+            yield return n;
         }
-        return result;
     }
 }

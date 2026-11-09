@@ -35,6 +35,7 @@ public partial class McpServerDialog : Window
             ClaudeCheck.IsChecked = value.UseClaude;
             CodexCheck.IsChecked = value.UseCodex;
             EnabledCheck.IsChecked = value.Enabled;
+            ShareCheck.IsChecked = value.ShareAcrossAgents;
             StartupTimeoutBox.Text = value.StartupTimeoutSeconds.ToString();
             ToolTimeoutBox.Text = value.ToolTimeoutSeconds.ToString();
         }
@@ -108,12 +109,19 @@ public partial class McpServerDialog : Window
         var model = AiModelBox.SelectedValue as string;
         var generation = new CancellationTokenSource();
         _aiGeneration = generation;
-        SetAiBusy(true);
+        var logLines = new List<string>();
+        SetAiBusy(true, "Starting AI assistant…");
         try
         {
+            var progress = new Progress<string>(status =>
+            {
+                if (!ReferenceEquals(_aiGeneration, generation) || generation.IsCancellationRequested) return;
+                AppendAiLog(logLines, status);
+            });
             var suggestion = await McpConfigAssistantService.GenerateAsync(provider, model, request,
-                AppSettings.Dir, generation.Token);
+                AppSettings.Dir, generation.Token, progress);
             if (!ReferenceEquals(_aiGeneration, generation) || generation.IsCancellationRequested) return;
+            AppendAiLog(logLines, "Configuration draft ready.");
             ApplyAiSuggestion(suggestion.Definition);
             var valid = TryBuild(out _, out var errors, out var warnings);
             ShowValidation(errors, warnings, showSuccess: valid);
@@ -127,7 +135,11 @@ public partial class McpServerDialog : Window
         }
         catch (Exception ex)
         {
-            if (ReferenceEquals(_aiGeneration, generation)) ShowAiStatus(ex.Message, isError: true);
+            if (ReferenceEquals(_aiGeneration, generation))
+            {
+                AppendAiLog(logLines, "Failed: " + ex.Message);
+                ShowAiStatus(ex.Message, isError: true);
+            }
         }
         finally
         {
@@ -138,6 +150,18 @@ public partial class McpServerDialog : Window
             }
             generation.Dispose();
         }
+    }
+
+    private void AppendAiLog(List<string> logLines, string status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return;
+        AiWorkingText.Text = status;
+        var entry = $"[{DateTime.Now:HH:mm:ss}] {status}";
+        if (logLines.Count > 0 && logLines[^1].EndsWith("] " + status, StringComparison.Ordinal)) return;
+        logLines.Add(entry);
+        AiLogText.Text = string.Join(Environment.NewLine, logLines);
+        AiLogPanel.Visibility = Visibility.Visible;
+        AiLogScroll.ScrollToEnd();
     }
 
     private void ApplyAiSuggestion(McpServerDefinition value)
@@ -159,15 +183,21 @@ public partial class McpServerDialog : Window
         HideValidation();
     }
 
-    private void SetAiBusy(bool busy)
+    private void SetAiBusy(bool busy, string? status = null)
     {
         AiGenerateButton.IsEnabled = !busy;
         AiProviderBox.IsEnabled = !busy;
         AiModelBox.IsEnabled = !busy;
         AiPromptBox.IsEnabled = !busy;
+        if (status is not null) AiWorkingText.Text = status;
         AiWorkingText.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         AiProgress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-        if (busy) AiStatusPanel.Visibility = Visibility.Collapsed;
+        if (busy)
+        {
+            AiLogText.Text = "";
+            AiLogPanel.Visibility = Visibility.Collapsed;
+            AiStatusPanel.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void ShowAiStatus(string message, bool isError)
@@ -244,6 +274,8 @@ public partial class McpServerDialog : Window
             BearerTokenEnvironmentVariable = NullIfWhiteSpace(BearerBox.Text),
             StartupTimeoutSeconds = startup,
             ToolTimeoutSeconds = tool,
+            // Only a local process can be shared; a remote server is already one instance.
+            ShareAcrossAgents = transport == McpCatalog.StdioTransport && ShareCheck.IsChecked == true,
         };
 
         foreach (var message in McpCatalog.Validate(value, _catalog))

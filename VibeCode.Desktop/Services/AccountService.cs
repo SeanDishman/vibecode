@@ -122,6 +122,8 @@ public sealed class AccountUsage
     public int? SessionPercent { get; set; }
     public int? WeekPercent { get; set; }
     public string? SessionReset { get; set; }
+    /// <summary>The weekly window's reset as the CLI printed it; read relative to <see cref="FetchedAt"/>.</summary>
+    public string? WeekReset { get; set; }
     public bool AtLimit { get; set; }
     public bool Authenticated { get; set; }   // did the probe actually authenticate & yield usage
     public string? Error { get; set; }         // short reason when it didn't (e.g. "Signed out")
@@ -155,7 +157,11 @@ public sealed class AccountUsage
             var pct = int.TryParse(m.Groups["pct"].Value, out var v) ? Math.Clamp(v, 0, 100) : 0;
             var reset = m.Groups["reset"].Success ? m.Groups["reset"].Value.Trim() : null;
             if (bucket.Length == 0) { u.SessionPercent = pct; u.SessionReset = reset; }
-            else if (string.Equals(bucket, "all models", StringComparison.OrdinalIgnoreCase) || u.WeekPercent is null) u.WeekPercent = pct;
+            else if (string.Equals(bucket, "all models", StringComparison.OrdinalIgnoreCase) || u.WeekPercent is null)
+            {
+                u.WeekPercent = pct;
+                u.WeekReset = reset;
+            }
         }
 
         u.AtLimit = u.SessionPercent >= 100 || u.WeekPercent >= 100
@@ -724,18 +730,24 @@ public sealed class AccountService
             var profileRoot = ProfileRoot(id);
             Directory.CreateDirectory(profileRoot);
             var targetHome = PrivateConfigDir(id);
-            var incoming = targetHome + ".incoming-" + Guid.NewGuid().ToString("N");
-            var backup = targetHome + ".backup-" + Guid.NewGuid().ToString("N");
-            Directory.Move(pendingHome, incoming);
-            var movedOld = false;
+            var installedNewHome = false;
             try
             {
                 if (Directory.Exists(targetHome))
                 {
-                    Directory.Move(targetHome, backup);
-                    movedOld = true;
+                    // Signing in again as an account you already have is a LOGIN refresh, not a reset. That home is
+                    // the live CLAUDE_CONFIG_DIR of every chat on this account - transcripts, todos, history, memory
+                    // and settings - so the new credential goes INTO it and the folder itself is never moved or
+                    // deleted. Swapping in the fresh home used to rename this one aside first; when Windows refused
+                    // the rename (a running chat, antivirus or the indexer holding a file open) the rollback deleted
+                    // the original home and every transcript in it.
+                    RefreshLoginInPlace(pendingHome, targetHome, config);
                 }
-                Directory.Move(incoming, targetHome);
+                else
+                {
+                    Directory.Move(pendingHome, targetHome);
+                    installedNewHome = true;
+                }
                 var metadata = new JsonObject
                 {
                     ["oauthAccount"] = oauth!.DeepClone(),
@@ -744,20 +756,12 @@ public sealed class AccountService
                 AtomicWrite(Path.Combine(profileRoot, "account.json"),
                     metadata.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                 AtomicWrite(ProfileDescriptorPath(id), new JsonObject { ["kind"] = "private" }.ToJsonString());
-                // Signing in again as an account you already had is a LOGIN refresh, not a reset. The old home is
-                // being replaced by a home Claude Code just created from scratch, which has no history in it - so
-                // carry the conversations across before the old one goes. Deleting the backup outright is how
-                // "sign out, sign back in" used to erase every transcript that account had.
-                if (movedOld && Directory.Exists(backup))
-                {
-                    AdoptConversationHistory(backup, targetHome);
-                    try { Directory.Delete(backup, recursive: true); } catch { /* history is already carried over */ }
-                }
             }
             catch
             {
-                try { if (Directory.Exists(targetHome)) Directory.Delete(targetHome, recursive: true); } catch { }
-                try { if (movedOld && Directory.Exists(backup)) Directory.Move(backup, targetHome); } catch { }
+                // Only a home this call created can be rolled back: it holds nothing but the login it just made.
+                if (installedNewHome)
+                    try { Directory.Delete(targetHome, recursive: true); } catch { }
                 throw;
             }
 
@@ -870,39 +874,40 @@ public sealed class AccountService
         return SwitchOutcome.Ok;
     }
 
-    /// <summary>Move an old Claude home's conversation record into a freshly created one. Only ever ADDS: a file the
-    /// new home already has wins, so this can never overwrite something the CLI just wrote.</summary>
-    private static void AdoptConversationHistory(string oldHome, string newHome)
+    /// <summary>Put a fresh login into an account home that already exists, without moving or recreating the folder.
+    /// The credential file is replaced atomically and only the identity fields of .claude.json are updated, so the
+    /// account's transcripts, todos, history, memory and settings are never touched. A failure leaves the old login
+    /// in place and deletes nothing.</summary>
+    private static void RefreshLoginInPlace(string freshHome, string liveHome, JsonObject? freshConfig)
     {
-        // Everything Claude Code keeps a conversation in. Credentials and config are deliberately absent: those
-        // belong to the new login.
-        foreach (var folder in new[] { "projects", "todos", "statsig", "shell-snapshots" })
-        {
-            var source = Path.Combine(oldHome, folder);
-            if (!Directory.Exists(source)) continue;
-            try { CopyMissingFiles(source, Path.Combine(newHome, folder)); }
-            catch { /* one unreadable subtree must not stop the rest of the history moving */ }
-        }
         try
         {
-            var history = Path.Combine(oldHome, "history.jsonl");
-            var target = Path.Combine(newHome, "history.jsonl");
-            if (File.Exists(history) && !File.Exists(target)) File.Copy(history, target);
-        }
-        catch { /* titles are a nicety; the transcripts are what matter */ }
-    }
+            AtomicCopy(Path.Combine(freshHome, ".credentials.json"), Path.Combine(liveHome, ".credentials.json"));
 
-    private static void CopyMissingFiles(string source, string destination)
-    {
-        Directory.CreateDirectory(destination);
-        foreach (var file in Directory.EnumerateFiles(source))
-        {
-            var target = Path.Combine(destination, Path.GetFileName(file));
-            if (File.Exists(target)) continue;
-            try { File.Copy(file, target); } catch { /* skip a locked file, keep the rest */ }
+            var liveConfigPath = Path.Combine(liveHome, ".claude.json");
+            JsonObject? liveConfig = null;
+            if (File.Exists(liveConfigPath))
+            {
+                try { liveConfig = JsonNode.Parse(File.ReadAllText(liveConfigPath)) as JsonObject; }
+                catch (JsonException) { /* unreadable: replaced below, after a copy is kept */ }
+                if (liveConfig is null)
+                    File.Copy(liveConfigPath, liveConfigPath + ".unreadable-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"), overwrite: true);
+            }
+            if (liveConfig is null)
+            {
+                AtomicCopy(Path.Combine(freshHome, ".claude.json"), liveConfigPath);
+                return;
+            }
+            foreach (var key in new[] { "oauthAccount", "userID" })
+                if (freshConfig?[key] is { } value) liveConfig[key] = value.DeepClone();
+            AtomicWrite(liveConfigPath, liveConfig.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
-        foreach (var directory in Directory.EnumerateDirectories(source))
-            CopyMissingFiles(directory, Path.Combine(destination, Path.GetFileName(directory)));
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException("VibeCode couldn't update this account's saved login because a file in its folder " +
+                                  "is in use. Close the chats that use this account, then sign in again. Nothing was " +
+                                  "deleted.", ex);
+        }
     }
 
     /// <summary>

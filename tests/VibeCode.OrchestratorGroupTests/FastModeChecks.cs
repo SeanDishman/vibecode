@@ -120,7 +120,7 @@ internal static partial class Program
         var models = (ComboBox)options.FindName("CentralModelBox");
         var noFast = new ModelChoice { Provider = "codex", Value = "fixture-standard-only", Display = "Standard speed", SupportsFastMode = false };
         models.ItemsSource = new[] { noFast }; models.SelectedItem = noFast;
-        Check("unsupported central models disable speed without replacing the chosen model", !toggle.IsEnabled && toggle.IsChecked == false
+        Check("unsupported central models hide speed without replacing the chosen model", toggle.Visibility == Visibility.Collapsed && !toggle.IsEnabled && toggle.IsChecked == false
             && panel.CentralConfiguration.FastMode == false && panel.CentralConfiguration.Model == noFast.Value);
         AppSettings.Current.BridgeOrchestratorCount = 1;
     }
@@ -164,7 +164,7 @@ internal static partial class Program
         var models = (ComboBox)options.FindName("OrchestratorModelBox");
         models.ItemsSource = new[] { noFast }; models.SelectedItem = noFast;
         RenderFastMode(panel, "orchestrator-fast-unavailable.png");
-        Check("unsupported model disables fast mode without switching models", !toggle.IsEnabled && toggle.IsChecked == false &&
+        Check("unsupported model hides fast mode without switching models", toggle.Visibility == Visibility.Collapsed && !toggle.IsEnabled && toggle.IsChecked == false &&
             panel.OrchestratorConfiguration.Model == noFast.Value && toggle.ToolTip.ToString()!.Contains("unavailable"));
         panel.Suspend();
         var regular = new BridgeSetupPanel(); regular.Configure(host, 8);

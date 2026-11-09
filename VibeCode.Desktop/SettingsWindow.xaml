@@ -674,6 +674,12 @@
                                 <TextBlock Text="Usage" FontSize="13" VerticalAlignment="Center"/>
                             </StackPanel>
                         </ListBoxItem>
+                        <ListBoxItem AutomationProperties.Name="Developer">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE756;" FontFamily="{StaticResource Icons}" FontSize="15" Width="22" VerticalAlignment="Center" />
+                                <TextBlock Text="Developer" FontSize="13" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </ListBoxItem>
                     </ListBox>
                 </DockPanel>
             </Border>
@@ -745,6 +751,14 @@
                             <ui:SettingCard Glyph="" Title="Run in background" Keywords="tray notification area close quit minimise minimize" Description="On: closing the window puts VibeCode in the notification area and every chat and Bridge peer keeps coding. Click the icon to bring the window back, or right-click it to quit. Off: the close button ends VibeCode there and then, and every running agent with it.&#10;&#10;Notifications are the way a background VibeCode reaches you — turn on “When a chat finishes” below and a finished agent will still say so with no window open.">
                                 <ToggleButton x:Name="RunInBackgroundToggle" Style="{StaticResource Switch}" Checked="OnRunInBackgroundChanged" Unchecked="OnRunInBackgroundChanged" AutomationProperties.Name="Run in background"/>
                             </ui:SettingCard>
+                        <ui:SettingCard Glyph="&#xE708;" Title="Sleep idle agents"
+                                            Keywords="memory ram processes idle sleeping performance background"
+                                            ValueText="{Binding Value, ElementName=IdleSleepSlider, StringFormat={}{0:0} min}"
+                                            Description="A chat or Bridge agent idle this long ends its processes; its conversation stays on screen and the next prompt, opening it, or a message from another agent resumes the same session. Agents that are working, asking you something, queued, running a /goal or holding Bridge work never sleep. When Windows runs low on memory, the agents idle longest sleep straight away. 0 keeps every agent running.">
+                                <Slider x:Name="IdleSleepSlider" Minimum="0" Maximum="240" TickFrequency="5"
+                                        SmallChange="5" LargeChange="15" IsSnapToTickEnabled="True"
+                                        ValueChanged="OnIdleSleepChanged" AutomationProperties.Name="Minutes before an idle agent sleeps" />
+                            </ui:SettingCard>
                         </ui:SettingGroup>
 
                         <ui:SettingGroup x:Name="SectionNotifications" Header="Notifications" Keywords="toast alert desktop sound chime" Description="Both toasts are off by default. A toast is only ever shown when the chat it concerns is not already fully visible on your screen, so you are never told about something that is right in front of you.">
@@ -771,6 +785,13 @@
                         <ui:SettingGroup x:Name="SectionPrivacy" Header="Privacy" Keywords="screen share mask">
                             <ui:SettingCard Glyph="" Title="Hide emails" Description="Removes account emails from detailed views so it's safe to screen-share. Account names and provider plans stay visible.">
                                 <ToggleButton x:Name="HideEmailsToggle" Style="{StaticResource Switch}" Checked="OnHideEmailsChanged" Unchecked="OnHideEmailsChanged" AutomationProperties.Name="Hide emails"/>
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE8D7;" Title="No Claude credit"
+                                            Keywords="co-authored-by claude attribution commit pr github git"
+                                            Description="Writes empty commit and PR attribution plus includeCoAuthoredBy: false to ~/.claude/settings.json so Claude Code never adds Co-authored-by: Claude to your commits or pull requests.">
+                                <ToggleButton x:Name="NoClaudeCreditToggle" Style="{StaticResource Switch}"
+                                              Checked="OnNoClaudeCreditChanged" Unchecked="OnNoClaudeCreditChanged"
+                                              AutomationProperties.Name="No Claude credit" />
                             </ui:SettingCard>
                         </ui:SettingGroup>
 
@@ -828,6 +849,16 @@
                         <ui:SettingGroup x:Name="SectionAbout" Header="About" Keywords="version build application">
                             <ui:SettingCard Glyph="✦" GlyphFont="{StaticResource Ui}" Tint="White" TintSoft="{StaticResource BrandGradient}" Title="VibeCode" Description="A Windows desktop app for Claude Code, OpenAI Codex, and GLM. Run coding chats and agent teams, share MCP tools, switch accounts, and track provider-reported usage.&#10;&#10;Spotify is a trademark of Spotify AB. Playback control requires a Spotify Premium account and the Spotify Web API.">
                                 <TextBlock x:Name="AboutVersionText" Text="Version" FontSize="12" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Muted}" TextWrapping="NoWrap" VerticalAlignment="Center"/>
+                            </ui:SettingCard>
+                            <!-- Filled by SettingsWindow.StartupWaterfall.cs from the timeline StartupTimeline saves. -->
+                            <ui:SettingCard Glyph="&#xE916;" Title="Last startup" Keywords="startup launch slow speed performance timing waterfall stall"
+                                            Description="Where the last launch spent its time: each startup step and Bridge reconnect, the restored chats' history replays, and every moment the window stopped answering input for more than a quarter of a second. The green line is when the workspace was ready. Hover a row for its details.">
+                                <ui:SettingCard.Status>
+                                    <TextBlock x:Name="StartupWaterfallStatus" Style="{StaticResource RowStatus}" Text="Not recorded yet" />
+                                </ui:SettingCard.Status>
+                                <ui:SettingCard.Footer>
+                                    <StackPanel x:Name="StartupWaterfall" />
+                                </ui:SettingCard.Footer>
                             </ui:SettingCard>
                         </ui:SettingGroup>
                     </ui:SettingPage>
@@ -1019,50 +1050,275 @@
                                 <Slider x:Name="VisSlider" Minimum="0" Maximum="80" SmallChange="1" LargeChange="10" ValueChanged="OnVisibilityChanged" AutomationProperties.Name="Art visibility"/>
                             </ui:SettingCard>
                         </ui:SettingGroup>
+
+                        <!-- Live telemetry lives here rather than on the Usage page: these are windows you look at, not
+                             numbers you look up, and how and where they appear is an appearance choice. Each window
+                             carries its own range control, so nothing on the Usage page scopes them. Three groups, in
+                             the order they're reached for: the windows themselves, the workflow wall's own look, then
+                             what every telemetry window shares. Every launcher is the same "Open" in one column. -->
+                        <ui:SettingGroup x:Name="SectionTelemetry" Header="Live telemetry" Keywords="hud wall dashboard monitor usage telemetry office floor graph open window"
+                                         Description="Windows that show your agents and usage as they happen, made to be parked on a spare screen and left running. Each one has its own time range.">
+                            <ui:SettingCard x:Name="WorkflowWallSetting" Glyph="&#xE8D4;" Title="Workflow Telemetry Wall"
+                                            Keywords="workflow agents projects directories graph live activity wall"
+                                            Description="A live map of open projects and their agents, including background Bridges. See who's working, waiting or idle, filter by directory, and open a chat from any agent. Its style and extras are under Workflow wall below.">
+                                <Button Style="{StaticResource SettingButton}" Content="Open" MinWidth="76"
+                                        Click="OnOpenWorkflowWall" AutomationProperties.Name="Open the Workflow Telemetry Wall" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE9D9;" Title="Telemetry HUD" Keywords="always on top compact 24 hours spend tokens"
+                                            Description="A compact always-on-top window covering the last 24 hours: spend, tokens, electricity and water, throughput hour by hour, and the split by model.">
+                                <Button Style="{StaticResource SettingButton}" Content="Open" MinWidth="76"
+                                        Click="OnOpenTelemetryHud" AutomationProperties.Name="Open the telemetry HUD" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE740;" Title="Full-screen telemetry wall" Keywords="full screen usage wall range days"
+                                            Description="The HUD's telemetry full screen, over anything from the last hour to the last 30 days. It remembers the range you leave it on.">
+                                <Button Style="{StaticResource SettingButton}" Content="Open" MinWidth="76"
+                                        Click="OnOpenTelemetryWall" AutomationProperties.Name="Open the full-screen telemetry wall" />
+                            </ui:SettingCard>
+                            <!-- The switch sits left of the button so every Open button lines up in one column. -->
+                        </ui:SettingGroup>
+
+                        <!-- The wall's own look. Each choice is read on the next frame or snapshot, so an open wall follows at once. -->
+                        <ui:SettingGroup Header="Workflow wall" Keywords="workflow wall telemetry agents office floor graph"
+                                         Description="How the Workflow Telemetry Wall draws your team and what it adds on top. An open wall follows every change straight away.">
+                            <!-- Like the thinking orbs, a style is chosen by looking at it: every view stays on screen as a
+                                 picture of a team at work. An open wall switches the moment one is clicked. -->
+                            <ui:SettingCard x:Name="WorkflowWallStyleSetting" Glyph="&#xE8A9;" Title="Style"
+                                            Keywords="wall style view look office floor desks flow graph picture"
+                                            Description="Pick how the wall draws your agents. An open wall switches the moment you click one.">
+                                <ui:SettingCard.Footer>
+                                    <ListBox x:Name="WorkflowWallStylePicker" SelectionMode="Single"
+                                             SelectionChanged="OnWorkflowWallStyleChanged"
+                                             Background="Transparent" BorderThickness="0" Padding="0"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                             ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                             KeyboardNavigation.DirectionalNavigation="Contained"
+                                             AutomationProperties.Name="Workflow wall style"
+                                             AutomationProperties.HelpText="Select how the Workflow Telemetry Wall draws your agents.">
+                                        <ListBox.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <UniformGrid Columns="2" />
+                                            </ItemsPanelTemplate>
+                                        </ListBox.ItemsPanel>
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem">
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                                <Setter Property="Margin" Value="0,0,6,6" />
+                                                <Setter Property="Padding" Value="6" />
+                                                <Setter Property="Cursor" Value="Hand" />
+                                                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                                <Setter Property="ToolTip" Value="{Binding Description}" />
+                                                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                                <Setter Property="AutomationProperties.HelpText" Value="{Binding Description}" />
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="ListBoxItem">
+                                                            <Border x:Name="option" Background="Transparent"
+                                                                    BorderBrush="Transparent" BorderThickness="1"
+                                                                    CornerRadius="{StaticResource Rad8}" Padding="{TemplateBinding Padding}">
+                                                                <Grid>
+                                                                    <ContentPresenter />
+                                                                    <Border x:Name="selected" Width="18" Height="18" CornerRadius="9"
+                                                                            Background="{StaticResource Accent}" Margin="0,5,5,0"
+                                                                            HorizontalAlignment="Right" VerticalAlignment="Top" Visibility="Collapsed">
+                                                                        <TextBlock Text="&#xE73E;" FontFamily="{StaticResource Icons}" FontSize="10"
+                                                                                   Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                                    </Border>
+                                                                </Grid>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter TargetName="option" Property="Background" Value="{StaticResource Bg3}" />
+                                                                </Trigger>
+                                                                <Trigger Property="IsSelected" Value="True">
+                                                                    <Setter TargetName="option" Property="Background" Value="{StaticResource AccentSoft}" />
+                                                                    <Setter TargetName="option" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                                                    <Setter TargetName="selected" Property="Visibility" Value="Visible" />
+                                                                </Trigger>
+                                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                                    <Setter TargetName="option" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel>
+                                                    <!-- 16:9 at any column width; the picture fills it with rounded corners. -->
+                                                    <Viewbox Stretch="Uniform">
+                                                        <Border Width="320" Height="180" CornerRadius="10" Background="{StaticResource Bg3}">
+                                                            <Border CornerRadius="10">
+                                                                <Border.Background>
+                                                                    <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill"
+                                                                                RenderOptions.BitmapScalingMode="HighQuality" />
+                                                                </Border.Background>
+                                                            </Border>
+                                                        </Border>
+                                                    </Viewbox>
+                                                    <TextBlock Text="{Binding Label}" FontSize="12" Margin="2,6,2,0"
+                                                               Foreground="{StaticResource Text}" TextWrapping="NoWrap"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </ui:SettingCard.Footer>
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE735;" Title="Celebrations"
+                                            Keywords="workflow wall celebrate celebration confetti firework applause finish done quest complete"
+                                            Description="A moment of under three seconds over an agent that really finishes - its Bridge task, its todo list or the central planner's assignments: a firework over its tavern, confetti in its office room, applause on the floor, a gold ring on the graph. Occasional plays about one finish in three, and always a whole Bridge run. Never for an error or a Stop, and never while animation is off.">
+                                <ComboBox x:Name="WallCelebrationsPicker" SelectedValuePath="Key" TextSearch.TextPath="Label" MinWidth="160"
+                                          SelectionChanged="OnWallCelebrationsChanged" AutomationProperties.Name="Wall celebrations">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate><TextBlock Text="{Binding Label}" Style="{StaticResource PickerText}" /></DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE767;" Title="Sounds"
+                                            Keywords="workflow wall sound sounds audio earcon chime arpeggio volume"
+                                            Description="Short chimes from the open wall when an agent starts, finishes, needs you or fails, and an arpeggio when a whole Bridge run completes. At most one of each kind every twelve seconds, and only while the wall is on screen. Toast sounds are not affected.">
+                                <ToggleButton x:Name="WallSoundsToggle" Style="{StaticResource Switch}"
+                                              Checked="OnWallSoundsChanged" Unchecked="OnWallSoundsChanged"
+                                              AutomationProperties.Name="Play workflow wall sounds" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE790;" Title="Guild colours"
+                                            Keywords="workflow wall provider colour color guild claude codex glm villager tabard shirt random"
+                                            Description="Villagers and office workers wear their provider's colour - Claude amber, Codex teal, GLM indigo - with a legend on the wall. Off picks a colour per agent at random. Hair and skin stay each agent's own.">
+                                <ToggleButton x:Name="GuildColoursToggle" Style="{StaticResource Switch}"
+                                              Checked="OnGuildColoursChanged" Unchecked="OnGuildColoursChanged"
+                                              AutomationProperties.Name="Dress wall agents in provider guild colours" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE80F;" Title="Town improvements"
+                                            Keywords="workflow wall achievement milestone decoration flower lantern weathervane plaque banner certificate pixel office desk computer upgrade furnish tokens"
+                                            Description="Each project's building and office room quietly earn upgrades from its own history: flower boxes after 100 turns, lanterns after a million tokens, a weathervane once a Bridge has run there, a plaque after 1,000 lines changed, a banner once five agents worked there at once. Hover the plaque to see when each was earned. In the pixel office a project's room starts with bare walls and is furnished as its directory uses tokens, and each agent starts at a junk desk that its own chat's tokens upgrade, so a new chat's agents start over. Hover a room or desk to see what its next look takes. No badges, scores or notifications.">
+                                <ToggleButton x:Name="TownImprovementsToggle" Style="{StaticResource Switch}"
+                                              Checked="OnTownImprovementsChanged" Unchecked="OnTownImprovementsChanged"
+                                              AutomationProperties.Name="Show town improvements on the wall" />
+                            </ui:SettingCard>
+                        </ui:SettingGroup>
+
+                        <!-- Read by every telemetry window, so none of them is filed under one window's row. -->
+                        <ui:SettingGroup Header="All telemetry windows" Keywords="telemetry hud wall monitor workflow display screen"
+                                         Description="Where the telemetry windows open, and how they look and move.">
+                            <ui:SettingCard Glyph="&#xE7F4;" Title="Open on the second display"
+                                            Description="Each telemetry window opens on whichever display VibeCode is not on, so watching it never means covering what it reports on. Drag one elsewhere and it stays there; this only decides where a window goes when it would otherwise land on top of the app.">
+                                <ToggleButton x:Name="TelemetryCompanionDisplayToggle" Style="{StaticResource Switch}"
+                                              Checked="OnTelemetryCompanionDisplayChanged" Unchecked="OnTelemetryCompanionDisplayChanged"
+                                              AutomationProperties.Name="Open telemetry on the second display" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE771;" Title="Fit theme" Keywords="theme borderless background wallpaper art cli match look"
+                                            Description="The workflow wall, the HUD, the full-screen telemetry wall wear the app's look instead of their own solid panels: your background art behind them, and thin outlines in place of filled panels when the app is borderless. In CLI mode they are already terminal-styled. Open windows update straight away.">
+                                <ToggleButton x:Name="TelemetryFitThemeToggle" Style="{StaticResource Switch}"
+                                              Checked="OnTelemetryFitThemeChanged" Unchecked="OnTelemetryFitThemeChanged"
+                                              AutomationProperties.Name="Telemetry windows fit the app theme" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE9D2;" Title="Live animation"
+                                            Description="Bars and trend lines travel to each new reading instead of jumping to it, the headline figures count across, and the sparklines keep a slow ripple so a glance tells you the window is still live. Every figure still settles on the real one. On the workflow wall it also runs the scene's motion and the celebrations.">
+                                <ToggleButton x:Name="TelemetryAnimationToggle" Style="{StaticResource Switch}"
+                                              Checked="OnTelemetryAnimationChanged" Unchecked="OnTelemetryAnimationChanged"
+                                              AutomationProperties.Name="Animate the telemetry windows" />
+                            </ui:SettingCard>
+                        </ui:SettingGroup>
                     </ui:SettingPage>
                 </ScrollViewer>
 
                 <!-- ============================== Bridge & agents ============================== -->
                 <ScrollViewer x:Name="PaneBridge" VerticalScrollBarVisibility="Visible" Visibility="Collapsed">
                     <ui:SettingPage>
-                        <ui:SettingHeading Title="Bridge &amp; agents" Keywords="bridge agents peer messages mailbox unread read answered swarm workers supervision" Description="How many agents may run together, how much they tell each other, and the worker limit for each chat."/>
+                        <ui:SettingHeading Title="Bridge &amp; agents"
+                                           Keywords="bridge agents peer messages mailbox unread read answered supervision"
+                                           Description="How many agents may run together, how much they tell each other, and how stalled agents are supervised." />
 
                         <ui:SettingGroup Header="Bridge">
-                            <ui:SettingCard Glyph="" Title="Maximum agents per Bridge" Keywords="limit count" ValueText="{Binding Value, ElementName=BridgeAgentLimitSlider, StringFormat={}{0:0}}" Description="Each Bridge can grow to this many agents. Lowering the limit never closes agents that are already running. Nine is the default.">
-                                <Slider x:Name="BridgeAgentLimitSlider" Minimum="4" Maximum="17" TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="2" ValueChanged="OnBridgeAgentLimitChanged" AutomationProperties.Name="Maximum agents per Bridge"/>
+                            <ui:SettingCard Glyph="&#xE7F4;" Title="Maximum agents per Bridge" Keywords="limit count panes team robot"
+                                            ValueText="{Binding Value, ElementName=BridgeAgentLimitSlider, StringFormat={}{0:0}}"
+                                            Description="4–20 agents with a pane of their own, including orchestrators and workers. Agents a pane's robot adds to its team don't count; each pane's team can grow to the same number. Nine is the recommended default; larger teams use more memory and provider capacity. Lowering the limit never closes running agents.">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="76" /></Grid.ColumnDefinitions>
+                                        <Slider x:Name="BridgeAgentLimitSlider" Minimum="{Binding Source={x:Static svc:BridgeAgentPolicy.MinimumAgentLimit}}"
+                                                Maximum="{Binding Source={x:Static svc:BridgeAgentPolicy.MaximumAgentLimit}}" TickFrequency="1"
+                                                IsSnapToTickEnabled="True" SmallChange="1" LargeChange="2" Margin="0,0,12,0" VerticalAlignment="Center"
+                                                ValueChanged="OnBridgeAgentLimitChanged" AutomationProperties.Name="Maximum agents per Bridge slider" />
+                                        <TextBox x:Name="BridgeAgentLimitBox" Grid.Column="1" MinHeight="34" VerticalContentAlignment="Center"
+                                                 TextChanged="OnBridgeAgentLimitTextChanged" AutomationProperties.Name="Maximum agents per Bridge"
+                                                 AutomationProperties.HelpText="Enter a whole number from 4 to 20. Nine is recommended." />
+                                    </Grid>
+                                    <TextBlock x:Name="BridgeAgentLimitError" Foreground="{DynamicResource Red}" TextWrapping="Wrap"
+                                               Visibility="Collapsed" Margin="0,6,0,0" AutomationProperties.LiveSetting="Polite" />
+                                </StackPanel>
                             </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Agents can message each other" Keywords="peer mailbox msg" Description="Agents can send direct messages to coordinate overlapping work or ask a peer for context. When disabled, they can still check the roster, task status and automatic file-edit history.">
-                                <ToggleButton x:Name="BridgePeerMessagingToggle" Style="{StaticResource Switch}" Checked="OnBridgePeerMessagingChanged" Unchecked="OnBridgePeerMessagingChanged" AutomationProperties.Name="Agents can message each other"/>
+                            <ui:SettingCard Glyph="&#xE777;" Title="Pace work before usage limits"
+                                            Keywords="usage limit rate quota account switch steer hold threshold percent"
+                                            ValueText="{Binding Value, ElementName=PacingThresholdSlider, StringFormat={}{0:0}%}"
+                                            Description="When a Claude account reports this much of its five-hour or weekly limit used, the Bridge holds new assignments for it until the limit resets or usage drops, and the robot adds new teammates on another signed-in account. Agents already working finish normally. 100% waits until the provider refuses.">
+                                <Slider x:Name="PacingThresholdSlider" Minimum="50" Maximum="100" TickFrequency="5"
+                                        SmallChange="5" LargeChange="10" IsSnapToTickEnabled="True"
+                                        ValueChanged="OnPacingThresholdChanged" AutomationProperties.Name="Usage at which new Bridge work moves off an account" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE8BD;" Title="Agents can message each other" Keywords="peer mailbox msg"
+                                            Description="Agents can send direct messages to coordinate overlapping work or ask a peer for context. When disabled, they can still check the roster, task status and automatic file-edit history.">
+                                <ToggleButton x:Name="BridgePeerMessagingToggle" Style="{StaticResource Switch}"
+                                              Checked="OnBridgePeerMessagingChanged" Unchecked="OnBridgePeerMessagingChanged"
+                                              AutomationProperties.Name="Agents can message each other" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE950;" Title="Serve Bridge tools in-process" Keywords="mcp helper process http memory bridge-mcp startup"
+                                            Description="Agents reach their Bridge tools through a private local endpoint inside VibeCode instead of starting a helper process each (about 30 MB and 1–2 s per agent). Turn off to give every agent its own helper again. Applies when a chat next starts or reconnects; if the endpoint cannot start, agents get helpers automatically.">
+                                <ToggleButton x:Name="BridgeToolsInProcessToggle" Style="{StaticResource Switch}"
+                                              Checked="OnBridgeToolsInProcessChanged" Unchecked="OnBridgeToolsInProcessChanged"
+                                              AutomationProperties.Name="Serve Bridge tools in-process" />
                             </ui:SettingCard>
                         </ui:SettingGroup>
 
-                        <ui:SettingGroup Header="Agent swarms" Keywords="child workers subagents" Description="Ask Claude, Codex to use subagents in your message, including in Bridge chats. Each chat coordinates its own workers. Lower limits apply to the next message; reconnect an existing chat to raise its limit.">
-                            <ui:SettingCard Glyph="" Title="Maximum child workers" ValueText="{Binding Value, ElementName=SwarmMaxSlider, StringFormat={}{0:0}}" Description="Maximum child workers per chat request. The AI can use fewer when the task is small. Default: 6. Maximum: 16.">
-                                <Slider x:Name="SwarmMaxSlider" Minimum="2" Maximum="16" TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="2" ValueChanged="OnSwarmMaxChanged" AutomationProperties.Name="Maximum swarm workers"/>
+                        <ui:SettingGroup Header="Supervision" Keywords="stalled stuck nudge restart takeover watchdog"
+                                         Description="A dispatched agent can hang mid-tool, end a turn with nothing to say, loop, or die — and none of those announce themselves. Supervision watches every delegated agent and escalates on a bounded ladder: ask it to finish, then cancel and re-run it on the same task, then hand the task to the orchestrator. Every step is written to supervision-log.txt.">
+                            <ui:SettingCard Glyph="&#xE9D9;" Title="Supervise delegated agents"
+                                            Description="Applies to any Bridge with a manager.">
+                                <ToggleButton x:Name="SupervisionEnabledToggle" Style="{StaticResource Switch}"
+                                              Checked="OnSupervisionEnabledChanged" Unchecked="OnSupervisionEnabledChanged"
+                                              AutomationProperties.Name="Supervise delegated agents" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE916;" Title="Stalled after"
+                                            ValueText="{Binding Value, ElementName=SupervisionStaleSlider, StringFormat={}{0:0}s}"
+                                            IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}"
+                                            Description="Seconds an agent may run without producing any output before it counts as stalled.">
+                                <Slider x:Name="SupervisionStaleSlider" Minimum="30" Maximum="1800"
+                                        TickFrequency="30" IsSnapToTickEnabled="True" SmallChange="30" LargeChange="120"
+                                        ValueChanged="OnSupervisionStaleChanged" AutomationProperties.Name="Stalled after" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE823;" Title="Reply window after a nudge"
+                                            ValueText="{Binding Value, ElementName=SupervisionGraceSlider, StringFormat={}{0:0}s}"
+                                            IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}"
+                                            Description="Seconds a nudged agent has to answer before the supervisor escalates to a restart.">
+                                <Slider x:Name="SupervisionGraceSlider" Minimum="30" Maximum="600"
+                                        TickFrequency="15" IsSnapToTickEnabled="True" SmallChange="15" LargeChange="60"
+                                        ValueChanged="OnSupervisionGraceChanged" AutomationProperties.Name="Reply window after a nudge" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE72C;" Title="Restarts before takeover"
+                                            ValueText="{Binding Value, ElementName=SupervisionRestartsSlider, StringFormat={}{0:0}}"
+                                            IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}"
+                                            Description="How many times a stuck agent is cancelled and re-run on the same task before the orchestrator completes it directly. Zero means go straight to takeover.">
+                                <Slider x:Name="SupervisionRestartsSlider" Minimum="0" Maximum="3"
+                                        TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="1"
+                                        ValueChanged="OnSupervisionRestartsChanged" AutomationProperties.Name="Restarts before takeover" />
                             </ui:SettingCard>
                         </ui:SettingGroup>
 
-                        <ui:SettingGroup Header="Supervision" Keywords="stalled stuck nudge restart takeover watchdog" Description="A dispatched agent can hang mid-tool, end a turn with nothing to say, loop, or die — and none of those announce themselves. Supervision watches every delegated agent and escalates on a bounded ladder: ask it to finish, then cancel and re-run it on the same task, then hand the task to the orchestrator. Every step is written to supervision-log.txt.">
-                            <ui:SettingCard Glyph="" Title="Supervise delegated agents" Description="Applies to any Bridge with a manager.">
-                                <ToggleButton x:Name="SupervisionEnabledToggle" Style="{StaticResource Switch}" Checked="OnSupervisionEnabledChanged" Unchecked="OnSupervisionEnabledChanged" AutomationProperties.Name="Supervise delegated agents"/>
+                        <ui:SettingGroup Header="Dual monitor" Keywords="display screen second window"
+                                         Description="Both windows share one app and close together.">
+                            <ui:SettingCard Glyph="&#xE7F4;" Title="Spread Bridge across displays"
+                                            Description="With 3 or more agents, keep agents 1–2 here and open the remaining Bridge panes on another display.">
+                                <ToggleButton x:Name="DualMonitorBridgeToggle" Style="{StaticResource Switch}"
+                                              Checked="OnDualMonitorBridgeChanged" Unchecked="OnDualMonitorBridgeChanged"
+                                              AutomationProperties.Name="Dual-monitor Bridge" />
                             </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Stalled after" ValueText="{Binding Value, ElementName=SupervisionStaleSlider, StringFormat={}{0:0}s}" IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}" Description="Seconds an agent may run without producing any output before it counts as stalled.">
-                                <Slider x:Name="SupervisionStaleSlider" Minimum="30" Maximum="1800" TickFrequency="30" IsSnapToTickEnabled="True" SmallChange="30" LargeChange="120" ValueChanged="OnSupervisionStaleChanged" AutomationProperties.Name="Stalled after"/>
-                            </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Reply window after a nudge" ValueText="{Binding Value, ElementName=SupervisionGraceSlider, StringFormat={}{0:0}s}" IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}" Description="Seconds a nudged agent has to answer before the supervisor escalates to a restart.">
-                                <Slider x:Name="SupervisionGraceSlider" Minimum="30" Maximum="600" TickFrequency="15" IsSnapToTickEnabled="True" SmallChange="15" LargeChange="60" ValueChanged="OnSupervisionGraceChanged" AutomationProperties.Name="Reply window after a nudge"/>
-                            </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Restarts before takeover" ValueText="{Binding Value, ElementName=SupervisionRestartsSlider, StringFormat={}{0:0}}" IsEnabled="{Binding IsChecked, ElementName=SupervisionEnabledToggle}" Description="How many times a stuck agent is cancelled and re-run on the same task before the orchestrator completes it directly. Zero means go straight to takeover.">
-                                <Slider x:Name="SupervisionRestartsSlider" Minimum="0" Maximum="3" TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="1" ValueChanged="OnSupervisionRestartsChanged" AutomationProperties.Name="Restarts before takeover"/>
-                            </ui:SettingCard>
-                        </ui:SettingGroup>
-
-                        <ui:SettingGroup Header="Dual monitor" Keywords="display screen second window" Description="Both windows share one app and close together.">
-                            <ui:SettingCard Glyph="" Title="Spread Bridge across displays" Description="With 3 or more agents, keep agents 1–2 here and open the remaining Bridge panes on another display.">
-                                <ToggleButton x:Name="DualMonitorBridgeToggle" Style="{StaticResource Switch}" Checked="OnDualMonitorBridgeChanged" Unchecked="OnDualMonitorBridgeChanged" AutomationProperties.Name="Dual-monitor Bridge"/>
-                            </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Second working shell" Description="Opens a second full VibeCode shell on another display. Each window remembers its own active chat; both share live sessions and chat controls, while accounts and Settings stay in the primary window.">
-                                <ToggleButton x:Name="DualMonitorDoubleSessionsToggle" Style="{StaticResource Switch}" Checked="OnDualMonitorDoubleSessionsChanged" Unchecked="OnDualMonitorDoubleSessionsChanged" AutomationProperties.Name="Dual-monitor double sessions"/>
+                            <ui:SettingCard Glyph="&#xE737;" Title="Second working shell"
+                                            Description="Opens a second full VibeCode shell on another display. Each window remembers its own active chat; both share live sessions and chat controls, while accounts and Settings stay in the primary window.">
+                                <ToggleButton x:Name="DualMonitorDoubleSessionsToggle" Style="{StaticResource Switch}"
+                                              Checked="OnDualMonitorDoubleSessionsChanged" Unchecked="OnDualMonitorDoubleSessionsChanged"
+                                              AutomationProperties.Name="Dual-monitor double sessions" />
                             </ui:SettingCard>
                         </ui:SettingGroup>
                     </ui:SettingPage>
@@ -1189,8 +1445,9 @@
                                                                             </ui:InfoTip.Text>
                                                                         </ui:InfoTip>
                                                                     </Grid>
-                                                                    <TextBlock FontSize="10.5" Foreground="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap">
-                                                                        <Run Text="{Binding TransportLabel, Mode=OneWay}" Foreground="{StaticResource Accent}"/><Run Text="  ·  "/><Run Text="{Binding TargetsSummary, Mode=OneWay}"/>
+                                                                    <TextBlock FontSize="10.5" Foreground="{StaticResource Muted}" Margin="0,2,0,0"
+                                                                               TextWrapping="Wrap">
+                                                                        <Run Text="{Binding TransportLabel, Mode=OneWay}" Foreground="{StaticResource Accent}" /><Run Text="  ·  " /><Run Text="{Binding TargetsSummary, Mode=OneWay}" /><Run Text="{Binding SharingSummary, Mode=OneWay}" />
                                                                     </TextBlock>
                                                                 </StackPanel>
                                                             </DockPanel>
@@ -1212,6 +1469,79 @@
                             </ui:SettingCard>
                         </ui:SettingGroup>
 
+                        <!-- Skills: like MCP servers, a dropdown list you manage. VibeCode installs a skill's folder into
+                             Claude Code's and Codex's skills folders; skills installed some other way are listed, untouched. -->
+                        <ui:SettingGroup x:Name="SectionSkills" Header="Skills"
+                                         Keywords="skills agent skills skill.md install download claude codex impeccable instructions">
+                            <ui:SettingCard x:Name="SkillsCard" Glyph="&#xE82D;" Title="Skills"
+                                            IsExpandable="True" IsExpanded="False" Keywords="add skill find skill github"
+                                            Description="Folders of instructions (SKILL.md) that Claude Code and Codex load when a task calls for them. Name a skill and the AI finds where it is published, or paste its GitHub link; VibeCode downloads it, checks it, and installs it for the CLIs you choose. New chats pick it up.">
+                                <ui:SettingCard.Status>
+                                    <TextBlock x:Name="SkillsCountText" Style="{StaticResource RowStatus}" Text="No skills" />
+                                </ui:SettingCard.Status>
+                                <Button Style="{StaticResource SettingButtonPrimary}" Click="OnAddSkill" AutomationProperties.Name="Add skill">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE710;" FontFamily="{StaticResource Icons}" FontSize="10" VerticalAlignment="Center" />
+                                        <TextBlock Text="Add skill" FontSize="12" Margin="7,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" />
+                                    </StackPanel>
+                                </Button>
+                                <ui:SettingCard.Footer>
+                                    <StackPanel>
+                                        <TextBlock x:Name="SkillsEmpty" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="0,0,0,8"
+                                                   Text="No skills installed by VibeCode yet." />
+                                        <ItemsControl x:Name="SkillsList">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Style="{StaticResource InsetItem}" Padding="12,10" Margin="0,0,0,8">
+                                                        <DockPanel>
+                                                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="8,4"
+                                                                    VerticalAlignment="Center" Click="OnRemoveSkill" AutomationProperties.Name="Remove skill">
+                                                                <TextBlock Text="Remove" Foreground="{StaticResource Red}" FontSize="11.5" />
+                                                            </Button>
+                                                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="8,4" Margin="0,0,2,0"
+                                                                    VerticalAlignment="Center" Click="OnOpenSkillFolder" AutomationProperties.Name="Open skill folder">
+                                                                <TextBlock Text="Open folder" Foreground="{StaticResource Muted}" FontSize="11.5" />
+                                                            </Button>
+                                                            <StackPanel VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Name}" FontSize="13" Foreground="{StaticResource Text}" TextWrapping="Wrap" />
+                                                                <TextBlock Text="{Binding ShortDescription}" FontSize="11" Foreground="{StaticResource Muted}"
+                                                                           TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                                <TextBlock FontSize="10.5" Foreground="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap">
+                                                                    <Run Text="{Binding TargetsSummary, Mode=OneWay}" Foreground="{StaticResource Accent}" /><Run Text="  ·  " /><Run Text="{Binding SourceSummary, Mode=OneWay}" />
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                        </DockPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock x:Name="FoundSkillsHeading" Text="Also in the CLIs' skills folders (installed outside VibeCode, left as they are)"
+                                                   Foreground="{StaticResource Faint}" FontSize="11" Margin="0,4,0,6" TextWrapping="Wrap" />
+                                        <ItemsControl x:Name="FoundSkillsList">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Style="{StaticResource InsetItem}" Padding="12,8" Margin="0,0,0,6">
+                                                        <StackPanel>
+                                                            <TextBlock FontSize="12" Foreground="{StaticResource Text}" TextWrapping="Wrap">
+                                                                <Run Text="{Binding Name, Mode=OneWay}" /><Run Text="  ·  " Foreground="{StaticResource Faint}" /><Run Text="{Binding Location, Mode=OneWay}" Foreground="{StaticResource Accent}" />
+                                                            </TextBlock>
+                                                            <TextBlock Text="{Binding ShortDescription}" FontSize="10.5" Foreground="{StaticResource Muted}"
+                                                                       TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                            <TextBlock Text="Only install skills you trust." FontSize="11" Foreground="{StaticResource Faint}" VerticalAlignment="Center" />
+                                            <ui:InfoTip Width="17" Height="17" FontSize="11" Margin="3,0,0,0"
+                                                        Text="A skill's instructions guide the agent, and scripts it bundles can run with the chat's permissions. Tool approvals still follow each chat's permission mode. VibeCode only replaces or removes the copies it installed." />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </ui:SettingCard.Footer>
+                            </ui:SettingCard>
+                        </ui:SettingGroup>
+
                         <!-- Each extension is an ordinary row; switched on, it opens its own setup underneath.
                              IsExpanded follows the service's persisted Enabled flag rather than the switch. -->
                         <ui:SettingGroup x:Name="SectionExtensions" Header="Extensions" Keywords="optional services titlebar tools plugins" Description="Optional services and titlebar tools that run alongside Claude Code. Switching one off puts away everything it added.">
@@ -1219,6 +1549,33 @@
                                 <StackPanel Orientation="Horizontal">
                                     <Button Style="{StaticResource SettingButton}" Content="Open memory map" Margin="0,0,12,0" Click="OnOpenSecondBrainSettings" Visibility="{Binding IsChecked, ElementName=SecondBrainToggle, Converter={StaticResource BoolVis}}" AutomationProperties.Name="Open Second Brain memory map"/>
                                     <ToggleButton x:Name="SecondBrainToggle" Style="{StaticResource Switch}" Checked="OnSecondBrainEnabledChanged" Unchecked="OnSecondBrainEnabledChanged" AutomationProperties.Name="Enable Second Brain extension"/>
+                                </StackPanel>
+                            </ui:SettingCard>
+
+                            <!-- Memory and context upkeep (SettingsWindow.MemoryContext.cs). Retention and the checkpoint nudge apply
+                                 with or without the Second Brain; the background review feeds its To review list, so it needs it. -->
+                            <ui:SettingCard Glyph="&#xE74D;" Title="Keep memory and context for"
+                                            ValueText="{Binding Value, ElementName=MemoryRetentionSlider, StringFormat={}{0:0} days}"
+                                            Keywords="retention delete old memories checkpoints notes notebook suggestions archives seven days storage cleanup"
+                                            Description="Saved and pinned memories, task checkpoints, Bridge prompts, review suggestions, CLI memory files and Bridge peer-chat archives unused for this long are deleted. Your chats and transcripts are never deleted.">
+                                <Slider x:Name="MemoryRetentionSlider" Minimum="1" Maximum="90" TickFrequency="1" IsSnapToTickEnabled="True"
+                                        SmallChange="1" LargeChange="7" AutomationProperties.Name="Keep memory and context for, in days" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE81C;" Title="Checkpoint nudge"
+                                            ValueText="{Binding Value, ElementName=CheckpointNudgeSlider, StringFormat={}{0:0}%}"
+                                            Keywords="context full compaction compact checkpoint nudge handoff fresh chat window"
+                                            Description="When a chat's context passes this fill, VibeCode asks the agent once to save a checkpoint of its constraints and decisions. Claude also saves one right before it compacts, and providers that cannot compact offer to continue in a fresh chat. 0 turns the nudge off.">
+                                <Slider x:Name="CheckpointNudgeSlider" Minimum="0" Maximum="95" TickFrequency="5" IsSnapToTickEnabled="True"
+                                        SmallChange="5" LargeChange="10" AutomationProperties.Name="Checkpoint nudge threshold percent" />
+                            </ui:SettingCard>
+                            <ui:SettingCard Glyph="&#xE9D9;" Title="Background memory review"
+                                            Keywords="background review digest suggestions memories subscription usage tokens idle approve"
+                                            Description="Uses your subscription usage. After 10 idle minutes, or when a chat closes or compacts, a tools-less session on the cheapest model of that chat's own signed-in provider (Claude, Codex or GLM) proposes a five-line digest, up to three memories and project card updates. Nothing is saved until you approve it in the Second Brain's To review list, and its tokens appear in Usage. Needs the Second Brain; off by default.">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Uses your subscription usage" FontSize="11" Foreground="{StaticResource Faint}"
+                                               VerticalAlignment="Center" Margin="0,0,12,0" />
+                                    <ToggleButton x:Name="BackgroundMemoryReviewToggle" Style="{StaticResource Switch}"
+                                                  AutomationProperties.Name="Background memory review (uses your subscription usage)" />
                                 </StackPanel>
                             </ui:SettingCard>
 
@@ -1344,7 +1701,10 @@
                                         </DockPanel>
 
                                         <DockPanel Margin="0,8,0,0">
-                                            <Button x:Name="WeatherLocationButton" DockPanel.Dock="Left" Style="{StaticResource SettingButton}" Click="OnWeatherGetLocation" ToolTip="Uses your approximate network location" AutomationProperties.Name="Get my location">
+                                            <Button x:Name="WeatherLocationButton" DockPanel.Dock="Left"
+                                                    Style="{StaticResource SettingButton}" Click="OnWeatherGetLocation"
+                                                    ToolTip="Automatically gets your weather using your approximate network location"
+                                                    AutomationProperties.Name="Auto get my weather">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="11.5" Foreground="{StaticResource WeatherBlue}" Margin="0,0,7,0" VerticalAlignment="Center"/>
                                                     <TextBlock Text="Use my location" FontSize="12" VerticalAlignment="Center"/>
@@ -1413,6 +1773,15 @@
                                 </ui:SettingCard.Footer>
                             </ui:SettingCard>
 
+                            <!-- What answers when Groq is off or out of reach (a VPN it refuses). -->
+                            <ui:SettingCard Glyph="&#xE720;" Title="GPT Whisper"
+                                            Keywords="speech to text dictation whisper gpt windows default recognizer offline engine fast accurate"
+                                            Description="Used whenever Groq is off or can't be reached. On: GPT Whisper, the accurate one, a 1.5 GB model on your GPU that loads when you start talking. Off: Windows' default speech to text, with nothing to load and near instant, but rougher with names, jargon and punctuation.">
+                                <ToggleButton x:Name="GptWhisperToggle" Style="{StaticResource Switch}"
+                                              Checked="OnGptWhisperChanged" Unchecked="OnGptWhisperChanged"
+                                              AutomationProperties.Name="Use GPT Whisper for dictation" />
+                            </ui:SettingCard>
+
                             <!-- ===== Phone =====
                                  Ships OFF: the phone button opens a window that can start a listening socket, so it stays
                                  out of the titlebar until it is asked for. Turning this off again also stops the bridge -
@@ -1432,7 +1801,7 @@
                 </ScrollViewer>
 
                 <!-- ============================== Usage ==============================
-                     A dashboard, not a list of settings, so everything down to the telemetry rows is its own. -->
+                     A dashboard, not a list of settings. The live telemetry windows moved to Appearance. -->
                 <ScrollViewer x:Name="PaneUsage" VerticalScrollBarVisibility="Visible" Visibility="Collapsed">
                     <ui:SettingPage MaxContentWidth="700">
                         <ui:SettingHeading Title="Usage" Keywords="tokens cost history statistics electricity energy water telemetry charts spend" Description="Every model call VibeCode makes is recorded on this machine — which model, how many tokens in and out, and what those tokens are worth at the provider's public list price. Nothing is uploaded anywhere."/>
@@ -1620,29 +1989,26 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- The live windows sit BELOW everything the range filter scopes, and outside its reach:
-                             nothing in this group is filtered by it - these are actions, and both windows carry
-                             their own range control. Reading order is the page's own numbers first, then the two
-                             ways to leave them running on another screen. -->
-                        <ui:SettingGroup Header="Live telemetry" Margin="0,26,0,0" Keywords="hud wall dashboard monitor">
-                            <ui:SettingCard Glyph="&#xE8D4;" Title="Workflow Telemetry Wall" Keywords="workflow agents projects directories graph live activity"
-                                            Description="A live map of open projects and their agents, including background Bridges. See who's working, waiting or idle, filter by directory, and open a chat from its node.">
-                                <Button Style="{StaticResource SettingButtonPrimary}" Content="Open workflow wall"
-                                        Click="OnOpenWorkflowWall" AutomationProperties.Name="Open the Workflow Telemetry Wall" />
-                            </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Telemetry HUD" Keywords="always on top full screen wall" Description="A compact always-on-top window covering the last 24 hours — spend, tokens, electricity and water, throughput hour by hour, and the split by model. Built to be parked on a spare screen and left running. The full-screen wall shows the same telemetry over anything from the last hour to the last 30 days, and remembers the range you leave it on.">
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Style="{StaticResource SettingButton}" Content="Full-screen wall" Click="OnOpenTelemetryWall" AutomationProperties.Name="Open the full-screen telemetry wall"/>
-                                    <Button Style="{StaticResource SettingButtonPrimary}" Content="Open HUD" Margin="6,0,0,0" Click="OnOpenTelemetryHud" AutomationProperties.Name="Open the telemetry HUD"/>
-                                </StackPanel>
-                            </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Open on the second display" Description="Sends it to whichever display VibeCode is not on, so watching it never means covering the thing it is reporting on. Drag it elsewhere and it stays there — this only decides where it goes when it would otherwise land on top of the app.">
-                                <ToggleButton x:Name="TelemetryCompanionDisplayToggle" Style="{StaticResource Switch}" Checked="OnTelemetryCompanionDisplayChanged" Unchecked="OnTelemetryCompanionDisplayChanged" AutomationProperties.Name="Open telemetry on the second display"/>
-                            </ui:SettingCard>
-                            <ui:SettingCard Glyph="" Title="Live animation" Description="Bars and trend lines travel to each new reading instead of jumping to it, the headline figures count across, and the sparklines keep a slow ripple so a glance tells you the window is still live. Every figure still settles on the real one.">
-                                <ToggleButton x:Name="TelemetryAnimationToggle" Style="{StaticResource Switch}" Checked="OnTelemetryAnimationChanged" Unchecked="OnTelemetryAnimationChanged" AutomationProperties.Name="Animate the telemetry windows"/>
+                    </ui:SettingPage>
+                </ScrollViewer>
+                <ScrollViewer x:Name="PaneDeveloper" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                    <ui:SettingPage>
+                        <ui:SettingHeading Title="Developer" Keywords="CLI console terminal agents" />
+                        <TextBlock Text="A separate terminal for your coding teams, with the same project and MCP tools. Available agents can take follow-up work."
+                                   Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16" FontSize="13" />
+                        <ui:SettingGroup Header="CLI" Description="Your agents, in a separate terminal.">
+                            <ui:SettingCard Title="Vibe Code Terminal" Glyph="&#xE756;"
+                                            Keywords="CLI console command line black green developer team"
+                                            Description="Enable Open in Terminal in a chat's right-click menu. Keeps its history, project, provider and MCP tools. Bridge and Advanced Bridge chats are not supported.">
+                                <ToggleButton x:Name="TerminalEnabledToggle" Style="{StaticResource Switch}"
+                                              Checked="OnTerminalEnabledChanged" Unchecked="OnTerminalEnabledChanged"
+                                              AutomationProperties.Name="Enable Vibe Code Terminal" />
                             </ui:SettingCard>
                         </ui:SettingGroup>
+                        <TextBlock Text="Turn this on, then right-click a chat and choose Open in Terminal. Available for individual chats and agent teams; Bridge and Advanced Bridge chats stay in the desktop."
+                                   Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,14,0,0" FontSize="13" />
+                        <TextBlock Text="VibeCode minimizes when a terminal opens. Close Terminal or type /exit to return; your agents keep working. Turning this off hides the menu option without interrupting open terminals."
+                                   Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,12,0,0" FontSize="13" />
                     </ui:SettingPage>
                 </ScrollViewer>
             </Grid>

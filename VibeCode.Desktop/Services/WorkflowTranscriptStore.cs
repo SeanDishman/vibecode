@@ -41,7 +41,12 @@ public sealed class WorkflowTranscriptStore
     private readonly List<string> _started = [];                 // agent ids, in the order the run created them
     private readonly HashSet<string> _finished = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _offsets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _stepOffsets = new(StringComparer.Ordinal);
     private long _journalOffset;
+
+    /// <summary>How far back from the end of a transcript the first look for an agent's current step starts. The
+    /// step is decided by its newest rows; reading a long agent's whole history for it would cost megabytes of JSON.</summary>
+    private const long StepTail = 128 * 1024;
 
     public WorkflowTranscriptStore(string dir) => Dir = dir;
 
@@ -102,6 +107,41 @@ public sealed class WorkflowTranscriptStore
 
     /// <summary>Forget how far we have read, so the next call replays the agent from the beginning.</summary>
     public void Rewind(string agentId) { lock (_gate) _offsets.Remove(agentId); }
+
+    /// <summary>The agent's messages that have appeared since the last call, for following the step it is on. Kept on
+    /// an offset of its own, so this never takes rows from <see cref="ReadNewMessages"/> and the inspector; the first
+    /// call starts near the end of the file instead of replaying all of it.</summary>
+    public IReadOnlyList<JsonObject> ReadNewSteps(string agentId)
+    {
+        var path = Path.Combine(Dir, $"agent-{agentId}.jsonl");
+        long offset;
+        bool known;
+        lock (_gate) known = _stepOffsets.TryGetValue(agentId, out offset);
+        if (!known) offset = LineStartNearEnd(path, StepTail);
+        var rows = ReadNewLines(path, ref offset);
+        lock (_gate) _stepOffsets[agentId] = offset;
+        return rows;
+    }
+
+    /// <summary>The first whole line within <paramref name="bytes"/> of the end of the file; zero for a file no longer
+    /// than that. Found on the bytes themselves, so the read never starts inside a line or a multi-byte character.</summary>
+    private static long LineStartNearEnd(string path, long bytes)
+    {
+        try
+        {
+            if (!File.Exists(path)) return 0;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (fs.Length <= bytes) return 0;
+            fs.Position = fs.Length - bytes;
+            using var reader = new BufferedStream(fs, 8192);
+            for (var at = fs.Length - bytes; reader.ReadByte() is var b and >= 0; at++)
+                if (b == '\n') return at + 1;
+            // One line longer than the whole window: wait for the next one.
+            return fs.Length;
+        }
+        catch (IOException) { return 0; }
+        catch (UnauthorizedAccessException) { return 0; }
+    }
 
     /// <summary>
     /// Read whole JSON lines added since <paramref name="offset"/> and advance it past the last COMPLETE one.

@@ -13,6 +13,8 @@ public enum SpeechState { Idle, Recording, Transcribing, Downloading }
 /// Offline microphone dictation (push-to-talk). Records the default mic at 16 kHz mono 16-bit — exactly the format
 /// Whisper wants, so no resampling — then transcribes locally with Whisper.net (whisper.cpp). The ~1.5 GB English
 /// model is downloaded once to %APPDATA%\VibeCode\whisper on first use; everything after is fully offline, no API key.
+/// When Whisper takes longer than <see cref="WhisperPatience"/>, Windows' own recognizer finishes the dictation instead
+/// (<see cref="WindowsSpeechFallback"/>).
 /// Single instance: only one capture runs at a time (the composer that started it owns it).
 /// </summary>
 public sealed class SpeechService
@@ -23,8 +25,13 @@ public sealed class SpeechService
     private volatile SpeechTranscription? _transcription;
     private void OnSettingsChanged() => _transcription?.SwitchProvider(UsesGroq);
 
-    /// <summary>The current provider attempt's start, refreshed when the same audio moves to another provider.</summary>
+    /// <summary>The current provider attempt's start, refreshed when the same audio moves to another provider and
+    /// when the one-time model download finishes.</summary>
     public DateTime? TranscriptionStartedAtUtc => _transcription?.StartedAtUtc;
+
+    /// <summary>When local Whisper ran past <see cref="WhisperPatience"/> and the current attempt handed its recording
+    /// to Windows' own recognizer as well; null otherwise. The composers say so, since its transcript is rougher.</summary>
+    public DateTime? FallbackStartedAtUtc => _transcription?.FallbackStartedAtUtc;
 
     private static readonly string ModelDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VibeCode", "whisper");
@@ -94,6 +101,19 @@ public sealed class SpeechService
     // away what the user just said, and no retry can get it back.
     private static readonly TimeSpan TranscribeTimeout = TimeSpan.FromSeconds(180);
 
+    // ===================================== WHEN LOCAL WHISPER IS TOO SLOW =====================================
+    // Whisper gets the recording to itself for this long. If it has not answered by then — a saturated machine, the
+    // CPU build, a model load stuck behind a busy disk — the same audio also goes to Windows' own recognizer
+    // (WindowsSpeechFallback: no GPU, no download, a typical clip in a few seconds) and the user gets whichever
+    // produces text first, instead of waiting out the rest of TranscribeTimeout and then losing what they said.
+    // Whisper is NOT stopped at that point: if it answers first, its far better transcript wins and the fallback is
+    // cancelled; if the fallback answers first, Whisper is cancelled. A fallback that hears nothing, or that this
+    // machine cannot run, leaves Whisper going on the original deadline exactly as before.
+    //
+    // 30 s because the GPU path answers in 1-4 s and even the CPU build managed a 10.5 s clip in 16 s on an idle
+    // box: past 30 s the user is waiting on a machine that is struggling, not on Whisper doing its job.
+    private static readonly TimeSpan WhisperPatience = TimeSpan.FromSeconds(30);
+
     /// <summary>How long to wait for NAudio to hand back the finished WAV before salvaging the buffer by hand.
     /// Short, because it is only a header flush — anything longer means the callback is not coming.</summary>
     private static readonly TimeSpan WavFinalizeTimeout = TimeSpan.FromSeconds(5);
@@ -113,7 +133,15 @@ public sealed class SpeechService
         {
             if (_state == value) return;
             _state = value;
-            if (value == SpeechState.Idle) RecordingOwner = null;
+            // Let sessions prepare while the user speaks. Deferring for the entire recording (or a model
+            // download) kept queued prompts on "starting session" for as long as the microphone stayed on.
+            // Yield new startup work only while audio is actually being turned into text.
+            SpeechWorkPriority.SetBusy(value == SpeechState.Transcribing);
+            if (value == SpeechState.Idle)
+            {
+                RecordingOwner = null;
+                if (_factoryLoad is not null) ScheduleModelRelease();   // a quiet spell from here unloads the model
+            }
             // Visual listeners never run on the capture thread and cannot break dictation.
             if (StateChanged is { } handlers)
                 foreach (EventHandler handler in handlers.GetInvocationList())
@@ -127,10 +155,14 @@ public sealed class SpeechService
     /// <summary>The selected dictation provider. A settings change restarts pending audio with that provider.</summary>
     public static bool UsesGroq => GroqSpeechService.Instance.Enabled;
 
+    /// <summary>Settings › GPT Whisper switched off: the local path skips Whisper and uses Windows' default speech to
+    /// text, with no model to download or load.</summary>
+    public static bool UsesWindowsSpeech => !AppSettings.Current.GptWhisperEnabled;
+
     /// <summary>True when the next dictation needs no one-time model download — either the local model is already on
     /// disk, or Groq is doing the transcribing and the local model is never touched at all. The composer uses this
     /// to decide whether to warn about the <see cref="ModelDownloadSize"/> fetch.</summary>
-    public bool ReadyWithoutDownload => UsesGroq || ModelReady;
+    public bool ReadyWithoutDownload => UsesGroq || UsesWindowsSpeech || ModelReady;
 
     // ===================================== THE ONE-TIME DOWNLOAD, WATCHED =====================================
     // At 142 MB a silent download was survivable. At 1.46 GiB it is not: a progress-free "downloading…" that sits
@@ -304,7 +336,8 @@ public sealed class SpeechService
     //      (and, on the GPU build, uploads it to VRAM — which is why the load itself got slightly slower while
     //      inference got 6x faster). It ran on the transcription path, so the user paid for it while staring at
     //      "transcribing…". It now starts the moment the mic goes live and overlaps with the user actually speaking
-    //      — by the time they stop, it is almost always already done. Still built exactly once per process, shared.
+    //      — by the time they stop, it is almost always already done. Built once and shared by every dictation, then
+    //      unloaded after a quiet spell (ModelIdleRelease), because a loaded model holds ~1.46 GB of commit.
     //
     //   3. LOSING THE CPU RACE. whisper.cpp runs inference on native worker threads that inherit the PROCESS
     //      priority class, so on a saturated machine they compete on equal footing with everything else and get
@@ -329,8 +362,11 @@ public sealed class SpeechService
         lock (_factoryGate)
         {
             if (_factoryLoad is { IsCompleted: true, IsCompletedSuccessfully: false }) _factoryLoad = null;
+            var disposal = _modelDisposal;
             return _factoryLoad ??= Task.Run(async () =>
             {
+                // Never alongside the previous model's release: both would be on one GPU device mid-teardown.
+                try { await disposal.ConfigureAwait(false); } catch { /* that dispose's failure is not this load's */ }
                 WhisperNativeRuntime.Configure();
                 // Covers the upgrade that does NOT go through a download — a machine that already had the current
                 // model would otherwise keep the superseded one for ever, since nothing else ever looks.
@@ -338,8 +374,62 @@ public sealed class SpeechService
                 using var boost = CpuBoost.Acquire();     // reading 1.46 GiB + allocating loses the same race inference does
                 var factory = WhisperFactory.FromPath(ModelPath);
                 await CompileGpuPipelinesAsync(factory);  // part of "ready", so the real transcription never waits on it
+                ScheduleModelRelease();                   // a load nobody dictates with still goes after the quiet spell
                 return factory;
             });
+        }
+    }
+
+    /// <summary>How long dictation must go unused before the model is unloaded. Settable for tests only.
+    ///
+    /// A loaded model is not free while it waits: measured on the GPU build (GTX 1660 SUPER), the factory holds
+    /// ~1.46 GB of committed memory for as long as it lives (the WDDM backing for the weights in VRAM, so Task
+    /// Manager's commit size shows it even though little of it is resident), plus the VRAM itself. It used to be
+    /// kept for the rest of the session after one dictation. Disposing it drops the process from ~1.9 GB to ~0.46 GB
+    /// (what stays is the GPU device ggml keeps for the process), and a reload is the same warm-up every dictation
+    /// already starts when the mic goes live, so it overlaps with the user speaking.</summary>
+    internal static TimeSpan ModelIdleRelease { get; set; } = TimeSpan.FromMinutes(5);
+    private System.Threading.Timer? _modelRelease;
+    private Task _modelDisposal = Task.CompletedTask;    // the last release's dispose; the next load starts after it
+
+    /// <summary>(Re)starts the quiet-spell countdown towards <see cref="ReleaseIdleModel"/>.</summary>
+    private void ScheduleModelRelease()
+    {
+        lock (_factoryGate)
+        {
+            _modelRelease ??= new System.Threading.Timer(_ => ReleaseIdleModel(), null, Timeout.Infinite, Timeout.Infinite);
+            _modelRelease.Change(ModelIdleRelease, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    /// <summary>Unloads the model after <see cref="ModelIdleRelease"/> without dictation. Detached under the same gate
+    /// <see cref="LoadFactoryAsync"/> hands it out under, and only while nothing is recording or transcribing, so a
+    /// dictation either got this model before the release or loads a fresh one after it. The dispose itself queues
+    /// behind <see cref="NativeInference"/>: a cancelled or out-raced Whisper can outlive its dictation, and the
+    /// model must never be freed under a running inference.</summary>
+    private void ReleaseIdleModel()
+    {
+        lock (_factoryGate)
+        {
+            var load = _factoryLoad;
+            if (load is null) return;
+            // Busy, or a load still in flight: look again after another quiet spell rather than racing either.
+            if (State != SpeechState.Idle || !load.IsCompleted)
+            {
+                _modelRelease?.Change(ModelIdleRelease, Timeout.InfiniteTimeSpan);
+                return;
+            }
+            _factoryLoad = null;                          // the next dictation's warm-up loads a fresh one
+            if (!load.IsCompletedSuccessfully) return;    // a failed load holds nothing
+            var factory = load.Result;
+            // Published under the gate together with the detach, so a load that starts now waits for this dispose.
+            _modelDisposal = NativeInference.RunAsync(async () =>
+            {
+                await Task.Yield();                       // dispose on the pool, not under this lock
+                factory.Dispose();
+                return true;
+            }, CancellationToken.None);
+            _ = _modelDisposal.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
         }
     }
 
@@ -389,8 +479,10 @@ public sealed class SpeechService
     private void BeginWarmUp()
     {
         // Nothing to warm when Groq is doing the transcribing: the local model is never loaded, so paying for a
-        // 1.46 GiB read and a GPU pipeline compile on every mic click would be pure waste.
-        if (UsesGroq) return;
+        // 1.46 GiB read and a GPU pipeline compile on every mic click would be pure waste. Unless Groq is out of reach
+        // from this connection (a VPN it refuses), when the offline model is the one that will answer.
+        if (UsesGroq && !(GroqSpeechService.Instance.Active && GroqSpeechService.Instance.Reachable == false)) return;
+        if (UsesWindowsSpeech) return;            // Windows' recognizer answers instead: no 1.46 GiB model to warm
         if (!ModelReady || _factoryLoad is not null) return;
         try { _ = LoadFactoryAsync().ContinueWith(t => _ = t.Exception, TaskScheduler.Default); }
         catch { /* warm-up is an optimisation, never a failure mode */ }
@@ -510,6 +602,14 @@ public sealed class SpeechService
             // inference itself instead of on a 1.46 GiB disk read and a shader compile. It matters far more with
             // medium.en than it did with base.en — the read it hides is ten times the size.
             BeginWarmUp();
+            // With Groq on, find out while the user talks whether it answers from this connection. Normally known by
+            // the time they stop; if it turns out to be out of reach, the offline model starts warming instead.
+            if (GroqSpeechService.Instance.Active)
+                _ = GroqSpeechService.Instance.CheckReachabilityAsync().ContinueWith(check =>
+                {
+                    if (check.Status == TaskStatus.RanToCompletion && !check.Result)
+                        System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(BeginWarmUp));
+                }, TaskScheduler.Default);
             return true;
         }
         catch (Exception ex)
@@ -564,6 +664,7 @@ public sealed class SpeechService
 
         var transcription = new SpeechTranscription(UsesGroq);
         _transcription = transcription;
+        _transcriptionNote = null;               // a note belongs to the transcription that wrote it
         // Cover a settings change between reading the provider and publishing this recording as pending.
         transcription.SwitchProvider(UsesGroq);
         try
@@ -573,10 +674,19 @@ public sealed class SpeechService
                 void SetState(SpeechState state)
                 {
                     cancel.ThrowIfCancellationRequested();
-                    if (Owns(token)) State = state;
+                    if (!Owns(token)) return;
+                    // The one-time download is policed by its own stall clock. The transcription's deadline, and the
+                    // composers' watchdogs that read TranscriptionStartedAtUtc, start once it is done.
+                    if (state == SpeechState.Transcribing && State == SpeechState.Downloading) transcription.RestartClock();
+                    State = state;
+                }
+                void OnFallback()
+                {
+                    if (!cancel.IsCancellationRequested && Owns(token)) transcription.MarkFallback();
                 }
                 SetState(SpeechState.Transcribing);
-                return groq ? TranscribeWithGroqAsync(audio, cancel) : TranscribeLocallyAsync(audio, SetState, cancel);
+                return groq ? TranscribeGroqOrLocalAsync(audio, SetState, OnFallback, transcription.RestartClock, cancel)
+                    : TranscribeLocallyAsync(audio, SetState, OnFallback, cancel);
             });
         }
         finally
@@ -597,10 +707,23 @@ public sealed class SpeechService
         }
     }
 
-    private async Task<string> TranscribeLocallyAsync(byte[] wav, Action<SpeechState> setState, CancellationToken cancel)
+    /// <summary>The Windows engine picked in Settings: Windows' own recognizer over the recording, under the same budget.
+    /// Null when this Windows has no English recognizer, so the caller carries on with Whisper instead.</summary>
+    private static async Task<string?> TranscribeWithWindowsAsync(byte[] wav, Action<SpeechState> setState, CancellationToken cancel)
     {
-        var budget = Stopwatch.StartNew();
-        TimeSpan Remaining() => TranscribeTimeout - budget.Elapsed;
+        setState(SpeechState.Transcribing);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        deadline.CancelAfter(TranscribeTimeout);
+        try { return (await WindowsSpeechFallback.TranscribeAsync(wav, deadline.Token)).Trim(); }
+        catch (NotSupportedException) { return null; }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested && deadline.IsCancellationRequested)
+        { throw Stalled("transcribing"); }
+    }
+
+    private async Task<string> TranscribeLocallyAsync(byte[] wav, Action<SpeechState> setState, Action onFallback,
+        CancellationToken cancel)
+    {
+        if (UsesWindowsSpeech && await TranscribeWithWindowsAsync(wav, setState, cancel) is { } windowsText) return windowsText;
         if (!ModelReady)
         {
             setState(SpeechState.Downloading);
@@ -608,51 +731,212 @@ public sealed class SpeechService
         }
         setState(SpeechState.Transcribing);
 
-        // Loading the shared model cannot be stopped, but this recording stops waiting for it as soon as the
-        // provider changes. Keep observing it for the next offline dictation without publishing stale state.
-        var factoryLoad = LoadFactoryAsync();
-        _ = factoryLoad.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
-        WhisperFactory factory;
-        try { factory = await factoryLoad.WaitAsync(Positive(Remaining()), cancel); }
-        catch (TimeoutException) { throw Stalled("preparing the speech model"); }
-        cancel.ThrowIfCancellationRequested();
-
-        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        timeoutCts.CancelAfter(Positive(Remaining()));
-        using var boost = CpuBoost.Acquire();
-        var work = Task.Run(() => NativeInference.RunAsync(async () =>
+        // The budget starts here, not before the download: that has its own stall clock, and counting a ten-minute
+        // fetch against this deadline made the first dictation after it give up before it had begun.
+        var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        deadline.CancelAfter(TranscribeTimeout);
+        var stage = "preparing the speech model";
+        var whisperStop = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        var whisper = TranscribeWithWhisperAsync(wav, () => stage = "transcribing", whisperStop);
+        try
         {
-            // ProcessAsync can stop yielding before its native worker exits. Await disposal before releasing
-            // the shared model; a new dictation must not initialize another native state in that interval.
-            await using var processor = factory.CreateBuilder().WithLanguage("en").WithThreads(InferenceThreads).Build();
-            using var ms = new MemoryStream(wav);
-            var sb = new StringBuilder();
-            await foreach (var seg in processor.ProcessAsync(ms).WithCancellation(timeoutCts.Token))
-                if (!IsNonSpeechMarker(seg.Text)) sb.Append(seg.Text);
-            return sb.ToString().Trim();
-        }, timeoutCts.Token), timeoutCts.Token);
-        try { return await work.WaitAsync(timeoutCts.Token); }
-        catch (OperationCanceledException) when (!cancel.IsCancellationRequested && timeoutCts.IsCancellationRequested)
-        { throw Stalled("transcribing"); }
+            return await FinishWithFallbackAsync(whisper, stop => WindowsSpeechFallback.TranscribeAsync(wav, stop),
+                WhisperPatience, onFallback, () => CancelQuietly(whisperStop), deadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested && deadline.IsCancellationRequested)
+        { throw Stalled(stage); }
+        finally
+        {
+            deadline.Dispose();
+            // An out-raced Whisper can still fail after the fallback has answered, with nobody left to report it to.
+            _ = whisper.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>Whisper itself: the shared model, then one inference over <paramref name="wav"/>, both bounded by
+    /// <paramref name="stop"/>. Owns <paramref name="stop"/> and disposes it once no native code can still observe its
+    /// token, which can be well after this task has completed.</summary>
+    private async Task<string> TranscribeWithWhisperAsync(byte[] wav, Action onInference, CancellationTokenSource stop)
+    {
+        Task<string>? work = null;
+        try
+        {
+            // Loading the shared model cannot be stopped, but this recording stops waiting for it as soon as the
+            // provider changes. Keep observing it for the next offline dictation without publishing stale state.
+            var factoryLoad = LoadFactoryAsync();
+            _ = factoryLoad.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+            var factory = await factoryLoad.WaitAsync(stop.Token);
+            onInference();
+
+            using var boost = CpuBoost.Acquire();
+            work = Task.Run(() => NativeInference.RunAsync(async () =>
+            {
+                // ProcessAsync can stop yielding before its native worker exits. Await disposal before releasing
+                // the shared model; a new dictation must not initialize another native state in that interval.
+                await using var processor = factory.CreateBuilder().WithLanguage("en").WithThreads(InferenceThreads).Build();
+                using var ms = new MemoryStream(wav);
+                var sb = new StringBuilder();
+                await foreach (var seg in processor.ProcessAsync(ms).WithCancellation(stop.Token))
+                    if (!IsNonSpeechMarker(seg.Text)) sb.Append(seg.Text);
+                return sb.ToString().Trim();
+            }, stop.Token), stop.Token);
+            return await work.WaitAsync(stop.Token);
+        }
         finally
         {
             // Native code may finish late. Keep its token alive until it has cleaned up its own processor.
-            _ = work.ContinueWith(t => { _ = t.Exception; timeoutCts.Dispose(); },
+            if (work is null) stop.Dispose();
+            else _ = work.ContinueWith(t => { _ = t.Exception; stop.Dispose(); },
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
 
-    /// <summary>Each newly selected provider gets a fresh deadline for the retained recording.</summary>
-    private static async Task<string> TranscribeWithGroqAsync(byte[] wav, CancellationToken cancel)
+    /// <summary>Whisper's answer if it gives one within <paramref name="patience"/>. Past that, <paramref name="fallback"/>
+    /// starts over the same recording and the first TEXT from either one wins; see <see cref="WhisperPatience"/>.
+    /// <paramref name="stop"/> is the attempt's deadline and cancellation, which ends both; <paramref name="stopWhisper"/>
+    /// cancels Whisper alone, once the fallback has made it unnecessary. <paramref name="onFallback"/> runs only when
+    /// the fallback actually starts.</summary>
+    private static async Task<string> FinishWithFallbackAsync(Task<string> whisper,
+        Func<CancellationToken, Task<string>> fallback, TimeSpan patience, Action onFallback, Action stopWhisper,
+        CancellationToken stop)
     {
+        // Whisper on its own first; on a healthy machine every dictation ends here.
+        if (await Task.WhenAny(whisper, Task.Delay(patience, stop)) == whisper) return await whisper;
+        stop.ThrowIfCancellationRequested();     // a provider switch, a reset or the deadline — not the patience
+
+        var fallbackStop = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        Task<string> backup;
+        try
+        {
+            backup = fallback(fallbackStop.Token);
+            onFallback();
+        }
+        catch (Exception ex) { backup = Task.FromException<string>(ex); }   // this machine has no fallback
+        try
+        {
+            if (await Task.WhenAny(whisper, backup) == backup)
+            {
+                if (backup.IsCompletedSuccessfully && backup.Result.Trim() is { Length: > 0 } heard)
+                {
+                    stopWhisper();
+                    return heard;
+                }
+                // It heard nothing, or could not run: Whisper is all that is left, on the same deadline.
+                return await whisper;
+            }
+            if (whisper.IsCompletedSuccessfully || stop.IsCancellationRequested) return await whisper;
+            // Whisper failed outright. What the fallback hears can still save the dictation; if it hears nothing,
+            // Whisper's own error is the one worth reporting.
+            try { if ((await backup).Trim() is { Length: > 0 } heard) return heard; }
+            catch (Exception) when (!stop.IsCancellationRequested) { /* reported as Whisper's failure below */ }
+            return await whisper;
+        }
+        finally
+        {
+            fallbackStop.Cancel();                // however this ended, the fallback has nothing left to do
+            _ = backup.ContinueWith(t => { _ = t.Exception; fallbackStop.Dispose(); },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
+    private static void CancelQuietly(CancellationTokenSource source)
+    {
+        try { source.Cancel(); }
+        catch (ObjectDisposedException) { /* that work already finished and released its token */ }
+    }
+
+    /// <summary>How long a dictation waits for the connection check its recording started before trying Groq anyway
+    /// (and falling back to the offline model if the upload fails).</summary>
+    private static readonly TimeSpan GroqCheckPatience = TimeSpan.FromSeconds(4);
+
+    /// <summary>Groq's share of the budget when the offline model stands behind it: a dictation clip takes Groq a
+    /// second or two, so a merely slow connection still makes it, and a hung one is not waited out for three minutes
+    /// before the offline model takes over.</summary>
+    private static TimeSpan GroqPatienceFor(int bytes) =>
+        TimeSpan.FromSeconds(Math.Min(TranscribeTimeout.TotalSeconds, 15 + bytes / (1024.0 * 1024.0) * 3));
+
+    private string? _transcriptionNote;
+
+    /// <summary>A word about the last transcription when it was not done where asked: "Groq isn't reachable from this
+    /// connection, so this was transcribed offline". Read once; null otherwise.</summary>
+    public string? TakeTranscriptionNote() => Interlocked.Exchange(ref _transcriptionNote, null);
+
+    private Task<string> TranscribeGroqOrLocalAsync(byte[] wav, Action<SpeechState> setState, Action onFallback,
+        Action restartClock, CancellationToken cancel)
+    {
+        var groq = GroqSpeechService.Instance;
+        // Groq switched on without a key is a setup mistake, not a connection problem: it stays the loud error it
+        // always was (GroqSpeechService.Active), rather than a quiet switch to a model that may first need downloading.
+        if (!groq.HasKey) return TranscribeWithGroqAsync(wav, cancel);
+        return GroqOrLocalAsync(wav, () => groq.CheckReachabilityAsync(),
+            (audio, stop) => TranscribeWithGroqAsync(audio, stop, GroqPatienceFor(audio.Length)),
+            (audio, stop) =>
+            {
+                restartClock();   // the offline model gets the whole budget, not what Groq left of it
+                return TranscribeLocallyAsync(audio, setState, onFallback, stop);
+            },
+            () => groq.UnreachableReason, groq.MarkReachable, groq.MarkUnreachable,
+            note => _transcriptionNote = FallbackNote(note, groq.RefusalRemembered, groq.TakeRefusalNotice(), UsesWindowsSpeech),
+            GroqCheckPatience, cancel);
+    }
+
+    /// <summary>What a dictation that went local says about it. The first time Groq refuses an address, one sentence
+    /// says so and that the local engine takes over there from now on. After that the address is known, and the local
+    /// model simply answers: a refusal the user has already been told about is not news. Anything else (an outage, a
+    /// timeout, a rejected key) keeps its note, since that may need doing something about.</summary>
+    private static string? FallbackNote(string note, bool refusalRemembered, string? newlyRefusedAddress, bool windowsSpeech)
+    {
+        var engine = windowsSpeech ? "Windows speech" : "GPT Whisper";
+        if (newlyRefusedAddress is not null)
+            return $"Groq refuses this connection's IP address {newlyRefusedAddress} (likely a VPN), so dictation here uses "
+                   + $"{engine} from now on.";
+        return refusalRemembered ? null : note;
+    }
+
+    /// <summary>Groq when it answers from this connection; the offline Whisper when the connection check says it
+    /// doesn't - a VPN it refuses, no network - or when the upload fails anyway, on the same recording so nothing has
+    /// to be said twice. Only connection and HTTP failures mark Groq out of reach; a clip too large for it does not.
+    /// A cancelled attempt (the user switched provider, or stopped) is never redone. Delegate-driven for the tests.</summary>
+    private static async Task<string> GroqOrLocalAsync(byte[] wav, Func<Task<bool>> check,
+        Func<byte[], CancellationToken, Task<string>> groq, Func<byte[], CancellationToken, Task<string>> local,
+        Func<string> reason, Action markReachable, Action<string> markUnreachable, Action<string> note,
+        TimeSpan checkPatience, CancellationToken cancel)
+    {
+        bool reachable;
+        try { reachable = await check().WaitAsync(checkPatience, cancel); }
+        catch (TimeoutException) { reachable = true; }   // still checking: try Groq, falling back if the upload fails
+        if (!reachable)
+        {
+            note($"Groq isn't reachable from this connection ({reason()}), so this was transcribed offline.");
+            return await local(wav, cancel);
+        }
+        try
+        {
+            var text = await groq(wav, cancel);
+            markReachable();
+            return text;
+        }
+        catch (Exception ex) when (!cancel.IsCancellationRequested)
+        {
+            // A refused upload has already been recorded against its address by GroqSpeechService.TranscribeAsync.
+            if (ex is (HttpRequestException and not GroqConnectionRefusedException) or TimeoutException) markUnreachable(ex.Message);
+            note("Groq didn't work this time, so this was transcribed offline: " + ex.Message);
+            return await local(wav, cancel);
+        }
+    }
+
+    /// <summary>Each newly selected provider gets a fresh deadline for the retained recording.</summary>
+    private static async Task<string> TranscribeWithGroqAsync(byte[] wav, CancellationToken cancel, TimeSpan? patience = null)
+    {
+        var limit = patience ?? TranscribeTimeout;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        cts.CancelAfter(TranscribeTimeout);
+        cts.CancelAfter(limit);
         string text;
         try { text = await GroqSpeechService.Instance.TranscribeAsync(wav, cts.Token); }
         catch (OperationCanceledException) when (!cancel.IsCancellationRequested && cts.IsCancellationRequested)
         {
             throw new TimeoutException(
-                $"Groq didn't answer within {TranscribeTimeout.TotalSeconds:0}s — the network or the API is slow right now. "
+                $"Groq didn't answer within {limit.TotalSeconds:0}s — the network or the API is slow right now. "
                 + "The mic is free again; try once more, or record a shorter clip.");
         }
         // Whisper annotates non-speech the same way whichever machine runs it ("[BLANK_AUDIO]"), but here it arrives
@@ -666,8 +950,6 @@ public sealed class SpeechService
     private static TimeoutException Stalled(string stage) => new(
         $"Speech-to-text gave up after {TranscribeTimeout.TotalSeconds:0}s while {stage} — the machine is likely busy. "
         + "The mic is free again; try once more, or record a shorter clip.");
-
-    private static TimeSpan Positive(TimeSpan value) => value > TimeSpan.Zero ? value : TimeSpan.Zero;
 
     /// <summary>The audio captured so far, with its RIFF header flushed by hand. Used when NAudio's
     /// RecordingStopped callback does not come back in time: on a loaded machine that callback can be delayed

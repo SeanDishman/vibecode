@@ -8,10 +8,13 @@ public sealed partial class MainViewModel
         BridgeAgentConfiguration? orchestratorConfiguration = null, BridgeAgentConfiguration? workerConfiguration = null)
         => ConfigureBridgeOrchestrators(host, [workerCount], objective, singleTerminal, orchestratorConfiguration, workerConfiguration);
 
-    /// <summary>Build every group, then let one temporary central session divide multi-group objectives before delivery.</summary>
+    /// <summary>Build every group, then let one temporary central session divide multi-group objectives before delivery.
+    /// <paramref name="factCheck"/> sets the Bridge's Fact check orchestrator option and <paramref name="planSteps"/> its
+    /// Plan steps option; null leaves either as it is.</summary>
     public IReadOnlyList<ChatViewModel> ConfigureBridgeOrchestrators(ChatViewModel host, IReadOnlyList<int> workerAllocation,
         string objective, bool singleTerminal, BridgeAgentConfiguration? orchestratorConfiguration = null,
-        BridgeAgentConfiguration? workerConfiguration = null, BridgeAgentConfiguration? centralConfiguration = null)
+        BridgeAgentConfiguration? workerConfiguration = null, BridgeAgentConfiguration? centralConfiguration = null,
+        bool? factCheck = null, bool? planSteps = null)
     {
         if (!TryGetLiveBridge(host, out var bridge))
             throw new InvalidOperationException("Open a regular bridge before setting up its orchestrators.");
@@ -32,9 +35,9 @@ public sealed partial class MainViewModel
         var owned = bridge.Panes.Where(p => !p.IsBridgeManager && p.BridgeCoordinatorAgentId == host.BridgeAgentId).ToArray();
         var available = bridge.Panes.Count(p => !ReferenceEquals(p, host) && AvailableBridgeWorker(p) && p.Provider == workerSettings.Provider);
         BridgeTeamAllocationPolicy.Validate(workerAllocation,
-            BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit) - bridge.Panes.Count + available + owned.Length);
+            BridgeAgentPolicy.ClampLimit(AppSettings.Current.BridgeAgentLimit) - BridgeAgentPolicy.Seats(bridge.Panes) + available + owned.Length);
         if (owned.Length > workerAllocation[0] || owned.Any(p => p.Provider != workerSettings.Provider ||
-            p.IsWorking && (p.Model != workerSettings.Model || p.Effort != workerSettings.Effort)))
+            p.IsWorking && (p.ChosenModel != workerSettings.Model || p.Effort != workerSettings.Effort)))
             throw new InvalidOperationException("Keep this orchestrator's current worker group and settings until its work finishes.");
         var previousManagers = bridge.Panes.Where(p => p.IsBridgeManager && !ReferenceEquals(p, host)).ToArray();
         var managers = new List<ChatViewModel> { host };
@@ -64,6 +67,10 @@ public sealed partial class MainViewModel
         finally { _launchingOrchestratorGroup = false; }
         var work = WorkFor(bridge.Panes);
         foreach (var manager in managers) work.OrchestratorObjectives[manager.BridgeAgentId] = objective.Trim();
+        if (factCheck is { } check) work.FactCheckOrchestrators = check;
+        // Before the rebrief below: it is what tells the orchestrators whether to publish a step plan.
+        if (planSteps is { } plan) work.PlanSteps = plan;
+        foreach (var manager in managers) work.ResetFactCheck(manager.BridgeAgentId);   // a new objective is checked from the start
         var allManagers = previousManagers.Concat(managers).ToArray();
         if (allManagers.Length > 1)
         {
@@ -92,6 +99,8 @@ public sealed partial class MainViewModel
         }
         AppSettings.Current.BridgeOrchestratorCount = workerAllocation.Count;
         AppSettings.Current.BridgeOrchestratorWorkerCounts = workerAllocation.ToArray();
+        if (factCheck is { } remembered) AppSettings.Current.BridgeFactCheckOrchestrators = remembered;
+        if (planSteps is { } rememberedPlan) AppSettings.Current.BridgePlanSteps = rememberedPlan;
         NoteBridgeActivity(roster);
         SaveBridge(bridge.Panes, bridge.Board);
         RaiseRosterUi(roster);
@@ -121,13 +130,13 @@ public sealed partial class MainViewModel
         if (owned.Any(worker => worker.Provider != workerSettings.Provider))
             throw new InvalidOperationException("This group already has workers with another provider. Keep that provider or start a new orchestrator group.");
         if (owned.Any(worker => worker.IsWorking &&
-            (worker.Model != workerSettings.Model || worker.Effort != workerSettings.Effort)))
+            (worker.ChosenModel != workerSettings.Model || worker.Effort != workerSettings.Effort)))
             throw new InvalidOperationException("Let this group's workers finish before changing their model or effort.");
         var available = bridge.Panes.Where(p => !ReferenceEquals(p, host) && AvailableBridgeWorker(p)
                                                && p.Provider == workerSettings.Provider)
             .Take(workerCount - owned.Count).ToList();
         var missing = workerCount - owned.Count - available.Count;
-        if (bridge.Panes.Count + missing > maximum + 1)
+        if (BridgeAgentPolicy.Seats(bridge.Panes) + missing > maximum + 1)
             throw new InvalidOperationException("This group exceeds the bridge's agent limit. Choose fewer workers or raise the limit in Settings.");
         if (orchestratorConfiguration is not null) host.ApplyBridgeConfiguration(orchestratorConfiguration);
         host.BridgeWorkerConfiguration = workerSettings;
@@ -155,6 +164,7 @@ public sealed partial class MainViewModel
             worker.ApplyBridgeConfiguration(workerSettings);
             worker.BridgeCoordinatorAgentId = host.BridgeAgentId;
         }
+        singleTerminal |= RequiresSingleBridgeTerminal(bridge.Panes);
         foreach (var pane in bridge.Panes)
         {
             pane.BridgeSingleTerminal = singleTerminal;

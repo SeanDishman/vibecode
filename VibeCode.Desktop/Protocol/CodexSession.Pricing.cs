@@ -25,9 +25,9 @@ public sealed partial class CodexSession
             ?? ServiceTierFor(ApiModel(_model)));
     }
 
-    private void AddRequestCost(JsonObject? envelope, JsonNode usage, string thread, TokenUsage increment, TokenUsage latest)
+    private (string? Model, double Cost) RequestCost(JsonObject? envelope, JsonNode usage, string thread, TokenUsage increment, TokenUsage latest)
     {
-        if (!increment.HasTokens) return;
+        if (!increment.HasTokens) return (null, 0);
         var profile = _costProfiles.GetValueOrDefault(thread)
             ?? _costProfiles.GetValueOrDefault(SessionId ?? "root")
             ?? new CostProfile(ApiModel(_model), ServiceTierFor(ApiModel(_model)));
@@ -38,7 +38,7 @@ public sealed partial class CodexSession
         // Missing intermediate notifications may combine multiple requests in the increment. Only apply a
         // context surcharge when the increment actually describes the one request whose size was reported.
         double? context = increment.Input == latest.Input ? latest.Input : null;
-        _turnEstimatedCost += ModelPricing.TurnCost(model, Math.Max(0, increment.Input - increment.CachedInput),
-            0, increment.CachedInput, increment.Output, tier, context);
+        return (model, ModelPricing.TurnCost(model, Math.Max(0, increment.Input - increment.CachedInput),
+            0, increment.CachedInput, increment.Output, tier, context));
     }
 }

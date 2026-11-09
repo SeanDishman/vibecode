@@ -122,6 +122,7 @@ public partial class MemoryMapWindow : Window, INotifyPropertyChanged
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        InitializeMemoryContext();   // after Owner is set: the project cards follow the owner's active chat
         MemoryGraph.Focus();
         // Chats keep writing while this window is open; without a poll the map is only ever as fresh as the click
         // that opened it, which is what made the brain look like it never stored anything.

@@ -31,7 +31,10 @@ public sealed partial class ChatViewModel
         if (!IsClaude) return;
         if (NodeString(m["type"]) == "rate_limit_event")
         {
-            if (m["rate_limit_info"] is not JsonObject info || NodeString(info["status"]) != "rejected") return;
+            if (m["rate_limit_info"] is not JsonObject info) return;
+            // Every reading, not only a refusal, feeds the account's meter: that is what paces new Bridge work before the limit.
+            AccountPacing.Instance.Note(Provider, AccountId, info);
+            if (NodeString(info["status"]) != "rejected") return;
             _turnRateLimited = true;
             if (long.TryParse(info["resetsAt"]?.ToString(), out var resetsAt)) _turnRateLimitResetsAt = resetsAt;
             return;
@@ -52,6 +55,7 @@ public sealed partial class ChatViewModel
         var streamedReset = _turnRateLimitResetsAt;
         ClearTurnRateLimit();
         CancelLimitRecovery(resetAttempts: !usageLimited);
+
         if (!usageLimited || _session is null || _session.HasExited || _interruptRequested) return;
         _limitRecoveryResult = result.DeepClone();
         // The streamed reset is exact; the result text only prints the minute.
@@ -87,6 +91,7 @@ public sealed partial class ChatViewModel
         }
         Raise(nameof(WaitingForLimitReset));
         Raise(nameof(CanInterrupt));
+        Raise(nameof(ShowsStopButton));
         RaiseExtendedQueueProperties();
     }
 
@@ -105,13 +110,14 @@ public sealed partial class ChatViewModel
         if (resetAttempts) _limitRecoveryAttempts = 0;
         Raise(nameof(WaitingForLimitReset));
         Raise(nameof(CanInterrupt));
+        Raise(nameof(ShowsStopButton));
     }
 
     private async Task CheckLimitRecoveryAsync()
     {
         if (_limitRecoveryChecking || !WaitingForLimitReset || IsWorking || Status == "closed"
             || _session is null || _session.HasExited || !ReferenceEquals(_session, _limitRecoverySession)
-            || RewindHoldsDispatch || _pendingPerms.Count > 0 || _steerSubmitting) return;
+            || ModelRestartHoldsDispatch || _pendingPerms.Count > 0 || _steerSubmitting) return;
         _limitRecoveryChecking = true;
         var version = _limitRecoveryVersion;
         var selectedModel = _model;
@@ -123,7 +129,7 @@ public sealed partial class ChatViewModel
         if (version != _limitRecoveryVersion || !WaitingForLimitReset || IsWorking || Status == "closed"
             || _session is null || _session.HasExited || !ReferenceEquals(_session, _limitRecoverySession)
             || selectedModel != _model || selectedAccount != AccountId
-            || RewindHoldsDispatch || _pendingPerms.Count > 0 || _steerSubmitting) return;
+            || ModelRestartHoldsDispatch || _pendingPerms.Count > 0 || _steerSubmitting) return;
 
         var now = DateTimeOffset.Now;
         if (snapshot.Available == false && snapshot.ResetsAt is { } known && known > now)

@@ -414,7 +414,7 @@ public sealed class PhoneBridgeMirror
 
         // Prompt and queue ordinals count from the beginning of the transcript, not from the start of the mirrored
         // tail: the desktop resolves them by counting the same way over chat.Items, and an ordinal that meant
-        // something different on each side would rewind the wrong turn.
+        // something different on each side would target the wrong queued message.
         var userOrdinal = 0;
         var queuedOrdinal = 0;
         for (var i = 0; i < start; i++)
@@ -451,11 +451,6 @@ public sealed class PhoneBridgeMirror
                     ["sub"] = u.FromSubagent,
                     ["att"] = u.Attachments?.Count ?? 0,
                     ["ord"] = ordinal,
-                    // Whether the rewind arrow would do anything if the phone tapped it right now. Sent per-poll
-                    // because it flips as the turn completes and its checkpoint seals.
-                    ["undo"] = u.CanRequestUndo,
-                    ["undone"] = u.HasUndoStatus,
-                    ["cascades"] = u.NewerPendingTurns,
                 }.ToJsonString();
                 break;
 

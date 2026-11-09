@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -60,12 +61,20 @@ public sealed class UsageLimit
 
 /// <summary>
 /// Fetches subscription rate-limit usage by running `claude -p /usage` headlessly and
-/// parses it into structured limits (plus reset times and plan). Account-global, so a
-/// single shared instance backs every chat's usage panel.
+/// parses it into structured limits (plus reset times and plan). Each account has its own
+/// cached instance, shared by its chats without following the global account selection.
 /// </summary>
 public sealed class UsageService : Observable
 {
-    public static UsageService Instance { get; } = new();
+    private static readonly ConcurrentDictionary<string, UsageService> Accounts = new(StringComparer.OrdinalIgnoreCase);
+    public static UsageService Instance => ForAccount(AccountService.Instance.ActiveId);
+
+    /// <summary>Null/empty means the shared CLI login, never whichever account is currently selected.</summary>
+    public static UsageService ForAccount(string? accountId) => Accounts.GetOrAdd(
+        string.IsNullOrWhiteSpace(accountId) ? "" : accountId, id => new UsageService(id.Length == 0 ? null : id));
+
+    private UsageService(string? accountId) => AccountId = accountId;
+    public string? AccountId { get; }
 
     private static readonly TimeSpan MinInterval = TimeSpan.FromMinutes(3);
     private DateTime _lastFetch = DateTime.MinValue;
@@ -88,7 +97,13 @@ public sealed class UsageService : Observable
     /// <summary>Plan name, e.g. "Subscription".</summary>
     public string Plan { get => _plan; private set => Set(ref _plan, value); }
     public string UpdatedText { get => _updatedText; private set => Set(ref _updatedText, value); }
-    public bool Loading { get => _loading; private set => Set(ref _loading, value); }
+    public bool Loading
+    {
+        get => _loading;
+        private set { if (Set(ref _loading, value)) Raise(nameof(CompactSummary)); }
+    }
+
+    public string CompactSummary => HasData ? Summary : Loading ? "checking…" : "unavailable";
 
     public ObservableCollection<UsageLimit> Limits { get; } = new();
     public bool HasData => Limits.Count > 0;
@@ -101,8 +116,7 @@ public sealed class UsageService : Observable
 
     public void Refresh(bool force = false)
     {
-        // A forced refresh that lands mid-probe (very common: switching accounts right after chat activity kicked one)
-        // used to be dropped entirely, leaving the usage pill on the OLD account's numbers. Queue it instead.
+        // Preserve an explicit refresh that lands while this account's probe is still running.
         lock (_gate)
         {
             if (_fetching) { if (force) _pendingForce = true; return; }
@@ -117,24 +131,26 @@ public sealed class UsageService : Observable
     {
         try
         {
-            // Report the ACTIVE account's usage, not whatever's in the shared ~/.claude login (switching accounts no
-            // longer swaps that file). It has to be probed as a real LOGIN though: handing the CLI a bare
-            // CLAUDE_CODE_OAUTH_TOKEN makes `/usage` print the "Total cost: $0.00" run summary with no buckets at
-            // all - which is why the panel went blank for good as soon as an account was explicitly picked, and why
-            // it looked like switching accounts "rate limited" the check. AccountService probes through a throwaway
-            // CLAUDE_CONFIG_DIR instead, which reports normally.
-            var activeId = AccountService.Instance.ActiveId;
+            // Probe this account's native Claude home. A bare OAuth token does not return subscription buckets.
+            // Never substitute the active account: a Bridge can contain several different logins at once.
             string text;
-            if (activeId is not null && !AccountService.Instance.ActiveIsFallback)
+            if (AccountId is not null)
             {
-                // No pre-refresh spawn: the probe's own CLI refreshes a near-expiry token inside the temp dir and
-                // AccountService persists it back, so one process does both jobs.
-                if (await AccountService.Instance.ProbeUsageTextAsync(activeId) is not { } probed)
+                if (ApiKeyAccountService.Instance.For("claude").Any(account => account.Id == AccountId))
+                {
+                    Post(new Parsed { Detail = "Subscription usage is not available for API key accounts." });
+                    return;
+                }
+                // The probe's CLI also refreshes a near-expiry token in this account's native home.
+                if (await AccountService.Instance.ProbeUsageTextAsync(AccountId) is { } probed)
+                    text = probed;
+                else if (string.Equals(AccountService.Instance.Current()?.Id, AccountId, StringComparison.OrdinalIgnoreCase))
+                    text = await ProbeSharedLoginAsync();  // a shared login that has not been saved as a profile yet
+                else
                 {
                     Post(new Parsed { Detail = "This account's saved login is empty or broken — re-add it from the account menu." });
                     return;
                 }
-                text = probed;
             }
             else text = await ProbeSharedLoginAsync();
 
@@ -154,7 +170,7 @@ public sealed class UsageService : Observable
                 rerun = _pendingForce;
                 _pendingForce = false;
             }
-            if (rerun) Refresh(force: true);   // re-run for whoever we were busy for
+            if (rerun) Refresh(force: true);
         }
     }
 
@@ -175,7 +191,7 @@ public sealed class UsageService : Observable
         psi.ArgumentList.Add("/usage");
         psi.ArgumentList.Add("--output-format");
         psi.ArgumentList.Add("json");
-        Protocol.ClaudeSession.StripInheritedEnv(psi);
+        Protocol.ClaudeSession.StripInheritedEnv(psi, accountId: ""); // subscription probe; never inject a globally selected API key
 
         using var proc = Process.Start(psi);
         if (proc is null) throw new InvalidOperationException("couldn't start the claude CLI");
@@ -282,6 +298,7 @@ public sealed class UsageService : Observable
         Raise(nameof(HasData));
         Raise(nameof(Status));
         Raise(nameof(HasStatus));
+        Raise(nameof(CompactSummary));
         // A failed check still HAPPENED - stamp it, or the card reads as "never ran" and hides that Refresh did work.
         UpdatedText = $"updated {DateTime.Now:h:mm tt}";
         Loading = false;

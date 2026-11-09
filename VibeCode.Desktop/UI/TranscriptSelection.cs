@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -71,6 +72,15 @@ public static class TranscriptSelection
     internal static string SelectedText(ListBox list) =>
         ((Session?)list.GetValue(SessionProperty))?.RangeText() ?? "";
 
+    /// <summary>Test seam: hold a range over these rows, as a drag from the first to the last leaves it.</summary>
+    internal static void Hold(ListBox list, int first, int last) =>
+        ((Session?)list.GetValue(SessionProperty))?.Hold(first, last);
+
+    /// <summary>The user is selecting in this list: the button is down in a message, or a cross-message range is held.
+    /// <see cref="AutoScroll"/> holds the transcript still meanwhile, so new output never moves it under the selection.</summary>
+    internal static bool IsSelecting(ListBox list) =>
+        ((Session?)list.GetValue(SessionProperty))?.IsSelecting ?? false;
+
     /// <summary>Per-list state. One instance is attached to the list for as long as the behaviour is on.</summary>
     private sealed class Session
     {
@@ -94,6 +104,9 @@ public static class TranscriptSelection
 
         private int _anchor = -1;               // index the drag started in
         private int _focus = -1;                // index the pointer is over now
+        // The messages those indexes name. A shared team terminal inserts rows between others and resets its view,
+        // which shifts every index under the user's hand; the range is re-found by these after each change.
+        private object? _anchorItem, _focusItem;
         private bool _armed;                    // button is down inside a message; the drag has not left it yet
         private bool _dragging;                 // we hold the mouse; the message's own control no longer sees it
         private bool _active;                   // a cross-message range exists and is being drawn
@@ -123,6 +136,7 @@ public static class TranscriptSelection
             list.Unloaded += OnUnloaded;
             // The highlight is painted in list coordinates, so it has to be repainted as the content moves.
             list.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(OnScrollChanged));
+            ((INotifyCollectionChanged)list.Items).CollectionChanged += OnItemsChanged;
         }
 
         public void Detach()
@@ -138,6 +152,21 @@ public static class TranscriptSelection
             _list.DataContextChanged -= OnDataContextChanged;
             _list.Unloaded -= OnUnloaded;
             _list.RemoveHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(OnScrollChanged));
+            ((INotifyCollectionChanged)_list.Items).CollectionChanged -= OnItemsChanged;
+        }
+
+        // Armed counts only while the button is really down: a press released outside the list is never seen here.
+        public bool IsSelecting => _dragging || _active || _armed && Mouse.LeftButton == MouseButtonState.Pressed;
+
+        public void Hold(int first, int last)
+        {
+            Clear();
+            _anchor = first;
+            _focus = last;
+            _anchorItem = ItemAt(first);
+            _focusItem = ItemAt(last);
+            _active = true;
+            ShowAdorner();
         }
 
         public (int First, int Last) Range =>
@@ -163,6 +192,7 @@ public static class TranscriptSelection
             _down = e.GetPosition(_list);
             _anchor = IndexAt(_down);
             _focus = _anchor;
+            _anchorItem = _focusItem = ItemAt(_anchor);
             _armed = _anchor >= 0;
             // Deliberately not handled: within one message the message's own control still does the selecting.
         }
@@ -238,6 +268,25 @@ public static class TranscriptSelection
         {
             if (index < 0 || index == _focus) return;
             _focus = index;
+            _focusItem = ItemAt(index);
+            _adorner?.InvalidateVisual();
+        }
+
+        private object? ItemAt(int index) => index >= 0 && index < _list.Items.Count ? _list.Items[index] : null;
+
+        /// <summary>Rows arrived, left or the whole view was rebuilt: put both ends back on the messages they were.
+        /// A range whose first message is gone is dropped, as clicking away would; one whose pointer end is gone (a
+        /// finished thought leaving) shrinks back to that first message, and a drag still running re-finds it on the
+        /// next move.</summary>
+        private void OnItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (_anchor < 0) return;
+            var anchor = _anchorItem is null ? -1 : _list.Items.IndexOf(_anchorItem);
+            if (anchor < 0) { Clear(); return; }
+            var focus = _focusItem is null ? -1 : _list.Items.IndexOf(_focusItem);
+            _anchor = anchor;
+            _focus = focus >= 0 ? focus : anchor;
+            _focusItem = ItemAt(_focus);
             _adorner?.InvalidateVisual();
         }
 
@@ -303,6 +352,7 @@ public static class TranscriptSelection
             _armed = false;
             _anchor = -1;
             _focus = -1;
+            _anchorItem = _focusItem = null;
             HideAdorner();
         }
 

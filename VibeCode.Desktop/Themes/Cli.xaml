@@ -130,8 +130,10 @@
             <DataTrigger Binding="{Binding IsWorking}" Value="True">
                 <DataTrigger.EnterActions>
                     <BeginStoryboard x:Name="StatusDotPulse">
-                        <Storyboard>
-                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1.0" To="0.25" Duration="0:0:0.75" AutoReverse="True" RepeatBehavior="Forever"/>
+                        <!-- 20fps: one pulse per working agent, and a 0.75s fade reads as smooth at this rate -->
+                        <Storyboard Timeline.DesiredFrameRate="20">
+                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1.0" To="0.25"
+                                             Duration="0:0:0.75" AutoReverse="True" RepeatBehavior="Forever" />
                         </Storyboard>
                     </BeginStoryboard>
                 </DataTrigger.EnterActions>
@@ -146,8 +148,9 @@
             <DataTrigger Binding="{Binding ChatListIsWorking}" Value="True">
                 <DataTrigger.EnterActions>
                     <BeginStoryboard x:Name="ChatListStatusDotPulse">
-                        <Storyboard>
-                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1.0" To="0.25" Duration="0:0:0.75" AutoReverse="True" RepeatBehavior="Forever"/>
+                        <Storyboard Timeline.DesiredFrameRate="20">
+                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1.0" To="0.25"
+                                             Duration="0:0:0.75" AutoReverse="True" RepeatBehavior="Forever" />
                         </Storyboard>
                     </BeginStoryboard>
                 </DataTrigger.EnterActions>
@@ -530,19 +533,22 @@
 
     <!-- ================= inputs: square, block caret green ================= -->
     <Style TargetType="TextBox">
-        <Setter Property="Foreground" Value="{StaticResource Text}"/>
-        <Setter Property="Background" Value="{StaticResource Bg2}"/>
-        <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
-        <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="10,7"/>
-        <Setter Property="FontFamily" Value="{StaticResource Mono}"/>
-        <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
-        <Setter Property="SelectionBrush" Value="{StaticResource AccentDim}"/>
+        <!-- One-line boxes centre their text; a multi-line box (Announce, Bridge prompt) sets Top. -->
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="Background" Value="{StaticResource Bg2}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="10,7" />
+        <Setter Property="FontFamily" Value="{StaticResource Mono}" />
+        <Setter Property="CaretBrush" Value="{StaticResource Accent}" />
+        <Setter Property="SelectionBrush" Value="{StaticResource AccentDim}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TextBox">
-                    <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="0">
-                        <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+                    <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="0">
+                        <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
@@ -649,9 +655,25 @@
                                 </ControlTemplate>
                             </ToggleButton.Template>
                         </ToggleButton>
-                        <ContentPresenter IsHitTestVisible="False" Margin="11,0,34,0" VerticalAlignment="Center" HorizontalAlignment="Left" Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"/>
-                        <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False" IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
-                            <Border MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,5,0,0" Background="{StaticResource Bg2}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="{StaticResource Rad10}">
+                        <ContentPresenter x:Name="selection" IsHitTestVisible="False" Margin="11,0,34,0" VerticalAlignment="Center"
+                                          HorizontalAlignment="Left" Content="{TemplateBinding SelectionBoxItem}"
+                                          ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                          ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" />
+                        <TextBox x:Name="PART_EditableTextBox" Visibility="Collapsed" Style="{x:Null}"
+                                 Margin="11,0,34,0" VerticalContentAlignment="Center" Background="Transparent"
+                                 Foreground="{TemplateBinding Foreground}" CaretBrush="{TemplateBinding Foreground}"
+                                 SelectionBrush="{DynamicResource AccentSoft}" FontSize="{TemplateBinding FontSize}"
+                                 IsReadOnly="{TemplateBinding IsReadOnly}" BorderThickness="0" Padding="0"
+                                 AutomationProperties.Name="{Binding Path=(AutomationProperties.Name), RelativeSource={RelativeSource TemplatedParent}}">
+                            <TextBox.Template>
+                                <ControlTemplate TargetType="TextBox"><ScrollViewer x:Name="PART_ContentHost" Focusable="False" /></ControlTemplate>
+                            </TextBox.Template>
+                        </TextBox>
+                        <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                               IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
+                            <Border MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                    Margin="0,5,0,0" Background="{StaticResource Bg2}" BorderBrush="{StaticResource Border}"
+                                    BorderThickness="1" CornerRadius="{StaticResource Rad10}">
                                 <ScrollViewer Margin="2" CanContentScroll="True" VerticalScrollBarVisibility="Auto">
                                     <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
                                 </ScrollViewer>
@@ -659,6 +681,11 @@
                         </Popup>
                     </Grid>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="IsEditable" Value="True">
+                            <Setter TargetName="selection" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="picker" Property="BorderBrush" Value="{StaticResource Accent}"/>
                         </Trigger>

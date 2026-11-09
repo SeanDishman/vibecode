@@ -55,6 +55,7 @@ public sealed partial class MainViewModel
             _peerMailboxes.Remove(bridge.Peers);
         var store = _peerMailboxes.GetValue(bridge.Peers,
             _ => new BridgeMailboxStore(bridge.Panes.First().Cwd, WorkFor(bridge.Panes).RunId));
+        store.ReconcileRoster(bridge.Panes.ToDictionary(p => p.BridgeAgentId, BridgeNumberOf));
         if (pane.PeerMailbox is { Closed: false } existing && ReferenceEquals(existing.Store, store)) return existing;
         pane.ClearPeerMailbox();
         var box = pane.PeerMailbox = store.Register(BridgeNumberOf(pane), pane.AgentDisplay, pane.BridgeAgentId);

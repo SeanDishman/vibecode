@@ -104,8 +104,6 @@ data class UiState(
     val enrolRound: Int = 0,
     /** Set when retrying is pointless — the coupon is spent, or this app was disconnected on purpose. */
     val enrolFatal: Boolean = false,
-    /** Set while a rewind is in flight; the transcript is not trustworthy to act on until it lands. */
-    val undoing: Boolean = false,
     val locked: Boolean = false,
 ) {
     val chatsLoaded: Boolean get() = link == Link.Online || chats.isNotEmpty()
@@ -446,7 +444,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 sheet = Sheet.None,
                 draft = drafts.get(chat.id),
                 sending = drafts.isSending(chat.id),
-                undoing = false,
             )
         }
         startMessagesPoll(chat.id)
@@ -464,7 +461,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 optionsBusy = false,
                 sheet = Sheet.None,
                 sending = false,
-                undoing = false,
                 draft = "",
             )
         }
@@ -702,41 +698,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setFastMode(on: Boolean) = act(reload = true) { client, chatId -> client.setFastMode(chatId, on) }
 
-    // ---------------- queue and rewind ----------------
+    // ---------------- queue ----------------
 
     fun sendQueuedNow(ordinal: Int) = act { client, chatId -> client.sendQueuedNow(chatId, ordinal) }
 
     fun cancelQueued(ordinal: Int) = act { client, chatId -> client.cancelQueued(chatId, ordinal) }
-
-    /**
-     * Rewinds the workspace to just before a prompt. This one is not fire-and-forget: it can take a while, it can
-     * fail for reasons the user needs to read, and acting on the transcript while it runs is not meaningful — so
-     * the screen is marked busy until the desktop answers.
-     */
-    fun undoPrompt(ordinal: Int) {
-        val chatId = openChatId() ?: return
-        val pairing = _state.value.pairing ?: return
-        if (_state.value.undoing) return
-        val generation = screenGeneration
-        _state.update { it.copy(undoing = true) }
-        viewModelScope.launch {
-            try {
-                val message = client(pairing).undoPrompt(chatId, ordinal)
-                _state.update {
-                    if (screenGeneration != generation) it
-                    else it.copy(notice = message.ifBlank { "Changes undone — your prompt is back on the PC." })
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                if (samePairing(pairing)) {
-                    if (unrecoverable(e)) forceUnpair(friendly(e))
-                    else if (screenGeneration == generation) _state.update { it.copy(notice = friendly(e)) }
-                }
-            } finally {
-                if (screenGeneration == generation) _state.update { it.copy(undoing = false) }
-            }
-        }
-    }
 
     // ---------------- chat lifecycle ----------------
 

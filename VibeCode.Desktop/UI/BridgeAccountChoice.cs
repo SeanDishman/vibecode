@@ -4,7 +4,7 @@ namespace VibeCode.UI;
 
 /// <summary>Account identity only. Credentials stay in the provider's account service.</summary>
 public sealed record BridgeAccountChoice(string Provider, string AccountId, string Label, string Detail,
-    bool IsUsable = true, bool IsDefault = false)
+    bool IsUsable = true, bool IsDefault = false, bool AtUsageLimit = false)
 {
     public string AccessibleLabel => $"{Label}, {Detail}";
 
@@ -52,7 +52,8 @@ public sealed record BridgeProviderChoice(string Id, string Label, string Detail
         {
             var saved = accounts.Count(a => a.Provider == p.Id);
             var usable = accounts.Count(a => a.Provider == p.Id && a.IsUsable);
-            var detail = saved == 0 ? "No account added" : usable == 0 ? "Sign in again in AI accounts"
+            var detail = saved == 0 ? "No account added" : usable == 0 && accounts.Any(a => a.Provider == p.Id && a.AtUsageLimit)
+                ? "At usage limit" : usable == 0 ? "Sign in again in AI accounts"
                 : $"{saved} account{(saved == 1 ? "" : "s")}";
             return new BridgeProviderChoice(p.Id, p.Label, detail, usable > 0);
         }).ToArray();

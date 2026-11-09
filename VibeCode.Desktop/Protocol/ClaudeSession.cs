@@ -140,13 +140,19 @@ public sealed class ClaudeSessionOptions
     /// <c>--settings</c> JSON alongside <c>showThinkingSummaries</c> (does not persist to the user's real settings).</summary>
     public bool FastMode { get; init; }
     /// <summary>Expose Claude's native Agent tool and forward child output/lifecycle events to the host UI.</summary>
-    public bool SwarmsEnabled { get; init; }
-    /// <summary>Maximum read-only tools/subagents Claude may run concurrently in this session.</summary>
-    public int SwarmMaxWorkers { get; init; } = SwarmPolicy.DefaultMaxWorkers;
+    public bool SubagentsEnabled { get; init; }
     /// <summary>Immutable VibeCode MCP snapshot for this launch; VibeCode never edits Claude's native config.</summary>
     public IReadOnlyList<McpServerDefinition>? McpServers { get; init; }
     /// <summary>Protocol-harness override; production uses VibeCode's private AppData MCP directory.</summary>
     internal string? McpConfigDirectory { get; init; }
+    /// <summary>VibeCode's per-project auto memory folder, shared by every account (autoMemoryDirectory in the
+    /// session-scoped --settings). Null keeps the CLI's own per-account location.</summary>
+    public string? NativeMemoryDirectory { get; init; }
+    /// <summary>The chat is muted from memory, so Claude's own auto memory is off too, not only the Second Brain.</summary>
+    public bool NativeMemoryDisabled { get; init; }
+    /// <summary>Ask the CLI for an SDK PreCompact callback (<see cref="ClaudeSession.PreCompact"/>) so the host can save
+    /// a checkpoint before the CLI compacts on its own.</summary>
+    public bool PreCompactHook { get; init; }
 }
 
 public sealed class PermissionRequest
@@ -174,11 +180,25 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
     public event Action<string>? PermissionCancelled;     // requestId
     public event Action<int, string>? Exited;             // exit code, stderr tail
     public event Action? Initialized;
+    /// <summary>The CLI is about to compact ("manual" or "auto"). Raised on the reader thread.</summary>
+    public event Action<string>? PreCompact;
+    private const string PreCompactCallbackId = "vibecode_pre_compact";
 
     public JsonArray Commands { get; private set; } = new();
     public JsonArray Models { get; private set; } = new();
     public string? SessionId { get; private set; }
-    public bool HasExited => _proc is null || _proc.HasExited;
+    public bool HasExited
+    {
+        get
+        {
+            if (_lifetime.IsCancellationRequested) return true;
+            var process = _proc;
+            if (process is null) return true;
+            // Peer discovery can run after disposal or a failed Start. A detached process handle is no longer live.
+            try { return process.HasExited; }
+            catch (InvalidOperationException) { return true; }
+        }
+    }
 
     private readonly ClaudeSessionOptions _options;
     /// <summary>Cancelled by Dispose, ending background work such as the bridge MCP watchdog.</summary>
@@ -220,8 +240,6 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
     public ClaudeSession(ClaudeSessionOptions options)
     {
         _options = options;
-        _selectedModel = options.Model;
-        _selectedEffort = IsUltracodeLevel(options.Effort) ? "xhigh" : options.Effort;
     }
 
     public static string ResolveCliPath()
@@ -288,6 +306,10 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
 
     public void Start()
     {
+        // Skills installed in Settings reach this account's own config folder before Claude Code lists its skills.
+        // Best effort: a skill that cannot be copied is retried at the next start and never blocks the chat.
+        try { SkillCatalog.SyncClaudeHome(_options.ConfigDirectory); } catch { }
+        try { AppSettings.SyncClaudeSettings(AppSettings.Current.NoClaudeCredit, _options.ConfigDirectory); } catch { }
         var psi = CreateStartInfo(_options);
 
         _proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
@@ -343,6 +365,11 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
         // Session-scoped settings (do not write the user's real settings.json). Always request thinking
         // summaries for interactive-parity; merge fast mode into the same object when enabled.
         var settings = new JsonObject { ["showThinkingSummaries"] = true };
+        if (AppSettings.Current.NoClaudeCredit)
+        {
+            settings["attribution"] = new JsonObject { ["commit"] = "", ["pr"] = "" };
+            settings["includeCoAuthoredBy"] = false;
+        }
         if (options.FastMode)
         {
             settings["fastMode"] = true;
@@ -355,23 +382,31 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
             // workflows default off, so without this the flag is accepted and then quietly does nothing.
             settings["enableWorkflows"] = true;
         }
+        // The CLI reads autoMemoryDirectory from flag settings (verified in claude 2.1.x: policy, flag, then user), so
+        // one project's memory stops splitting across the per-account CLAUDE_CONFIG_DIR homes.
+        if (options.NativeMemoryDisabled) settings["autoMemoryEnabled"] = false;
+        else if (!string.IsNullOrWhiteSpace(options.NativeMemoryDirectory))
+            settings["autoMemoryDirectory"] = Path.GetFullPath(options.NativeMemoryDirectory);
         args.Add("--settings");
         args.Add(settings.ToJsonString());
         var mcpConfigPath = McpCatalog.WriteClaudeLaunchConfig(options.McpServers, options.McpConfigDirectory);
         if (mcpConfigPath is not null) { args.Add("--mcp-config"); args.Add(mcpConfigPath); }
         // App-owned label metadata needs no user approval, including in Ask/Plan mode. Approve only our
-        // exact naming and bridge task-title tools; this is not a blanket permission for bridge tools or other MCP servers.
+        // exact naming, bridge task-title and checklist tools; this is not a blanket permission for bridge tools or
+        // other MCP servers. A checklist is the natural output of planning, so todo_write must work in Plan mode too.
         if (!options.DialogueOnly && options.McpServers?.Any(server => server.Id == BridgeMcpConnection.ManagedId
                 && server.Enabled && server.UseClaude) == true)
         {
             args.Add("--allowedTools");
             args.Add(BridgeMcpConnection.ChatTitleToolName);
             args.Add(BridgeMcpConnection.TaskTitleToolName);
+            args.Add(BridgeMcpConnection.NameToolName);
+            args.Add(BridgeMcpConnection.TodoToolName);
         }
-        if (options.SwarmsEnabled)
+        if (options.SubagentsEnabled)
         {
             // Without this flag Claude emits child tool calls but not the child's own text/thinking, leaving the
-            // roster looking stalled. The environment limit is the provider-side backstop for prompt disobedience.
+            // roster looking stalled.
             args.Add("--forward-subagent-text");
         }
         else
@@ -401,12 +436,7 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
         StripInheritedEnv(psi, options.AccountId);
-        if (options.SwarmsEnabled)
-        {
-            var max = SwarmPolicy.ClampMaxWorkers(options.SwarmMaxWorkers).ToString();
-            psi.Environment["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] = "1";
-            psi.Environment["CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY"] = max;
-        }
+        if (options.SubagentsEnabled) psi.Environment["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"] = "1";
         if (McpCatalog.MaximumStartupTimeoutSeconds(options.McpServers, "claude") is { } mcpStartupSeconds)
         {
             var requestedMilliseconds = checked(mcpStartupSeconds * 1000);
@@ -416,6 +446,7 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
             psi.Environment["MCP_TIMEOUT"] = requestedMilliseconds.ToString();
         }
         psi.Environment.Remove("CLAUDE_CODE_OAUTH_TOKEN");
+        if (options.NativeMemoryDisabled) psi.Environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1";
         if (!string.IsNullOrWhiteSpace(options.ConfigDirectory))
             psi.Environment["CLAUDE_CONFIG_DIR"] = Path.GetFullPath(options.ConfigDirectory);
         return psi;
@@ -492,7 +523,21 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
                             DecisionReason = request["decision_reason"]?.ToString(),
                         });
                     }
-                    else
+                    else if (subtype == "hook_callback" && request["callback_id"]?.ToString() == PreCompactCallbackId)
+                {
+                    // Answer at once so compaction is never held up: the snapshot reads state the host already holds.
+                    PreCompact?.Invoke(request["input"]?["trigger"]?.ToString() ?? "auto");
+                    WriteJson(new JsonObject
+                    {
+                        ["type"] = "control_response",
+                        ["response"] = new JsonObject
+                        {
+                            ["subtype"] = "success", ["request_id"] = requestId,
+                            ["response"] = new JsonObject { ["continue"] = true },
+                        },
+                    });
+                }
+                else
                     {
                         // Subtypes we don't serve (hooks, SDK MCP) - reply with an error so the CLI isn't left waiting.
                         WriteJson(new JsonObject
@@ -520,7 +565,6 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
                     if (type == "system" && node["subtype"]?.GetValue<string>() == "init")
                         SessionId = node["session_id"]?.GetValue<string>();
 
-                    ObserveOpusFallback(node, type);
 
                     // Claude can finish the root response while background Agent tasks (run_in_background) keep working.
                     // The result is forwarded straight away so the chat goes idle and queued prompts flush - the same
@@ -528,11 +572,9 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
                     // until every child reached a terminal event, which pinned the pane to "running" for the whole swarm:
                     // Stop stayed armed and send-now went through Interrupt(), killing the children the user was waiting on.
                     var rootResult = type == "result" && node["parent_tool_use_id"] is null && node["subagent_thread_id"] is null;
-                    TaskCompletionSource? recoveryResult = null;
                     if (rootResult)
                     {
                         _rootTurnActive = false;
-                        recoveryResult = MarkOpusRecoveryResult(node);
                     }
 
                     ObserveClaudeSubagents(node, type);
@@ -540,7 +582,6 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
                     if (rootResult)
                     {
                         EmitTurnActivity();
-                        recoveryResult?.TrySetResult();
                     }
                     break;
                 }
@@ -874,7 +915,14 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
     {
         try
         {
-            var resp = await RequestAsync(new JsonObject { ["subtype"] = "initialize" });
+            var initialize = new JsonObject { ["subtype"] = "initialize" };
+            // An SDK hook rather than a --settings command hook: no shell, and the callback arrives on this same stream.
+            if (_options.PreCompactHook)
+                initialize["hooks"] = new JsonObject
+                {
+                    ["PreCompact"] = new JsonArray(new JsonObject { ["hookCallbackIds"] = new JsonArray(PreCompactCallbackId) }),
+                };
+            var resp = await RequestAsync(initialize);
             if (resp?["response"] is JsonObject r)
             {
                 Commands = r["commands"] as JsonArray ?? new JsonArray();
@@ -1061,25 +1109,15 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
 
     public Task InterruptAsync()
     {
-        CancelOpusRecovery();
         return SafeRequest(new JsonObject { ["subtype"] = "interrupt" });
     }
     public Task SetPermissionModeAsync(string mode) => SafeRequest(new JsonObject { ["subtype"] = "set_permission_mode", ["mode"] = mode });
     public Task SetModelAsync(string? model, string? effort = null)
     {
-        lock (_modelRecoveryGate)
-        {
-            _selectedModel = model;
-            _selectedEffort = effort;
-            _modelSelectionVersion++;
-            _pendingOpusRestore = false;
-            _opusRecoveryCancellation?.Cancel();
-            _opusRestartTimes.Clear(); // an explicit model selection starts a fresh retry budget
-            var req = new JsonObject { ["subtype"] = "set_model" };
-            if (model is not null) req["model"] = model;
-            req["effort"] = effort;   // explicit null reverts effort to the CLI default
-            return SafeRequest(req);
-        }
+        var req = new JsonObject { ["subtype"] = "set_model" };
+        if (model is not null) req["model"] = model;
+        req["effort"] = effort;
+        return SafeRequest(req);
     }
 
     /// <summary>The CLI exposes "ultracode" as an effort level, but its real value is xhigh plus a separate
@@ -1094,7 +1132,6 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
     /// </summary>
     public Task SetFlagSettingsAsync(string? effortLevel, bool ultracode)
     {
-        lock (_modelRecoveryGate) _selectedEffort = effortLevel;
         return SafeRequest(new JsonObject
         {
             ["subtype"] = "apply_flag_settings",
@@ -1122,6 +1159,14 @@ public sealed partial class ClaudeSession : ICodingSession, ISteerableSession, I
     {
         try { await RequestAsync(request); }
         catch (Exception ex) { Debug.WriteLine($"vibecode: control {request["subtype"]} failed: {ex.Message}"); }
+    }
+
+    /// <summary>A refused team seat must release its process tree immediately instead of waiting for EOF.</summary>
+    internal void Terminate()
+    {
+        try { if (_proc is { HasExited: false }) _proc.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { /* already exited or reaped */ }
+        catch (System.ComponentModel.Win32Exception) { /* exit raced the kill */ }
     }
 
     public void Dispose()

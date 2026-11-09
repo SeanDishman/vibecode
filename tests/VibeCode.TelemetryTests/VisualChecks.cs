@@ -45,6 +45,9 @@ internal static partial class Program
             i == 1 ? "Verify long project names and keyboard navigation without clipped controls" : "Review workflow step " + i,
             i <= 2 ? "running" : "idle", "claude")).ToArray();
         fixture[2].AuthNeeded = true;
+        // Long live activity must trim inside the fixed-height card just like long titles.
+        Steps(fixture[0], Tool("Read", "done", """{"file_path":"C:\\Projects\\Customer platforms\\VibeCode enterprise workflow automation\\README.md"}"""),
+            Tool("Edit", "running", """{"file_path":"C:\\Projects\\Customer platforms\\VibeCode enterprise workflow automation\\src\\WorkflowAutomationOrchestrationVerificationScenarios.cs"}"""));
         foreach (var chat in fixture) source.Chats.Add(chat);
         var wall = new WorkflowTelemetryWindow(source) { Left = 6200, Top = 200, WindowStartupLocation = WindowStartupLocation.Manual, ShowInTaskbar = false };
         wall.Show(); wall.Refresh();

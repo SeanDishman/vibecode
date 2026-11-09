@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using VibeCode.Services;
 
 namespace VibeCode.UI;
@@ -18,8 +19,10 @@ public partial class BridgeSetupPanel : UserControl
     private int _maximum = 8;
     private int _singleGroupMaximum = 8;
     private Func<string, int>? _workerCapacity;
+    private Func<int, int, int>? _projectedAgentCount;
     private CancellationTokenSource? _suggestion;
     private bool _configuring;
+    private bool _editingCount;
     private bool _closed;
     private bool _starting;
     private bool _advancedOnly;
@@ -36,7 +39,15 @@ public partial class BridgeSetupPanel : UserControl
     public BridgeAgentConfiguration WorkerConfiguration => AgentOptions.WorkerConfiguration;
     public BridgeAgentConfiguration CentralConfiguration => AgentOptions.CentralConfiguration;
     public bool IsAdvanced => AdvancedChoice.IsChecked == true;
-    public bool SingleTerminal => IsAdvanced ? SingleTerminalChoice.IsChecked == true : false;
+    public bool SingleTerminal => IsAdvanced && (RequiresSingleTerminal || SingleTerminalChoice.IsChecked == true);
+    /// <summary>Fact check orchestrator: once every agent stops, the orchestrator must confirm the task is really done.</summary>
+    public bool FactCheck => IsAdvanced && FactCheckChoice.IsChecked == true;
+    /// <summary>Plan steps: orchestrators publish a step plan before dispatch and its progress shows above the chat.
+    /// Off, they assign work directly. Only an Advanced team has orchestrators to plan.</summary>
+    public bool PlanSteps => IsAdvanced && PlanStepsChoice.IsChecked == true;
+    private bool RequiresSingleTerminal => IsAdvanced && BridgeAgentPolicy.RequiresSingleTerminal(
+        _projectedAgentCount?.Invoke(OrchestratorCount, AutomaticWorkers ? OrchestratorCount : WorkerCount)
+            ?? OrchestratorCount + (AutomaticWorkers ? OrchestratorCount : WorkerCount));
     public bool AutomaticWorkers => WorkerCountBox.SelectedItem is string;
     public int WorkerCount => WorkerCountBox.SelectedItem is int count ? count : 1;
     public int OrchestratorCount => OrchestratorCountBox.SelectedItem is int count ? count : 1;
@@ -51,6 +62,8 @@ public partial class BridgeSetupPanel : UserControl
     public BridgeSetupPanel()
     {
         InitializeComponent();
+        OrchestratorCountBox.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler(OnCountTextChanged));
+        WorkerCountBox.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler(OnCountTextChanged));
         GroupAllocation.ItemsSource = Groups;
         _speechTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _speechTimer.Tick += (_, _) => RefreshSpeech();
@@ -58,7 +71,8 @@ public partial class BridgeSetupPanel : UserControl
     }
 
     public void Configure(ChatViewModel host, int maximumWorkers, bool advancedOnly = false,
-        bool singleTerminal = true, Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false)
+        bool singleTerminal = true, Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false,
+        Func<int, int, int>? projectedAgentCount = null)
     {
         var retainDraft = ReferenceEquals(_host, host) && _advancedOnly == advancedOnly;
         Suspend();
@@ -67,6 +81,7 @@ public partial class BridgeSetupPanel : UserControl
         _host = host;
         _singleGroupMaximum = Math.Max(0, maximumWorkers);
         _workerCapacity = workerCapacity;
+        _projectedAgentCount = projectedAgentCount;
         _advancedOnly = advancedOnly;
         _hasOtherOrchestrators = hasOtherOrchestrators;
         ModeChoices.Visibility = advancedOnly ? Visibility.Collapsed : Visibility.Visible;
@@ -78,6 +93,11 @@ public partial class BridgeSetupPanel : UserControl
             ObjectiveBox.Text = host.Draft;
             SingleTerminalChoice.IsChecked = singleTerminal;
             SeparateTerminalsChoice.IsChecked = !singleTerminal;
+            // Another orchestrator joins this Bridge's own setting; a new team starts from the last one chosen.
+            FactCheckChoice.IsChecked = advancedOnly && host.BridgeWork is { } current
+                ? current.FactCheckOrchestrators : AppSettings.Current.BridgeFactCheckOrchestrators;
+            PlanStepsChoice.IsChecked = advancedOnly && host.BridgeWork is { } bridgeWork
+                ? bridgeWork.PlanSteps : AppSettings.Current.BridgePlanSteps;
             AdvancedChoice.IsChecked = advancedOnly;
             RegularChoice.IsChecked = !advancedOnly;
             AgentOptions.Configure(host, host.Provider);
@@ -168,7 +188,8 @@ public partial class BridgeSetupPanel : UserControl
     {
         var count = OrchestratorCountBox.SelectedItem is int existing ? existing : AppSettings.Current.BridgeOrchestratorCount;
         var maxGroups = BridgeTeamAllocationPolicy.MaximumOrchestrators(_singleGroupMaximum);
-        OrchestratorCountBox.ItemsSource = Enumerable.Range(1, maxGroups);
+        if (OrchestratorCountBox.Items.Count != maxGroups)
+            OrchestratorCountBox.ItemsSource = Enumerable.Range(1, maxGroups);
         OrchestratorCountBox.SelectedItem = maxGroups > 0 ? Math.Clamp(count, 1, maxGroups) : null;
         _maximum = BridgeTeamAllocationPolicy.MaximumWorkers(_singleGroupMaximum, OrchestratorCount);
         var selected = WorkerCountBox.SelectedItem;
@@ -177,6 +198,41 @@ public partial class BridgeSetupPanel : UserControl
         WorkerCountBox.SelectedItem = selected is int workers && _maximum >= OrchestratorCount
             ? Math.Clamp(workers, OrchestratorCount, _maximum) : AutomaticCount;
         RebuildAllocation(WorkerAllocation);
+    }
+
+    private void OnCountTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_configuring || _editingCount || StartButton is null || sender is not ComboBox box
+            || e.OriginalSource is not TextBox editor) return;
+        var caret = editor.SelectionStart;
+        var selectionLength = editor.SelectionLength;
+        _editingCount = true;
+        try
+        {
+            // Keep invalid/unfinished text visible. Only a valid choice changes the allocation;
+            // validation below disables Start rather than silently launching the previous count.
+            var text = editor.Text.Trim();
+            var isNumber = int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var count);
+            var choice = box.Items.Cast<object>().FirstOrDefault(item => isNumber ? item is int number && number == count : item.ToString() == text);
+            if (choice is not null && !Equals(box.SelectedItem, choice)) box.SelectedItem = choice;
+            UpdateControls();
+            editor.Select(Math.Min(caret, editor.Text.Length), Math.Min(selectionLength, editor.Text.Length - Math.Min(caret, editor.Text.Length)));
+        }
+        finally { _editingCount = false; }
+    }
+
+    private string CountInputError()
+    {
+        if (_singleGroupMaximum < 1) return "No room for workers. Raise the bridge agent limit in Settings.";
+        var maxGroups = BridgeTeamAllocationPolicy.MaximumOrchestrators(_singleGroupMaximum);
+        if (!int.TryParse(OrchestratorCountBox.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var groups)
+            || groups < 1 || groups > maxGroups)
+            return $"Enter 1–{maxGroups} orchestrators. Each needs at least one worker.";
+        if (WorkerCountBox.Text.Trim() == AutomaticCount) return "";
+        if (!int.TryParse(WorkerCountBox.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var workers)
+            || workers < groups || workers > _maximum)
+            return $"Enter {groups}–{_maximum} total workers, or select ‘{AutomaticCount}’. Orchestrators count toward the agent limit.";
+        return "";
     }
 
     private void RebuildAllocation(IReadOnlyList<int>? preferred = null)
@@ -238,6 +294,14 @@ public partial class BridgeSetupPanel : UserControl
     private void OnSettingsChanged(object sender, RoutedEventArgs e)
     {
         if (_configuring || StartButton is null) return;
+        if (!_editingCount && (ReferenceEquals(sender, OrchestratorCountBox) || ReferenceEquals(sender, WorkerCountBox)))
+        {
+            // SelectionChanged can precede ComboBox's internal text update, including in an unrendered draft.
+            var box = (ComboBox)sender;
+            _configuring = true;
+            box.Text = box.SelectedItem?.ToString() ?? "";
+            _configuring = false;
+        }
         if (ReferenceEquals(sender, OrchestratorProviderBox))
         {
             AgentOptions.SetOrchestratorProvider(Provider);
@@ -285,9 +349,21 @@ public partial class BridgeSetupPanel : UserControl
     {
         if (StartButton is null || _configuring) return;
         var busy = _suggestion is not null || _starting;
+        var countError = CountInputError();
+        CountError.Text = countError;
+        CountError.Visibility = IsAdvanced && countError.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (!_advancedOnly) Width = IsAdvanced ? 960 : 480;
         RegularFields.Visibility = IsAdvanced ? Visibility.Collapsed : Visibility.Visible;
         AdvancedFields.Visibility = LayoutFields.Visibility = IsAdvanced ? Visibility.Visible : Visibility.Collapsed;
+        var requiresSingle = RequiresSingleTerminal;
+        SeparateTerminalsChoice.Visibility = requiresSingle ? Visibility.Collapsed : Visibility.Visible;
+        TerminalLayoutChoices.Columns = requiresSingle ? 1 : 2;
+        if (requiresSingle && SingleTerminalChoice.IsChecked != true)
+        {
+            _configuring = true;
+            try { SingleTerminalChoice.IsChecked = true; }
+            finally { _configuring = false; }
+        }
         AgentOptions.ShowCentralPlanner(OrchestratorCount > 1 || _hasOtherOrchestrators);
         Heading.Text = _advancedOnly ? OrchestratorCount > 1 ? "Add orchestrators" : "Add an orchestrator" : "Start a bridge";
         ModeDescription.Text = IsAdvanced
@@ -308,16 +384,16 @@ public partial class BridgeSetupPanel : UserControl
         OrchestratorProviderBox.IsEnabled = WorkerCountBox.IsEnabled = !busy;
         PeerProviderBox.IsEnabled = !busy && PeerProviderBox.Items.OfType<BridgeProviderChoice>().Any(p => p.IsUsable);
         PeerAccountBox.IsEnabled = !busy && PeerAccountBox.HasItems;
-        LayoutFields.IsEnabled = !busy;
+        LayoutFields.IsEnabled = PlanStepsFields.IsEnabled = FactCheckFields.IsEnabled = !busy;
         AgentOptions.IsEnabled = !busy;
         OrchestratorCountBox.IsEnabled = GroupAllocation.IsEnabled = !busy;
         MicButton.IsEnabled = !busy;
         StartButton.Content = _starting ? "Starting…" : busy ? "Choosing team…" : IsAdvanced ? "Start team" : "Start bridge";
         StartButton.IsEnabled = _host is not null && !busy && _micToken == 0 &&
-            (IsAdvanced ? Objective.Length > 0 && _maximum >= OrchestratorCount : PeerAccount?.IsUsable == true);
-        TeamSizeText.Text = !IsAdvanced ? "2 connected agents" : AutomaticWorkers
+            (IsAdvanced ? Objective.Length > 0 && countError.Length == 0 && _maximum >= OrchestratorCount : PeerAccount?.IsUsable == true);
+        TeamSizeText.Text = !IsAdvanced ? "2 connected agents" : countError.Length > 0 ? "Enter a valid team size" : AutomaticWorkers
             ? $"{OrchestratorCount} orchestrator{(OrchestratorCount == 1 ? "" : "s")} · AI chooses workers"
-            : OrchestratorCount == 1 ? $"1 orchestrator + {WorkerCount} worker{(WorkerCount == 1 ? "" : "s")}"
+            : OrchestratorCount == 1 ? $"1 orchestrator + {WorkerCount} worker{(WorkerCount == 1 ? "" : "s")} · {1 + WorkerCount} agents"
             : $"{OrchestratorCount} orchestrators + {WorkerCount} workers · {OrchestratorCount + WorkerCount} agents";
         AllocationFields.Visibility = OrchestratorCount > 1 && !AutomaticWorkers ? Visibility.Visible : Visibility.Collapsed;
         AllocationNote.Text = AutomaticWorkers
@@ -325,11 +401,18 @@ public partial class BridgeSetupPanel : UserControl
             : $"{OrchestratorCount + WorkerCount} agents in {OrchestratorCount} group{(OrchestratorCount == 1 ? "" : "s")}. Each worker belongs to one orchestrator.";
         CountNote.Text = _maximum < 1 ? "No room for workers. Raise the bridge agent limit in Settings."
             : AutomaticWorkers ? $"AI chooses {OrchestratorCount}–{_maximum} total workers when you start. Orchestrators are extra."
-            : $"Up to {_maximum} total workers with {OrchestratorCount} orchestrator{(OrchestratorCount == 1 ? "" : "s")}. Available agents are reused.";
+            : $"Type a count or choose from the list. Up to {_maximum} workers with {OrchestratorCount} orchestrator{(OrchestratorCount == 1 ? "" : "s")}.";
+        LargeTeamNote.Text = $"Teams of {BridgeAgentPolicy.DefaultAgentLimit} or fewer agents are recommended. Larger teams use more memory and provider capacity.";
+        LargeTeamNote.Visibility = !AutomaticWorkers && countError.Length == 0 && OrchestratorCount + WorkerCount > BridgeAgentPolicy.DefaultAgentLimit
+            ? Visibility.Visible : Visibility.Collapsed;
         OrchestratorProviderBox.ToolTip = Provider == _host?.Provider
             ? "Uses this chat’s account and permissions with the model selected below."
             : "Uses the selected provider’s default account, the model selected below, and this chat’s permissions.";
-        LayoutNote.Text = SingleTerminalChoice.IsChecked == true
+        LayoutNote.Text = requiresSingle
+            ? $"Teams above {BridgeAgentPolicy.MaximumSeparateTerminalAgents} agents use a single terminal. Switch agents while everyone keeps working."
+            : AutomaticWorkers
+            ? $"Teams above {BridgeAgentPolicy.MaximumSeparateTerminalAgents} agents automatically use a single terminal."
+            : SingleTerminalChoice.IsChecked == true
             ? "One shared view. Switch agents while everyone keeps working."
             : "Each agent has its own chat, shown side by side.";
     }
@@ -507,7 +590,8 @@ public partial class BridgeSetupPanel : UserControl
         MicGlyph.SetResourceReference(TextBlock.ForegroundProperty, recording ? "WeatherBlue" : "Accent");
         SpeechText.Text = recording ? "Listening · click to finish" : speech.State == SpeechState.Downloading
             ? "Downloading speech model " + speech.DownloadProgressText
-            : SpeechService.UsesGroq ? "Transcribing with Groq…" : "Transcribing…";
+            : SpeechService.UsesGroq && GroqSpeechService.Instance.Reachable != false ? "Transcribing with Groq…"
+            : speech.FallbackStartedAtUtc is not null ? "Finishing with Windows speech recognition…" : "Transcribing…";
         SpeechText.ToolTip = SpeechText.Text;
         MicButton.ToolTip = recording ? "Stop dictation and insert text" : "Transcribing your task";
         System.Windows.Automation.AutomationProperties.SetName(MicButton, recording ? "Stop dictating team task" : "Dictate team task");

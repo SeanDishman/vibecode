@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Windows;
+using VibeCode.Protocol;
 using VibeCode.UI;
 
 namespace VibeCode.Services;
@@ -92,7 +93,7 @@ public sealed class ModelSpeedService
 
     /// <summary>
     /// The same lookup for callers that already hold OpenRouter ids rather than picker rows — the telemetry wall's
-    /// model board, which watches a fixed set of models this app may never have opened a picker for.
+    /// model board, which watches the user's most-used models even when their picker is closed.
     ///
     /// <paramref name="maxAge"/> overrides how stale a cached reading may be before it is re-fetched. The board
     /// refreshes on a shorter cycle than the picker's default, and without this every other refresh would be a
@@ -119,7 +120,7 @@ public sealed class ModelSpeedService
 
     private async Task FetchAsync(List<string> ids)
     {
-        var landed = false;
+        var completed = false;
         try
         {
             using var limit = new SemaphoreSlim(MaxParallelFetches);
@@ -137,7 +138,7 @@ public sealed class ModelSpeedService
                 {
                     // Cache misses too, so a model OpenRouter has no numbers for isn't re-asked on every popup.
                     _speeds[id] = (speed, now);
-                    landed |= speed is not null;
+                    completed = true;
                 }
             }
         }
@@ -149,7 +150,8 @@ public sealed class ModelSpeedService
         {
             lock (_gate) foreach (var id in ids) _inFlight.Remove(id);
         }
-        if (landed) Application.Current?.Dispatcher.BeginInvoke(() => Updated?.Invoke());
+        // A completed lookup with no public stats must also end the board's fetching state.
+        if (completed) Application.Current?.Dispatcher.BeginInvoke(() => Updated?.Invoke());
     }
 
     private async Task<ModelSpeed?> FetchOneAsync(string openRouterId)
@@ -234,7 +236,7 @@ public sealed class ModelSpeedService
         ["opus"] = "anthropic/claude-opus-5.5",
         ["opusplan"] = "anthropic/claude-opus-5.5",
         ["sonnet"] = "anthropic/claude-sonnet-5.5",
-        ["haiku"] = "anthropic/claude-haiku-4.5",
+        ["haiku"] = "anthropic/claude-haiku-5.5",
         ["fable"] = "anthropic/claude-fable-5.1",
     };
 
@@ -258,12 +260,20 @@ public sealed class ModelSpeedService
         return Map(model.ResolvedModel, model.Provider) ?? Map(model.Value, model.Provider);
     }
 
+    /// <summary>Map a recorded usage model through the same aliases as a model-picker row.</summary>
+    public static string? OpenRouterId(string modelId, string provider) => Map(modelId, provider);
+
     private static string? Map(string? raw, string? provider)
     {
         var key = Canonical(raw);
-        if (key.Length == 0 || key is "default" or "auto") return null;
+        if (key.Length == 0 || key is "default" or "auto" or "unknown") return null;
         if (Aliases.TryGetValue(key, out var mapped)) return mapped;
+        // Baseten advertises the upstream repository name; OpenRouter uses Z.ai's vendor slug.
+        if (key.StartsWith("zai-org/", StringComparison.Ordinal)) return "z-ai/" + key["zai-org/".Length..];
         if (key.Contains('/')) return key;
+        // Antigravity hosts Claude and GPT-OSS on a Gemini chat; those ids are not Google models.
+        if (key.StartsWith("claude-", StringComparison.Ordinal)) return "anthropic/" + key;
+        if (key.StartsWith("gpt-oss", StringComparison.Ordinal)) return "openai/" + key;
         return VendorPrefixes.TryGetValue(ProviderModelCatalog.Normalize(provider), out var prefix) ? prefix + key : null;
     }
 

@@ -659,10 +659,12 @@ public sealed class TurnRollbackCheckpoint
                     continue;
                 }
                 if (eligible.Count >= MaxSnapshotFiles)
-                    throw new IOException($"The project has more than {MaxSnapshotFiles:N0} source files.");
+                    throw new IOException($"The project has more than {MaxSnapshotFiles:N0} source files. "
+                        + "Exclude generated or archived folders in .vibecode-undoignore before sending a new prompt.");
                 totalBytes += file.Length;
                 if (totalBytes > MaxSnapshotBytes)
-                    throw new IOException($"The checkpoint would exceed {MaxSnapshotBytes / 1024 / 1024:N0} MB.");
+                    throw new IOException($"The checkpoint would exceed {MaxSnapshotBytes / 1024 / 1024:N0} MB. "
+                        + "Exclude generated or archived folders in .vibecode-undoignore before sending a new prompt.");
                 eligible.Add(full);
             }
         }
@@ -676,7 +678,8 @@ public sealed class TurnRollbackCheckpoint
             var captured = ReadCaptured(full);
             capturedBytes += captured.Content.LongLength;
             if (capturedBytes > MaxSnapshotBytes)
-                throw new IOException($"The checkpoint would exceed {MaxSnapshotBytes / 1024 / 1024:N0} MB.");
+                throw new IOException($"The checkpoint would exceed {MaxSnapshotBytes / 1024 / 1024:N0} MB. "
+                    + "Exclude generated or archived folders in .vibecode-undoignore before sending a new prompt.");
             result[full] = captured;
         }
         return result;

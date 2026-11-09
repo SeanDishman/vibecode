@@ -6,7 +6,7 @@ public sealed partial class ChatViewModel
     internal bool SettledForBridgePlanReminder => Status is "idle" or "error" or "closed"
         && !HasPendingDispatch && !IsCompactingContext && !IsPeerNotificationTurn
         && !WaitingForLimitReset && !WaitingForBridgeRetry && !_interruptRequested
-        && !RewindHoldsDispatch && !_steerSubmitting && !_steerQueueHold
+        && !ModelRestartHoldsDispatch && !_steerSubmitting && !_steerQueueHold
         && !ExtendedQueuePaused && _pendingPerms.Count == 0;
 
     internal bool SendBridgePlanReminder(string text)

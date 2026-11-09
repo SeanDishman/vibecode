@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace VibeCode.AgentStatus.Mcp.Contracts;
 
-public sealed class StatusValidationException(string message) : Exception(message);
+public class StatusValidationException(string message) : Exception(message);
 
 // The AI owns only these descriptive fields. Identity, turn, timestamps and effective permissions
 // are deliberately not writable arguments. A host binds a receipt to its authenticated call context.

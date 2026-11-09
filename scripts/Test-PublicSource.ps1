@@ -4,6 +4,7 @@ $paths = @(& git -C $repositoryRoot -c core.quotepath=false ls-files --cached --
 if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate public source.' }
 $failures = [Collections.Generic.List[string]]::new()
 $privateFeature = '(?i:grok|daybreak|shannon|jailbr|uncensored|attacktactics|safetyrefus|safetyrewind|\bmitre\b)|Mitre'
+$privateBehavior = 'RestartOnOpusAsync|CybersecurityContinuePrompt|ReturnToOpusBeforeTaskAsync|BlockedClaude'
 $binaryExtensions = @('.exe','.dll','.so','.lib','.apk','.jar','.zip','.7z','.msi','.nupkg','.pdb','.dmp','.pem','.key','.p12','.pfx','.keystore','.jks','.jsonl')
 $textExtensions = @('.cs','.csproj','.xaml','.xml','.json','.md','.txt','.kt','.kts','.ps1','.py','.mjs','.js','.yml','.yaml','.toml','.props','.targets','.config')
 foreach ($relative in $paths) {
@@ -14,13 +15,25 @@ foreach ($relative in $paths) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue } # staged deletions
     $name = [IO.Path]::GetFileName($path)
     $extension = [IO.Path]::GetExtension($path).ToLowerInvariant()
+    # Assets must remain binary when refreshed from the private tree.
+    if ($extension -in @('.png', '.ico', '.gif', '.wav')) {
+        $bytes = [IO.File]::ReadAllBytes($path)
+        $signature = if ($bytes.Length -ge 12) { [BitConverter]::ToString($bytes, 0, 12) } else { '' }
+        $valid = switch ($extension) {
+            '.png' { $signature.StartsWith('89-50-4E-47-0D-0A-1A-0A') }
+            '.ico' { $signature.StartsWith('00-00-01-00') }
+            '.gif' { $signature.StartsWith('47-49-46-38-37-61') -or $signature.StartsWith('47-49-46-38-39-61') }
+            '.wav' { $signature.StartsWith('52-49-46-46') -and $signature.EndsWith('57-41-56-45') }
+        }
+        if (-not $valid) { $failures.Add("Invalid binary asset: $relative") }
+    }
     if ($binaryExtensions -contains $extension -or $name -match '^\.env(?:\.|$)|^(auth|oauth_creds|google_accounts|settings|local\.properties|keystore\.properties)(?:\.json)?$') {
         $failures.Add("Local data or compiled payload: $relative")
     }
     if ($relative -cmatch $privateFeature) { $failures.Add("Private feature path: $relative") }
     if ($textExtensions -notcontains $extension) { continue }
     $text = [IO.File]::ReadAllText($path)
-    if ($relative -ne 'scripts/Test-PublicSource.ps1' -and $text -cmatch $privateFeature) {
+    if ($relative -ne 'scripts/Test-PublicSource.ps1' -and ($text -cmatch $privateFeature -or $text -match $privateBehavior)) {
         $failures.Add("Private feature reference: $relative")
     }
     # Report file names only; never echo a credential match.

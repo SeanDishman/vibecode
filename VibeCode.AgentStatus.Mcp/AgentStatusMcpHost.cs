@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using VibeCode.AgentStatus.Mcp.Bridge;
 using VibeCode.AgentStatus.Mcp.Contracts;
 using VibeCode.AgentStatus.Mcp.Reporting;
 using VibeCode.AgentStatus.Mcp.Tools;
@@ -117,8 +118,8 @@ public sealed class AgentStatusMcpHost
         }
         if (method != "tools/call") return Error(id, -32601, "Method not supported.");
         if (AgentStatusReport.Text(p["name"]) is not { } name || !_tools.TryGetValue(name, out var tool))
-            return Error(id, -32602, "Unknown tool.");
-        if (p["arguments"] is not null and not JsonObject) return Error(id, -32602, "arguments must be an object.");
+            return Error(id, -32602, "Unknown or missing tool name. Call tools/list and use the exact name of an available tool.");
+        if (p["arguments"] is not null and not JsonObject) return Error(id, -32602, $"arguments for {name} must be a JSON object, not an array or scalar.");
         try
         {
             var payload = tool.Invoke(p["arguments"] as JsonObject ?? new JsonObject());
@@ -129,6 +130,7 @@ public sealed class AgentStatusMcpHost
                 ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = payload.ToJsonString() }),
             });
         }
+        catch (BridgeMcpException ex) { return Result(id, ex.ToolResult()); }
         catch (StatusValidationException ex) { return ToolError(id, ex.Message); }
         catch (Exception) { return ToolError(id, "Tool call failed; no successful receipt was issued."); }
     }

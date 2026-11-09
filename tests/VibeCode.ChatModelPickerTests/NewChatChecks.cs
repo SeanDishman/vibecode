@@ -67,9 +67,8 @@ internal static partial class Program
                 && original.AccountId == "personal-picker" && work.AccountId == "work-picker" && vm.ActiveChat == original);
             account.SelectedItem = account.Items.Cast<BridgeAccountChoice>().Single(a => a.AccountId == "expired-picker");
             Check("an expired account cannot create a chat", !create.IsEnabled && !model.IsEnabled);
-            provider.SelectedValue = "gemini";
-            Check("Gemini uses only Gemini models and allows sign-in after creation", create.IsEnabled
-                && model.Items.Cast<ModelChoice>().All(m => m.Provider == "gemini"));
+            Check("retired providers cannot create new chats", !provider.Items.Cast<BridgeSetupPanel.ProviderChoice>()
+                .Any(p => p.Id == "gemini"));
             provider.SelectedValue = "glm";
             account.SelectedItem = account.Items.Cast<BridgeAccountChoice>().Single(a => a.AccountId == zai.Id);
             Check("Z.ai account offers Z.ai models", model.Items.Cast<ModelChoice>().Select(m => m.Value).SequenceEqual(GlmPreset.ModelsFor(zai.GlmBackend).Select(m => m.Value)));

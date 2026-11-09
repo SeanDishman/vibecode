@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**\*;obj-*\**\*;bin\**\*;bin-*\**\*</DefaultItemExcludes>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>

@@ -43,14 +43,19 @@ public static class BridgeEditDiff
     private const int MaxSourceChars = 8 * 1024 * 1024;
     private static readonly Regex HunkHeader = new(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", RegexOptions.CultureInvariant);
 
-    public static BridgeEditChange? Analyze(BridgeEditObservation edit, Func<string, string?> readFile)
+    internal static string? TargetPath(BridgeEditObservation edit)
     {
         var input = edit.Input;
         var raw = Text(input["file_path"]) ?? Text(input["notebook_path"]) ?? Text(input["path"]);
         if (string.IsNullOrWhiteSpace(raw)) return null;
-        string full;
-        try { full = Path.GetFullPath(Path.IsPathRooted(raw) ? raw : Path.Combine(edit.Cwd, raw)); }
+        try { return Path.GetFullPath(Path.IsPathRooted(raw) ? raw : Path.Combine(edit.Cwd, raw)); }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+    }
+
+    public static BridgeEditChange? Analyze(BridgeEditObservation edit, Func<string, string?> readFile, Func<string, bool>? fileExists = null)
+    {
+        if (TargetPath(edit) is not { } full) return null;
+        var input = edit.Input;
 
         SourceText? source = null;
         var loaded = false;
@@ -87,10 +92,26 @@ public static class BridgeEditDiff
                     return change == "delete" ? Deleted(full, lines.Removed) : lines.Result(full, change);
                 }
             case "Write":
-                return Whole(full, "write", Text(input["content"]) ?? "");
+            {
+                // ACP agents (Gemini) carry a whole-file write as a diff, so its text arrives as new_string, not content.
+                var content = Text(input["content"]) ?? Text(input["new_string"]) ?? "";
+                if (content.Length > 0) return Whole(full, "write", content);
+                if (NamedRange(full, "write", input) is { } named) return named;
+                // The call says nothing about what it wrote, so the file as it stands right after the write is the
+                // best record of it - not exact, since a later write could already have landed.
+                return Source() is { } written ? Whole(full, "write", written.Content) with { Exact = false } : Whole(full, "write", content);
+            }
             case "Edit":
-                lines.Snippet(Text(input["old_string"]) ?? "", Text(input["new_string"]) ?? "", ReplaceAll(input), Source);
-                return lines.Result(full, "edit");
+            {
+                var oldText = Text(input["old_string"]) ?? "";
+                var newText = Text(input["new_string"]) ?? "";
+                lines.Snippet(oldText, newText, ReplaceAll(input), Source);
+                var edited = lines.Result(full, "edit");
+                if (edited is { Ranges.Count: > 0 }) return edited;
+                if (NamedRange(full, "edit", input) is not { } named) return edited;
+                if (edited is not null) return edited with { Ranges = named.Ranges, Exact = false };
+                return oldText.Length == 0 && newText.Length == 0 ? named : null;
+            }
             case "MultiEdit":
                 foreach (var one in (input["edits"] as JsonArray ?? []).OfType<JsonObject>())
                     lines.Snippet(Text(one["old_string"]) ?? "", Text(one["new_string"]) ?? "", ReplaceAll(one), Source);
@@ -99,16 +120,16 @@ public static class BridgeEditDiff
                 // Notebook cells have no stable file line numbers; record the file without inventing any.
                 return new BridgeEditChange(full, "edit", [], 0, 0, Exact: false);
             case "Shell":
-                {
-                    var current = readFile(full);
-                    if (current is null && File.Exists(full)) return null; // unreadable or oversized now: nothing reliable to say
-                    if (!edit.BeforeKnown) return current is null ? null : new BridgeEditChange(full, "edit", [], 0, 0, Exact: false);
-                    if (edit.Before is null)
-                        return current is null ? null : Whole(full, "create", current) with { Exact = !edit.Shared };
-                    if (current is null) return Deleted(full, CountLines(edit.Before)) with { Exact = !edit.Shared };
-                    lines.Files(edit.Before, current);
-                    return lines.Result(full, "edit") is { } changed ? changed with { Exact = changed.Exact && !edit.Shared } : null;
-                }
+            {
+                var current = readFile(full);
+                if (current is null && (fileExists ?? File.Exists)(full)) return null; // unreadable or oversized: nothing reliable to say
+                if (!edit.BeforeKnown) return new BridgeEditChange(full, current is null ? "delete" : "edit", [], 0, 0, Exact: false);
+                if (edit.Before is null)
+                    return current is null ? null : Whole(full, "create", current) with { Exact = !edit.Shared };
+                if (current is null) return Deleted(full, CountLines(edit.Before)) with { Exact = !edit.Shared };
+                lines.Files(edit.Before, current);
+                return lines.Result(full, "edit") is { } changed ? changed with { Exact = changed.Exact && !edit.Shared } : null;
+            }
             default:
                 return null;
         }
@@ -123,6 +144,13 @@ public static class BridgeEditDiff
             ? (r.Start == 0 ? "top of file" : "after " + r.Start) + $" ({r.Removed} deleted)"
             : r.Start == r.End ? r.Start.ToString() : $"{r.Start}-{r.End}"));
         return exact ? text : "about " + text;
+    }
+
+    private static BridgeEditChange? NamedRange(string full, string change, JsonObject input)
+    {
+        if (ToolFileRange.FromInput(input) is not { } range) return null;
+        var count = Math.Max(1, range.End - range.Start + 1);
+        return new BridgeEditChange(full, change, [new BridgeEditRange(range.Start, range.End, count, 0)], count, 0, Exact: false);
     }
 
     private static BridgeEditChange Whole(string full, string change, string content)

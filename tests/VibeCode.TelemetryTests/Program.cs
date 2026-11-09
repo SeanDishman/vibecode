@@ -45,6 +45,10 @@ internal static partial class Program
             VerifyVisualInteractions();
             VerifyRecentActivityAndUsage();
             VerifyAdvancedWorkflow();
+            VerifyActivityLines();
+            VerifyFlowModel();
+            VerifyLiveCards();
+            VerifyNoSpeedRequests();
             Console.WriteLine($"PASS: {Checks} workflow telemetry checks. Local fixtures only.");
             return 0;
         }

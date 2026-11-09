@@ -66,7 +66,7 @@ public sealed record AgentMemoryPurge(int Memories, int Sessions, int QueuedWrit
     public int Total => Memories + Sessions;
 }
 
-public sealed class AgentMemoryService : INotifyPropertyChanged
+public sealed partial class AgentMemoryService : INotifyPropertyChanged
 {
     public const string AgentMemoryVersion = "0.9.28";
     public const string IiiEngineVersion = "0.11.2";
@@ -1227,7 +1227,7 @@ public sealed class AgentMemoryService : INotifyPropertyChanged
         if (!string.IsNullOrWhiteSpace(session.Cwd)) parts.Add(session.Cwd);
         var agent = AgentName(session.AgentId);
         parts.Add(session.ObservationCount > 0
-            ? $"{session.ObservationCount:N0} recorded events{(string.IsNullOrWhiteSpace(agent) ? "" : " Â· " + agent)}"
+            ? $"{session.ObservationCount:N0} recorded events{(string.IsNullOrWhiteSpace(agent) ? "" : " · " + agent)}"
             : agent);
         return string.Join("\n", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
     }

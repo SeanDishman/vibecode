@@ -111,9 +111,8 @@ public partial class BridgeAgentOptionsPanel : UserControl
 
     private static void RefreshFastMode(string provider, ComboBox models, ToggleButton toggle, string role)
     {
-        var visible = provider is "claude" or "codex";
         var supported = BridgeAgentConfigurationPolicy.SupportsFastMode(provider, models.SelectedItem as ModelChoice);
-        toggle.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        toggle.Visibility = supported ? Visibility.Visible : Visibility.Collapsed;
         toggle.IsEnabled = supported;
         if (!supported) toggle.IsChecked = false;
         toggle.ToolTip = supported

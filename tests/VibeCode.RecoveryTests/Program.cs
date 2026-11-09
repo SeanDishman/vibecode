@@ -49,7 +49,13 @@ internal static partial class Program
             if (args.Contains("--bridge-retry-timer"))
             {
                 BridgeErrorRetryTimerChecks();
-                Console.WriteLine($"PASS: {Checks} real one-minute bridge retry checks. Artifacts: {Root}");
+                Console.WriteLine($"PASS: {Checks} real one-second bridge retry checks. Artifacts: {Root}");
+                return 0;
+            }
+            if (args.Contains("--bridge-errors-only"))
+            {
+                BridgeErrorRecoveryChecks();
+                Console.WriteLine($"PASS: {Checks} Bridge provider-error recovery checks. Artifacts: {Root}");
                 return 0;
             }
             PolicyChecks();

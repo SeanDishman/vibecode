@@ -119,6 +119,7 @@ public sealed class JarvisSpeechService : IDisposable
             {
                 _synthesisGate.Release();
                 Volatile.Write(ref _warming, 0);
+                ScheduleVoiceRelease();
             }
         }).ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
@@ -269,11 +270,15 @@ public sealed class JarvisSpeechService : IDisposable
             }
             return pcm;
         }
-        finally { _synthesisGate.Release(); }
+        finally
+        {
+            _synthesisGate.Release();
+            ScheduleVoiceRelease();
+        }
     }
 
-    /// <summary>The model and the requested stock voice, loaded once and kept for every later reply. Call inside the
-    /// gate.</summary>
+    /// <summary>The model and the requested stock voice, loaded on first use and kept for later replies until a quiet
+    /// spell unloads the model (<see cref="VoiceIdleRelease"/>). Call inside the gate.</summary>
     private async Task<KokoroVoice> EnsureVoiceAsync(string voiceId, CancellationToken cancellationToken, Action<string>? progress)
     {
         if (!IsNeuralVoice(voiceId)) throw new InvalidOperationException("Choose an available British voice in Settings > Jarvis.");
@@ -305,6 +310,43 @@ public sealed class JarvisSpeechService : IDisposable
         _voice = KokoroVoice.FromPath(voicePath);
         _voiceId = voiceId;
         return _voice;
+    }
+
+    /// <summary>How long the voice may go unused before its model is unloaded. Settable for tests only. Measured with
+    /// the stock fp16 model: ~590 MB held after a first reply, ~560 MB of it resident, and ~30 MB once disposed; it used
+    /// to stay for the rest of the session. Every reply path already warms the voice while the user talks or the model
+    /// thinks (JarvisViewModel.WarmUpVoice), so the ~4 s reload overlaps with time the user is waiting anyway.</summary>
+    internal static TimeSpan VoiceIdleRelease { get; set; } = TimeSpan.FromMinutes(5);
+    private System.Threading.Timer? _voiceRelease;
+
+    /// <summary>(Re)starts the quiet-spell countdown. Called whenever synthesis or a warm-up lets go of the gate.</summary>
+    private void ScheduleVoiceRelease()
+    {
+        if (_disposed) return;
+        var timer = _voiceRelease;
+        if (timer is null)
+        {
+            timer = new System.Threading.Timer(_ => ReleaseIdleVoice(), null, Timeout.Infinite, Timeout.Infinite);
+            if (Interlocked.CompareExchange(ref _voiceRelease, timer, null) is { } existing) { timer.Dispose(); timer = existing; }
+        }
+        try { timer.Change(VoiceIdleRelease, Timeout.InfiniteTimeSpan); }
+        catch (ObjectDisposedException) { /* the service is closing */ }
+    }
+
+    /// <summary>Unloads the model after <see cref="VoiceIdleRelease"/> without speech. Taken under the synthesis gate,
+    /// so it never goes while a chunk is inferring; when the gate is busy it looks again after another quiet spell.
+    /// The voice embedding is tiny and stays; <see cref="EnsureVoiceAsync"/> reloads the model on the next use.</summary>
+    private void ReleaseIdleVoice()
+    {
+        if (_disposed) return;
+        if (!_synthesisGate.Wait(0)) { ScheduleVoiceRelease(); return; }
+        try
+        {
+            if (_disposed || _model is null) return;
+            _model.Dispose();
+            _model = null;
+        }
+        finally { _synthesisGate.Release(); }
     }
 
     // ONNX inference is bounded by the short chunks. A cancelled caller returns immediately; the native operation
@@ -478,6 +520,7 @@ public sealed class JarvisSpeechService : IDisposable
         if (_disposed) return;
         _disposed = true;
         Stop();
+        _voiceRelease?.Dispose();
         SpeechService.Instance.StateChanged -= OnCaptureStateChanged;
         // Dispose the native model only after the last in-flight synthesis has released its lease.
         _ = Task.Run(async () => { await _synthesisGate.WaitAsync(); try { _model?.Dispose(); } finally { _synthesisGate.Release(); } });

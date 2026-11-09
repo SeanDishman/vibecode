@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -34,6 +36,8 @@ internal static partial class Program
 
         VerifyButton(bridge: false);
         VerifyButton(bridge: true);
+        VerifyUnavailableButton(bridge: false);
+        VerifyUnavailableButton(bridge: true);
 
         void VerifyButton(bool bridge)
         {
@@ -72,7 +76,7 @@ internal static partial class Program
             Check(label + ": actual arrow is actionable", button.IsEnabled && button.IsHitTestVisible);
 
             var cancelled = AnswerDialog(yes: false);
-            Call(shell, "OnUndoPrompt", button, new RoutedEventArgs(Button.ClickEvent));
+            InvokeArrow(button);
             PumpUntil(() => cancelled.IsCompleted);
             var dialog = cancelled.GetAwaiter().GetResult();
             Check(label + ": confirmation shown with default No", dialog.Title == "Confirm rewind" && dialog.DefaultButton == 7);
@@ -85,7 +89,7 @@ internal static partial class Program
             File.WriteAllText(Path.Combine(artifactDirectory, bridge ? "bridge-confirmation.txt" : "chat-confirmation.txt"), dialog.Text);
 
             var confirmed = AnswerDialog(yes: true);
-            Call(shell, "OnUndoPrompt", button, new RoutedEventArgs(Button.ClickEvent));
+            InvokeArrow(button);
             PumpUntil(() => confirmed.IsCompleted && Checkpoint(prompt).WasRolledBack);
             _ = confirmed.GetAwaiter().GetResult();
             Check(label + ": confirmation restores files and removes prompt", File.ReadAllText(source) == "original"
@@ -96,19 +100,70 @@ internal static partial class Program
                     && vm.BridgePanes.Single(other => !ReferenceEquals(other, chat)).Draft == "neighbor draft"
                 : input.Text == prompt.Text);
         }
+
+        void VerifyUnavailableButton(bool bridge)
+        {
+            var chat = Chat(bridge ? "bridge-unavailable-button" : "normal-unavailable-button", "codex", bridge);
+            vm.Chats.Add(chat);
+            if (bridge) vm.BridgePanes.Add(chat);
+            else Property(vm, "ActiveChat", chat);
+            Property(vm, "ShowBridge", bridge);
+            var checkpoint = BudgetFailure(chat);
+            var prompt = new UserItem { Text = "The prompt whose snapshot failed", Owner = chat };
+            Call(prompt, "AttachRollbackCheckpoint", checkpoint);
+            chat.Items.Add(prompt);
+            Field(chat, "_activeRollback", checkpoint);
+            chat.Status = "running";
+            chat.Draft = "preserve this draft";
+            input.Text = "preserve main composer";
+            Render(shell, Path.Combine(artifactDirectory, bridge ? "bridge-unavailable.png" : "chat-unavailable.png"));
+            var list = bridge
+                ? Descendants<ListBox>((DependencyObject)shell.Content).Single(candidate => ReferenceEquals(candidate.DataContext, chat)
+                    && candidate.Items.Contains(prompt))
+                : (ListBox)shell.FindName("MsgList");
+            var button = Descendants<Button>(list).Single(candidate => ReferenceEquals(candidate.DataContext, prompt)
+                && AutomationProperties.GetName(candidate) == "Undo this prompt and restore it to the message input");
+            var label = bridge ? "bridge failed arrow" : "normal failed arrow";
+            Check(label + ": blocked checkpoint remains clickable", button.IsEnabled);
+            var preservedDraft = chat.Draft;
+            var preservedInput = input.Text;
+            var answered = AnswerDialog(yes: true);
+            // Exercise the XAML Click subscription through the routed input event.
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+            PumpUntil(() => answered.IsCompleted);
+            var dialog = answered.GetAwaiter().GetResult();
+            Check(label + ": click explains failure before requesting confirmation", dialog.Title == "Couldn't undo prompt"
+                && dialog.Text.Contains("256 MB") && dialog.Text.Contains(".vibecode-undoignore"));
+            Check(label + ": click leaves running agent and unsent input intact", Session(chat).Interrupts == 0
+                && chat.Status == "running" && chat.Items.Contains(prompt) && chat.Draft == preservedDraft
+                && input.Text == preservedInput);
+            checkpoint.Complete();
+            Field(chat, "_activeRollback", null);
+            chat.Status = "idle";
+        }
+    }
+
+    private static void InvokeArrow(Button button)
+    {
+        // Exercise the actual XAML Click subscription through the button's accessible action.
+        // Calling OnUndoPrompt directly would miss a broken binding or disconnected event handler.
+        var peer = new ButtonAutomationPeer(button);
+        ((IInvokeProvider)peer.GetPattern(PatternInterface.Invoke)).Invoke();
     }
 
     private static Task<DialogCapture> AnswerDialog(bool yes)
     {
-        var threadId = GetCurrentThreadId();
+        var processId = Environment.ProcessId;
         return Task.Run(async () =>
         {
             nint dialog = 0;
             for (var attempt = 0; attempt < 800 && dialog == 0; attempt++)
             {
-                EnumThreadWindows(threadId, (window, _) =>
+                EnumWindows((window, _) =>
                 {
-                    if (WindowText(window) == "Confirm rewind") dialog = window;
+                    GetWindowThreadProcessId(window, out var ownerProcess);
+                    if (ownerProcess != processId || !IsWindowVisible(window)) return true;
+                    if (WindowText(window) is "Confirm rewind" or "Couldn't undo prompt") dialog = window;
                     return true;
                 }, 0);
                 if (dialog == 0) await Task.Delay(10);
@@ -116,9 +171,20 @@ internal static partial class Program
             if (dialog == 0) throw new TimeoutException("The button did not show a rewind confirmation.");
             var text = new List<string>();
             EnumChildWindows(dialog, (child, _) => { text.Add(WindowText(child)); return true; }, 0);
-            var capture = new DialogCapture(WindowText(dialog), string.Join("\n", text),
-                (int)(SendMessage(dialog, 0x0400, 0, 0).ToInt64() & 0xffff)); // DM_GETDEFID
-            PostMessage(dialog, 0x0111, yes ? 6 : 7, 0); // WM_COMMAND, IDYES / IDNO
+            var title = WindowText(dialog);
+            var defaultButton = 0;
+            // DM_GETDEFID is needed only for the Yes/No confirmation. Bound the cross-thread send so a native
+            // dialog cannot hang the test runner while the WPF automation action is on the dispatcher.
+            if (title == "Confirm rewind")
+            {
+                SendMessageTimeout(dialog, 0x0400, 0, 0, 2, 1000, out var defaultId);
+                defaultButton = (int)(defaultId & 0xffff);
+            }
+            var capture = new DialogCapture(title, string.Join("\n", text), defaultButton);
+            if (capture.Title == "Confirm rewind")
+                PostMessage(dialog, 0x0111, yes ? 6 : 7, 0); // WM_COMMAND, IDYES / IDNO
+            else
+                PostMessage(dialog, 0x0010, 0, 0); // WM_CLOSE; the native OK button's control ID varies by Windows version
             return capture;
         });
     }
@@ -156,10 +222,12 @@ internal static partial class Program
     }
     private sealed record DialogCapture(string Title, string Text, int DefaultButton);
     private delegate bool EnumerateWindow(nint window, nint state);
-    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")] private static extern bool EnumThreadWindows(uint threadId, EnumerateWindow callback, nint state);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumerateWindow callback, nint state);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out uint process);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint window);
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(nint window, EnumerateWindow callback, nint state);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint window, StringBuilder text, int capacity);
-    [DllImport("user32.dll")] private static extern nint SendMessage(nint window, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern nint SendMessageTimeout(nint window, uint message, nint wParam,
+        nint lParam, uint flags, uint timeout, out nuint result);
     [DllImport("user32.dll")] private static extern bool PostMessage(nint window, uint message, nint wParam, nint lParam);
 }

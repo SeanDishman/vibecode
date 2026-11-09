@@ -302,7 +302,11 @@
                     </Border>
                 </StackPanel>
 
-                <Grid Width="560" Margin="10,8,10,10" Visibility="{Binding DataContext.SelectedSubagent, RelativeSource={RelativeSource AncestorType={x:Type ContentControl}}, Converter={StaticResource ShowIf}}" DataContext="{Binding DataContext.SelectedSubagent, RelativeSource={RelativeSource AncestorType={x:Type ContentControl}}}">
+                <!-- One subagent: about the roster's size, its newest steps in a short scrolling list, so the card
+                     fits under the button (ui:PopupBelow) instead of a wall of tool rows over the pane above. -->
+                <Grid Width="420" Margin="10,8,10,10"
+                      Visibility="{Binding DataContext.SelectedSubagent, RelativeSource={RelativeSource AncestorType={x:Type ContentControl}}, Converter={StaticResource ShowIf}}"
+                      DataContext="{Binding DataContext.SelectedSubagent, RelativeSource={RelativeSource AncestorType={x:Type ContentControl}}}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -325,8 +329,11 @@
                             <TextBlock Text="{Binding Task}" FontSize="10.5" Foreground="{StaticResource Muted}" Margin="0,3,0,0" TextWrapping="Wrap" Visibility="{Binding Task, Converter={StaticResource ShowIf}}"/>
                         </StackPanel>
                     </Border>
-                    <Border Grid.Row="2" Background="{StaticResource Bg0}" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="{StaticResource Rad8}" ClipToBounds="True">
-                        <ScrollViewer MinHeight="170" MaxHeight="500" Padding="12,8" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly" ui:AutoScroll.Enabled="True">
+                    <Border Grid.Row="2" Background="{StaticResource Bg0}" BorderBrush="{StaticResource BorderSoft}"
+                            BorderThickness="1" CornerRadius="{StaticResource Rad8}" ClipToBounds="True">
+                        <ScrollViewer MinHeight="100" MaxHeight="240" Padding="12,8"
+                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                      PanningMode="VerticalOnly" ui:AutoScroll.Enabled="True">
                             <Grid>
                                 <ItemsControl ItemsSource="{Binding Transcript}" Visibility="{Binding HasTranscript, Converter={StaticResource BoolVis}}"/>
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20,42" Visibility="{Binding HasTranscript, Converter={StaticResource ShowIf}, ConverterParameter=invert}">
@@ -381,7 +388,9 @@
         </ContextMenu>
 
         <!-- right-click menu for a sidebar chat row -->
-        <ContextMenu x:Key="ChatMenu" Style="{StaticResource DarkContextMenu}" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+        <ContextMenu x:Key="ChatMenu" Style="{StaticResource DarkContextMenu}"
+                     Opened="OnChatMenuOpened"
+                     DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
             <MenuItem Click="OnToggleChatLock" AutomationProperties.Name="{Binding ChatLockLabel}">
                 <MenuItem.Header>
                     <StackPanel Orientation="Horizontal">
@@ -411,6 +420,16 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="12" Width="20" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
                         <TextBlock Text="Rename" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+            <MenuItem Tag="OpenInTerminal" Click="OnOpenChatInTerminal" Visibility="Collapsed"
+                      AutomationProperties.Name="Open in Terminal" ToolTipService.ShowOnDisabled="True">
+                <MenuItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE756;" FontFamily="{StaticResource Icons}" FontSize="12" Width="20"
+                                   Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
+                        <TextBlock Text="Open in Terminal" VerticalAlignment="Center" />
                     </StackPanel>
                 </MenuItem.Header>
             </MenuItem>
@@ -463,8 +482,10 @@
             </MenuItem>
         </ContextMenu>
 
-        <!-- right-click menu for a CODEX account row: same test/remove affordances as Claude accounts -->
-        <ContextMenu x:Key="CodexAccountMenu" Style="{StaticResource DarkContextMenu}">
+        <!-- Actions always target the row that opened this menu, including keyboard invocation. -->
+        <ContextMenu x:Key="CodexAccountMenu" Style="{StaticResource DarkContextMenu}"
+                     DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
+                     Opened="OnCodexAccountMenuOpened">
             <MenuItem Click="OnTestCodexAccount">
                 <MenuItem.Header>
                     <StackPanel Orientation="Horizontal">
@@ -473,7 +494,17 @@
                     </StackPanel>
                 </MenuItem.Header>
             </MenuItem>
-            <Separator Style="{StaticResource DarkSeparator}"/>
+            <MenuItem Tag="ResetCodexUsage" Click="OnResetCodexAccount" ToolTipService.ShowOnDisabled="True"
+                      AutomationProperties.Name="Reset usage">
+                <MenuItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE777;" FontFamily="{StaticResource Icons}" FontSize="12" Width="20"
+                                   Foreground="{StaticResource Accent}" VerticalAlignment="Center" />
+                        <TextBlock Text="Reset usage" VerticalAlignment="Center" />
+                    </StackPanel>
+                </MenuItem.Header>
+            </MenuItem>
+            <Separator Style="{StaticResource DarkSeparator}" />
             <MenuItem Click="OnRemoveCodexAccount">
                 <MenuItem.Header>
                     <StackPanel Orientation="Horizontal">
@@ -523,7 +554,12 @@
         </DataTemplate>
 
         <DataTemplate DataType="{x:Type svc:CodexAccountInfo}">
-            <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1" Click="OnSwitchCodexAccount" ContextMenu="{StaticResource CodexAccountMenu}" PreviewMouseRightButtonDown="OnCodexAccountRightDown" ToolTip="Click to switch · right-click to test or remove" AutomationProperties.Name="{Binding Label}">
+            <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch"
+                    HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1"
+                    Click="OnSwitchCodexAccount" ContextMenu="{StaticResource CodexAccountMenu}"
+                    PreviewMouseRightButtonDown="OnCodexAccountRightDown"
+                    ToolTip="Click to switch · right-click to test, reset usage or remove"
+                    AutomationProperties.Name="{Binding Label}">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Right" Text="" FontFamily="{StaticResource Icons}" FontSize="13" Foreground="{StaticResource Green}" VerticalAlignment="Center" Margin="12,0,2,0" Visibility="{Binding IsVibeCodeSelected, Converter={StaticResource BoolVis}}"/>
                     <Border DockPanel.Dock="Right" Background="#33E0A64E" CornerRadius="{StaticResource Rad6}" Padding="7,3" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="{Binding NeedsRelogin, Converter={StaticResource BoolVis}}">
@@ -595,9 +631,9 @@
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="bd" Property="Opacity" Value="0.78"/>
                             </Trigger>
-                            <DataTrigger Binding="{Binding CanInterrupt}" Value="True">
-                                <Setter TargetName="sendIcon" Property="Visibility" Value="Collapsed"/>
-                                <Setter TargetName="stopIcon" Property="Visibility" Value="Visible"/>
+                            <DataTrigger Binding="{Binding ShowsStopButton}" Value="True">
+                                <Setter TargetName="sendIcon" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="stopIcon" Property="Visibility" Value="Visible" />
                             </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -608,19 +644,20 @@
                     <Setter Property="Background" Value="{StaticResource SendButtonFillHover}"/>
                 </Trigger>
                 <!-- a turn is running → become the stop / interrupt button (declared after the send-hover triggers so it wins).
-                     Uses CanInterrupt (running only), NOT IsWorking, so it stays a Send button during "starting session…". -->
-                <DataTrigger Binding="{Binding CanInterrupt}" Value="True">
-                    <Setter Property="Background" Value="Transparent"/>
-                    <Setter Property="BorderBrush" Value="#55E0808B"/>
-                    <Setter Property="Foreground" Value="{StaticResource Red}"/>
-                    <Setter Property="ToolTip" Value="Interrupt (Esc)"/>
-                    <Setter Property="AutomationProperties.Name" Value="Interrupt"/>
+                     Uses CanInterrupt (running only), NOT IsWorking, so it stays a Send button during "starting session…".
+                     ShowsStopButton is CanInterrupt, except that with the robot toggle on, typed text means "send to the team". -->
+                <DataTrigger Binding="{Binding ShowsStopButton}" Value="True">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderBrush" Value="#55E0808B" />
+                    <Setter Property="Foreground" Value="{StaticResource Red}" />
+                    <Setter Property="ToolTip" Value="Interrupt (Esc)" />
+                    <Setter Property="AutomationProperties.Name" Value="Interrupt" />
                 </DataTrigger>
                 <!-- hover while interruptible: red wash (declared last so it beats the transparent stop background) -->
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
-                        <Condition Binding="{Binding CanInterrupt}" Value="True"/>
-                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True"/>
+                        <Condition Binding="{Binding ShowsStopButton}" Value="True" />
+                        <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True" />
                     </MultiDataTrigger.Conditions>
                     <Setter Property="Background" Value="{StaticResource RedSoft}"/>
                 </MultiDataTrigger>
@@ -660,7 +697,9 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="22"/>
                     </Grid.RowDefinitions>
-                    <Border Grid.Row="0" HorizontalAlignment="Stretch" MaxWidth="600" Background="{StaticResource Bg2}" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="{StaticResource RadBubble}" Padding="14,10">
+                    <Border Grid.Row="0" HorizontalAlignment="Stretch" MaxWidth="600" Background="{StaticResource Bg2}"
+                        BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="{StaticResource RadBubble}"
+                        Padding="14,10">
                         <StackPanel>
                             <ItemsControl ItemsSource="{Binding Attachments}" Margin="0,0,0,6" Visibility="{Binding HasAttachments, Converter={StaticResource ShowIf}}">
                                 <ItemsControl.ItemsPanel>
@@ -689,14 +728,20 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent" Foreground="{StaticResource Text}" Padding="0" TextWrapping="Wrap" IsTabStop="False" SelectionBrush="{StaticResource AccentDim}" Visibility="{Binding HasText, Converter={StaticResource ShowIf}}" Style="{x:Null}" FontFamily="{StaticResource Ui}" FontSize="13.5" ui:WheelForward.ToParent="True" PreviewMouseLeftButtonDown="OnPromptDoubleClick"/>
+                            <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                                     Foreground="{StaticResource Text}" Padding="0" TextWrapping="Wrap" IsTabStop="False"
+                                     SelectionBrush="{StaticResource AccentDim}" Visibility="{Binding HasText, Converter={StaticResource ShowIf}}"
+                                     Style="{x:Null}" FontFamily="{StaticResource Ui}" FontSize="13.5" ui:WheelForward.ToParent="True"
+                                     PreviewMouseLeftButtonDown="OnPromptDoubleClick" />
                             <TextBlock Text="{Binding UndoStatusText}" FontSize="10.5" Foreground="{StaticResource Accent}" Margin="0,6,0,0" Visibility="{Binding HasUndoStatus, Converter={StaticResource BoolVis}}"/>
                         </StackPanel>
                     </Border>
                     <!-- Accent pulse the navigator flashes over the bubble when you "fly" to this prompt. Starts hidden,
                          never blocks input; code-behind (FlashItem) animates its Opacity. Named so a recycled container
                          reuses one overlay per row. -->
-                    <Border x:Name="NavFlash" Grid.Row="0" HorizontalAlignment="Stretch" MaxWidth="600" CornerRadius="{StaticResource RadBubble}" Background="{StaticResource Accent}" Opacity="0" IsHitTestVisible="False"/>
+                    <Border x:Name="NavFlash" Grid.Row="0" HorizontalAlignment="Stretch" MaxWidth="600"
+                            CornerRadius="{StaticResource RadBubble}" Background="{StaticResource Accent}"
+                            Opacity="0" IsHitTestVisible="False" />
                     <Button Grid.Row="1" Width="22" Height="20" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="4,2,0,0" Padding="0" Click="OnUndoPrompt" ToolTip="{Binding UndoToolTip}" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="Undo this prompt and restore it to the message input" AutomationProperties.HelpText="{Binding UndoToolTip}">
                         <Path Width="13" Height="13" Stretch="Uniform" Data="M 11.5,2 L 11.5,8.5 L 3.5,8.5 M 6.5,5.5 L 3.5,8.5 L 6.5,11.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                         <Button.Style>
@@ -756,7 +801,7 @@
         </DataTemplate>
 
         <!-- ============ "Jump to your messages" navigator ============
-             Shared popup body (normal-chat header icon next to swarm + Bridge pane ⋮ → Your messages).
+             Shared popup body (normal-chat header icon next to subagents + Bridge pane ⋮ → Your messages).
              Lists only the user's own prompts (ChatViewModel.UserMessages). Click flies the transcript
              to that prompt and flashes it (OnNavigateToMessage). UI-virtualized for long chats. -->
         <DataTemplate x:Key="UserMessagesPopup">
@@ -866,18 +911,45 @@
                         </StackPanel>
                     </Border>
                     <WrapPanel HorizontalAlignment="Right" Margin="0,4,3,0">
-                        <Button Style="{StaticResource GhostButton}" Content="{Binding QueueActionText}" Padding="9,4" Click="OnSendQueuedNow" Visibility="{Binding IsQueueHead, Converter={StaticResource BoolVis}}" IsEnabled="{Binding Owner.CanSendQueuedNow}" ToolTip="{Binding QueueActionToolTip}" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="{Binding QueueActionText}" AutomationProperties.HelpText="{Binding QueueActionToolTip}"/>
-                        <Button Content="Steer" Padding="9,4" Margin="4,0,0,0" Click="OnSteerQueued" IsEnabled="{Binding Owner.CanSteer}" ToolTip="Add this queued message to the turn that is running, without stopping it" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="Steer the current turn">
+                        <Button Content="{Binding QueueActionText}"
+                                Padding="9,4" Click="OnSendQueuedNow"
+                                IsEnabled="{Binding Owner.CanSendQueuedNow}"
+                                ToolTip="{Binding QueueActionToolTip}"
+                                ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="{Binding QueueActionText}"
+                                AutomationProperties.HelpText="{Binding QueueActionToolTip}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
+                                    <Setter Property="Visibility" Value="{Binding IsQueueHead, Converter={StaticResource BoolVis}}" />
+                                    <Style.Triggers>
+                                        <!-- An agent still launching (a teammate that just joined) has no process to send to:
+                                             the card only reads Pending until the button can actually act. -->
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsPending}" Value="True" />
+                                                <Condition Binding="{Binding Owner.CanSendQueuedNow}" Value="False" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Steer" Padding="9,4" Margin="4,0,0,0" Click="OnSteerQueued"
+                                IsEnabled="{Binding Owner.CanSteer}"
+                                ToolTip="Add this queued message to the turn that is running, without stopping it"
+                                ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="Steer the current turn">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers>
                                         <MultiDataTrigger>
                                             <MultiDataTrigger.Conditions>
-                                                <Condition Binding="{Binding IsQueueHead}" Value="True"/>
-                                                <Condition Binding="{Binding Owner.SupportsSteer}" Value="True"/>
-                                                <Condition Binding="{Binding IsGoalCommand}" Value="False"/>
-                                                <Condition Binding="{Binding Extended}" Value="False"/>
+                                                <Condition Binding="{Binding IsQueueHead}" Value="True" />
+                                                <Condition Binding="{Binding Owner.SupportsSteer}" Value="True" />
+                                                <Condition Binding="{Binding IsGoalCommand}" Value="False" />
+                                                <Condition Binding="{Binding Extended}" Value="False" />
+                                                <!-- No turn runs while the agent starts, so there is nothing to steer. -->
+                                                <Condition Binding="{Binding IsPending}" Value="False" />
                                             </MultiDataTrigger.Conditions>
                                             <Setter Property="Visibility" Value="Visible"/>
                                         </MultiDataTrigger>
@@ -932,7 +1004,10 @@
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
-                    <TextBox Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" Style="{x:Null}" BorderThickness="0" Background="Transparent" Padding="0" IsTabStop="False" Foreground="{StaticResource Muted}" FontStyle="Italic" FontSize="12.5" TextWrapping="Wrap" SelectionBrush="{StaticResource AccentDim}" ui:WheelForward.ToParent="True"/>
+                    <ui:StreamingTextBox StreamText="{Binding Text, Mode=OneWay}" IsReadOnly="True" Style="{x:Null}" BorderThickness="0"
+                             Background="Transparent" Padding="0" IsTabStop="False" Foreground="{StaticResource Muted}"
+                             FontStyle="Italic" FontSize="12.5" TextWrapping="Wrap"
+                             SelectionBrush="{StaticResource AccentDim}" ui:WheelForward.ToParent="True" />
                 </Border>
             </StackPanel>
             <DataTemplate.Triggers>
@@ -986,68 +1061,143 @@
         <!-- One command/edit inside a compact activity group. The first click on the group exposes these one-line
              rows; this row's own chevron is the second click that reveals the exact command output or file diff. -->
         <DataTemplate x:Key="CompactToolRow" DataType="{x:Type ui:ToolItem}">
-            <Border x:Name="row" BorderBrush="{StaticResource ToolSeparator}" BorderThickness="0,0,0,1" ContextMenu="{StaticResource BlockMenu}">
+            <Border x:Name="row" BorderBrush="{StaticResource ToolSeparator}" BorderThickness="0,0,0,1"
+                    ContextMenu="{StaticResource BlockMenu}">
                 <StackPanel>
-                    <ToggleButton IsChecked="{Binding Expanded}" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="0" FocusVisualStyle="{x:Null}">
+                    <ToggleButton x:Name="compactRowToggle" IsChecked="{Binding Expanded}" Cursor="Hand" Background="Transparent" BorderThickness="0"
+                                  Padding="0" HorizontalContentAlignment="Stretch" FocusVisualStyle="{x:Null}">
                         <ToggleButton.Template>
                             <ControlTemplate TargetType="ToggleButton">
-                                <Border x:Name="rowHeader" Background="Transparent" Padding="11,7">
-                                    <ContentPresenter/>
+                                <Border x:Name="rowHeader" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" Padding="10,6">
+                                    <ContentPresenter />
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="rowHeader" Property="Background" Value="{StaticResource ToolHover}"/>
+                                        <Setter TargetName="rowHeader" Property="Background" Value="{StaticResource ToolHover}" />
+                                    </Trigger>
+                                    <Trigger Property="IsKeyboardFocused" Value="True">
+                                        <Setter TargetName="rowHeader" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                        <Setter TargetName="rowHeader" Property="Background" Value="{StaticResource ToolHover}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </ToggleButton.Template>
-                        <DockPanel>
-                            <Ellipse DockPanel.Dock="Left" Width="6" Height="6" Margin="1,0,9,0" VerticalAlignment="Center" Fill="{Binding Status, Converter={StaticResource StatusBrush}}"/>
-                            <TextBlock DockPanel.Dock="Left" Text="{Binding Icon}" Style="{StaticResource Icon}" FontSize="11" Foreground="{StaticResource Faint}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="compactRowChev" DockPanel.Dock="Right" Text="" Style="{StaticResource Icon}" FontSize="8" Foreground="{StaticResource Faint}" Margin="10,1,1,0" RenderTransformOrigin=".5,.5">
-                                <TextBlock.RenderTransform><RotateTransform Angle="0"/></TextBlock.RenderTransform>
+                        <Grid>
+                        <DockPanel x:Name="compactGenericHeader">
+                            <Ellipse DockPanel.Dock="Left" Width="6" Height="6" Margin="1,0,9,0" VerticalAlignment="Center"
+                                     Fill="{Binding Status, Converter={StaticResource StatusBrush}}" />
+                            <TextBlock DockPanel.Dock="Left" Text="{Binding Icon}" Style="{StaticResource Icon}" FontSize="11"
+                                       Foreground="{StaticResource Faint}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                            <TextBlock x:Name="compactRowChev" DockPanel.Dock="Right" Text="&#xE76C;" Style="{StaticResource Icon}"
+                                       FontSize="8" Foreground="{StaticResource Faint}" Margin="10,1,1,0"
+                                       RenderTransformOrigin=".5,.5">
+                                <TextBlock.RenderTransform><RotateTransform Angle="0" /></TextBlock.RenderTransform>
                             </TextBlock>
-                            <TextBlock DockPanel.Dock="Right" FontFamily="{StaticResource Mono}" FontSize="10" VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="NoWrap" Visibility="{Binding HasDiffStat, Converter={StaticResource BoolVis}}">
-                                <Run Text="+" Foreground="{StaticResource Green}"/><Run Text="{Binding Added, Mode=OneWay}" Foreground="{StaticResource Green}"/><Run Text="  −" Foreground="{StaticResource Red}"/><Run Text="{Binding Removed, Mode=OneWay}" Foreground="{StaticResource Red}"/>
+                            <TextBlock DockPanel.Dock="Right" FontFamily="{StaticResource Mono}" FontSize="10"
+                                       VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="NoWrap"
+                                       Visibility="{Binding HasDiffStat, Converter={StaticResource BoolVis}}">
+                                <Run Text="+" Foreground="{StaticResource Green}" /><Run Text="{Binding Added, Mode=OneWay}" Foreground="{StaticResource Green}" /><Run Text="  &#x2212;" Foreground="{StaticResource Red}" /><Run Text="{Binding Removed, Mode=OneWay}" Foreground="{StaticResource Red}" />
                             </TextBlock>
-                            <TextBlock Text="{Binding HeaderSummary}" Foreground="{StaticResource Muted}" FontFamily="{StaticResource Mono}" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                            <TextBlock DockPanel.Dock="Right" FontFamily="{StaticResource Mono}" FontSize="10"
+                                       Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                       TextWrapping="NoWrap"
+                                       Visibility="{Binding HasLineRange, Converter={StaticResource BoolVis}}"
+                                       Text="{Binding LineRangeText}" />
+                            <TextBlock Text="{Binding HeaderSummary}" Foreground="{StaticResource Muted}" FontFamily="{StaticResource Mono}"
+                                       FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                         </DockPanel>
+                        <Grid x:Name="lookupHeader" Visibility="Collapsed" ToolTip="{Binding Lookup.Detail}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="20" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="16" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Icon}" Style="{StaticResource Icon}" FontSize="12"
+                                       Foreground="{StaticResource Muted}" VerticalAlignment="Top" Margin="0,3,0,0" />
+                            <StackPanel Grid.Column="1" Margin="0,0,10,0">
+                                <TextBlock Text="{Binding Lookup.Title}" Foreground="{StaticResource Text}" FontFamily="{StaticResource Mono}"
+                                           FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                <TextBlock Text="{Binding Lookup.Location}" Foreground="{StaticResource Muted}" Margin="0,2,0,0"
+                                           FontSize="10.5" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,8,0">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Ellipse Width="5" Height="5" VerticalAlignment="Center" Margin="0,0,5,0"
+                                             Fill="{Binding Status, Converter={StaticResource StatusBrush}}" ToolTip="{Binding LookupStatus}" />
+                                    <TextBlock x:Name="lookupOperation" Text="{Binding Lookup.Operation}" FontSize="10.5"
+                                               Foreground="{StaticResource Muted}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding LineRangeText, StringFormat='L{0}'}" FontFamily="{StaticResource Mono}" FontSize="10"
+                                           Foreground="{StaticResource Muted}" Margin="0,2,0,0" HorizontalAlignment="Right"
+                                           Visibility="{Binding HasLineRange, Converter={StaticResource BoolVis}}" />
+                            </StackPanel>
+                            <TextBlock x:Name="lookupRowChev" Grid.Column="3" Text="&#xE76C;" Style="{StaticResource Icon}"
+                                       FontSize="8" Foreground="{StaticResource Muted}" VerticalAlignment="Center" RenderTransformOrigin=".5,.5" />
+                        </Grid>
+                        </Grid>
                     </ToggleButton>
 
-                    <ContentControl Style="{StaticResource DeferredToolContent}" Content="{Binding}" Visibility="{Binding Expanded, Converter={StaticResource BoolVis}}">
+                    <ContentControl Style="{StaticResource DeferredToolContent}" Content="{Binding}"
+                                    Visibility="{Binding Expanded, Converter={StaticResource BoolVis}}">
                         <ContentControl.ContentTemplate>
                             <DataTemplate>
-                                <Border BorderBrush="{StaticResource ToolSeparator}" BorderThickness="0,1,0,0" Padding="13,9,13,11" Background="{StaticResource SurfaceToolBody}">
+                                <Border BorderBrush="{StaticResource ToolSeparator}" BorderThickness="0,1,0,0" Padding="13,9,13,11"
+                                        Background="{StaticResource SurfaceToolBody}">
                                     <StackPanel>
                                         <StackPanel Visibility="{Binding WebSearchDetails, Converter={StaticResource ShowIf}}">
-                                            <TextBlock Text="{Binding WebSearchDetailLabel}" Style="{StaticResource Caption}" FontSize="9" Margin="1,0,0,4"/>
-                                            <TextBox Style="{StaticResource CodeBox}" Text="{Binding WebSearchDetails, Mode=OneWay}" MaxHeight="260"/>
+                                            <TextBlock Text="{Binding WebSearchDetailLabel}" Style="{StaticResource Caption}"
+                                                       FontSize="9" Margin="1,0,0,4" />
+                                            <TextBox Style="{StaticResource CodeBox}"
+                                                     Text="{Binding WebSearchDetails, Mode=OneWay}" MaxHeight="260" />
                                         </StackPanel>
-                                        <TextBlock Text="COMMAND" Style="{StaticResource Caption}" FontSize="9" Margin="1,0,0,4" Visibility="{Binding BashCommand, Converter={StaticResource ShowIf}}"/>
-                                        <TextBox Style="{StaticResource CodeBox}" Text="{Binding BashCommand, Mode=OneWay}" Visibility="{Binding BashCommand, Converter={StaticResource ShowIf}}"/>
-                                        <TextBlock Text="INPUT" Style="{StaticResource Caption}" FontSize="9" Margin="1,0,0,4" Visibility="{Binding CompactFallbackInput, Converter={StaticResource ShowIf}}"/>
-                                        <TextBox Style="{StaticResource CodeBox}" Text="{Binding CompactFallbackInput, Mode=OneWay}" FontSize="11.5" MaxHeight="320" Visibility="{Binding CompactFallbackInput, Converter={StaticResource ShowIf}}"/>
-                                        <TextBlock Text="CONTENT" Style="{StaticResource Caption}" FontSize="9" Margin="1,0,0,4" Visibility="{Binding WriteContent, Converter={StaticResource ShowIf}}"/>
-                                        <TextBox Style="{StaticResource CodeBox}" Text="{Binding WriteContent, Mode=OneWay}" FontSize="11.5" MaxHeight="320" Visibility="{Binding WriteContent, Converter={StaticResource ShowIf}}"/>
-                                        <Button HorizontalAlignment="Left" Margin="0,3,0,5" Padding="8,3" Cursor="Hand" Style="{StaticResource GhostButton}" Click="OnViewFullCode" Visibility="{Binding CanViewCode, Converter={StaticResource BoolVis}}" ToolTip="Open the full file with these changes highlighted">
+                                        <TextBlock Text="COMMAND" Style="{StaticResource Caption}" FontSize="9" Margin="1,0,0,4"
+                                                   Visibility="{Binding BashCommand, Converter={StaticResource ShowIf}}" />
+                                        <TextBox Style="{StaticResource CodeBox}" Text="{Binding BashCommand, Mode=OneWay}"
+                                                 Visibility="{Binding BashCommand, Converter={StaticResource ShowIf}}" />
+                                        <TextBlock Text="INPUT" Style="{StaticResource Caption}" FontSize="9" Margin="1,0,0,4"
+                                                   Visibility="{Binding CompactFallbackInput, Converter={StaticResource ShowIf}}" />
+                                        <TextBox Style="{StaticResource CodeBox}" Text="{Binding CompactFallbackInput, Mode=OneWay}"
+                                                 FontSize="11.5" MaxHeight="320"
+                                                 Visibility="{Binding CompactFallbackInput, Converter={StaticResource ShowIf}}" />
+                                        <TextBlock Text="CONTENT" Style="{StaticResource Caption}" FontSize="9" Margin="1,0,0,4"
+                                                   Visibility="{Binding WriteContent, Converter={StaticResource ShowIf}}" />
+                                        <TextBox Style="{StaticResource CodeBox}" Text="{Binding WriteContent, Mode=OneWay}"
+                                                 FontSize="11.5" MaxHeight="320"
+                                                 Visibility="{Binding WriteContent, Converter={StaticResource ShowIf}}" />
+                                        <Button HorizontalAlignment="Left" Margin="0,3,0,5" Padding="8,3" Cursor="Hand"
+                                                Style="{StaticResource GhostButton}" Click="OnViewFullCode"
+                                                Visibility="{Binding CanViewCode, Converter={StaticResource BoolVis}}"
+                                                ToolTip="Open the full file with these changes highlighted">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="11" Foreground="{StaticResource Accent}" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                                <TextBlock Text="View full code" FontSize="11.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
+                                                <TextBlock Text="&#xE8A7;" FontFamily="{StaticResource Icons}" FontSize="11"
+                                                           Foreground="{StaticResource Accent}" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                                <TextBlock Text="View full code" FontSize="11.5" Foreground="{StaticResource Accent}"
+                                                           VerticalAlignment="Center" />
                                             </StackPanel>
                                         </Button>
-                                        <Button HorizontalAlignment="Left" Margin="0,0,0,5" Padding="8,3" Cursor="Hand" Style="{StaticResource GhostButton}" Click="OnOpenInEditor" Visibility="{Binding CanViewCode, Converter={StaticResource BoolVis}}" ToolTip="Open this file in VS Code, Cursor, Rider, Sublime…">
+                                        <Button HorizontalAlignment="Left" Margin="0,0,0,5" Padding="8,3" Cursor="Hand"
+                                                Style="{StaticResource GhostButton}" Click="OnOpenInEditor"
+                                                Visibility="{Binding CanViewCode, Converter={StaticResource BoolVis}}"
+                                                ToolTip="Open this file in VS Code, Cursor, Rider, Sublime…">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="11" Foreground="{StaticResource Faint}" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                                <TextBlock Text="Open in editor" FontSize="11.5" Foreground="{StaticResource Faint}" VerticalAlignment="Center"/>
+                                                <TextBlock Text="&#xE8A7;" FontFamily="{StaticResource Icons}" FontSize="11"
+                                                           Foreground="{StaticResource Faint}" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                                <TextBlock Text="Open in editor" FontSize="11.5" Foreground="{StaticResource Faint}"
+                                                           VerticalAlignment="Center" />
                                             </StackPanel>
                                         </Button>
-                                        <Border CornerRadius="{StaticResource Rad8}" Background="{StaticResource CodeBg}" Padding="0,6" Margin="0,2" Visibility="{Binding DiffLines.Count, Converter={StaticResource ShowIf}}">
-                                            <ItemsControl ItemsSource="{Binding DiffLines}" ItemTemplate="{StaticResource DiffRow}"/>
+                                        <Border CornerRadius="{StaticResource Rad8}" Background="{StaticResource CodeBg}" Padding="0,6" Margin="0,2"
+                                                Visibility="{Binding DiffLines.Count, Converter={StaticResource ShowIf}}">
+                                            <ItemsControl ItemsSource="{Binding DiffLines}" ItemTemplate="{StaticResource DiffRow}" />
                                         </Border>
-                                        <TextBlock Text="{Binding ProgressText}" Foreground="{StaticResource Faint}" FontFamily="{StaticResource Mono}" FontSize="10.5" Margin="1,5,0,0" Visibility="{Binding ProgressText, Converter={StaticResource ShowIf}}"/>
+                                        <TextBlock Text="{Binding ProgressText}" Foreground="{StaticResource Faint}" FontFamily="{StaticResource Mono}"
+                                                   FontSize="10.5" Margin="1,5,0,0"
+                                                   Visibility="{Binding ProgressText, Converter={StaticResource ShowIf}}" />
                                         <StackPanel Visibility="{Binding ResultCapped, Converter={StaticResource ShowIf}}">
-                                            <TextBlock Text="OUTPUT" Style="{StaticResource Caption}" FontSize="9" Margin="1,8,0,4"/>
-                                            <TextBox Style="{StaticResource CodeBox}" Text="{Binding ResultCapped, Mode=OneWay}" FontSize="11.5" Foreground="{StaticResource Muted}" MaxHeight="300"/>
+                                            <TextBlock Text="OUTPUT" Style="{StaticResource Caption}" FontSize="9" Margin="1,8,0,4" />
+                                            <TextBox Style="{StaticResource CodeBox}" Text="{Binding ResultCapped, Mode=OneWay}"
+                                                     FontSize="11.5" Foreground="{StaticResource Muted}" MaxHeight="300" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>
@@ -1057,21 +1207,42 @@
                 </StackPanel>
             </Border>
             <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsFileLookup}" Value="True">
+                    <Setter TargetName="compactGenericHeader" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="lookupHeader" Property="Visibility" Value="Visible" />
+                    <Setter TargetName="compactRowToggle" Property="AutomationProperties.Name" Value="{Binding LookupAccessibleName}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                    <Setter TargetName="lookupOperation" Property="Text" Value="Running" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding LookupStatus}" Value="Failed">
+                    <Setter TargetName="lookupOperation" Property="Text" Value="Failed" />
+                    <Setter TargetName="lookupOperation" Property="Foreground" Value="{StaticResource Red}" />
+                </DataTrigger>
                 <DataTrigger Binding="{Binding IsError}" Value="True">
-                    <Setter TargetName="row" Property="Background" Value="{StaticResource ToolErrorFill}"/>
+                    <Setter TargetName="row" Property="Background" Value="{StaticResource ToolErrorFill}" />
+                    <Setter TargetName="lookupOperation" Property="Text" Value="Failed" />
+                    <Setter TargetName="lookupOperation" Property="Foreground" Value="{StaticResource Red}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Expanded}" Value="True">
+                    <Setter TargetName="lookupRowChev" Property="RenderTransform">
+                        <Setter.Value><RotateTransform Angle="90" /></Setter.Value>
+                    </Setter>
                     <DataTrigger.EnterActions>
                         <BeginStoryboard>
                             <Storyboard>
-                                <DoubleAnimation Storyboard.TargetName="compactRowChev" Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" To="90" Duration="0:0:0.15"/>
+                                <DoubleAnimation Storyboard.TargetName="compactRowChev"
+                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                 To="90" Duration="0:0:0.15" />
                             </Storyboard>
                         </BeginStoryboard>
                     </DataTrigger.EnterActions>
                     <DataTrigger.ExitActions>
                         <BeginStoryboard>
                             <Storyboard>
-                                <DoubleAnimation Storyboard.TargetName="compactRowChev" Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" To="0" Duration="0:0:0.15"/>
+                                <DoubleAnimation Storyboard.TargetName="compactRowChev"
+                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                 To="0" Duration="0:0:0.15" />
                             </Storyboard>
                         </BeginStoryboard>
                     </DataTrigger.ExitActions>
@@ -1104,11 +1275,16 @@
                                 </ControlTemplate>
                             </ToggleButton.Template>
                             <DockPanel>
-                                <Ellipse DockPanel.Dock="Left" Width="7" Height="7" Margin="1,0,10,0" VerticalAlignment="Center" Fill="{Binding Status, Converter={StaticResource StatusBrush}}"/>
-                                <TextBlock DockPanel.Dock="Left" Text="{Binding Icon}" Style="{StaticResource Icon}" FontSize="12.5" Margin="0,0,9,0"/>
-                                <TextBlock DockPanel.Dock="Left" Text="{Binding Name}" FontFamily="{StaticResource Mono}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" TextWrapping="NoWrap"/>
-                                <Border DockPanel.Dock="Left" Background="{StaticResource AccentSoft}" CornerRadius="{StaticResource Rad99}" Padding="7,1.5" Margin="8,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding CountText}" Foreground="{StaticResource Accent}" FontSize="10" FontWeight="SemiBold"/>
+                                <Ellipse DockPanel.Dock="Left" Width="7" Height="7" Margin="1,0,10,0" VerticalAlignment="Center"
+                                         Fill="{Binding Status, Converter={StaticResource StatusBrush}}" />
+                                <TextBlock DockPanel.Dock="Left" Text="{Binding Icon}" Style="{StaticResource Icon}" FontSize="12.5"
+                                           Margin="0,0,9,0" />
+                                <TextBlock DockPanel.Dock="Left" Text="{Binding Name}" FontFamily="{StaticResource Mono}"
+                                           FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" TextWrapping="NoWrap" />
+                                <Border x:Name="compactCountBadge" DockPanel.Dock="Left" Background="{StaticResource AccentSoft}" CornerRadius="{StaticResource Rad99}"
+                                        Padding="7,1.5" Margin="8,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="compactCountLabel" Text="{Binding CountText}" Foreground="{StaticResource Accent}" FontSize="10"
+                                               FontWeight="SemiBold" />
                                 </Border>
                                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center" Visibility="{Binding HasShellOutcomeCounts, Converter={StaticResource BoolVis}}">
                                     <TextBlock Text="{Binding SuccessText}" Foreground="{StaticResource Green}" FontSize="10" TextWrapping="NoWrap" Visibility="{Binding SuccessText, Converter={StaticResource ShowIf}}"/>
@@ -1141,6 +1317,12 @@
                     <Setter TargetName="fullToolList" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="compactGroupCard" Property="Visibility" Value="Visible"/>
                 </DataTrigger>
+                <DataTrigger Binding="{Binding Kind}" Value="browse">
+                    <Setter TargetName="compactCountBadge" Property="Background" Value="Transparent" />
+                    <Setter TargetName="compactCountBadge" Property="Padding" Value="0" />
+                    <Setter TargetName="compactCountLabel" Property="Foreground" Value="{StaticResource Muted}" />
+                    <Setter TargetName="compactCountLabel" Property="FontWeight" Value="Normal" />
+                </DataTrigger>
                 <DataTrigger Binding="{Binding IsError}" Value="True">
                     <Setter TargetName="compactGroupCard" Property="BorderBrush" Value="{StaticResource ToolErrorOutline}"/>
                 </DataTrigger>
@@ -1163,16 +1345,19 @@
             </DataTemplate.Triggers>
         </DataTemplate>
 
-        <!-- Native Codex workers have no Agent tool card. The row is shared with the roster, and its detailed
-             controls exist only while expanded so a large fan-out stays inexpensive when folded. -->
+        <!-- Native Codex workers use the same compact visual language as Claude's Agent tool cards. Their
+             assignment and transcript are deferred until expanded; the roster shares the live worker model. -->
         <DataTemplate DataType="{x:Type ui:SubagentItem}">
-            <Border Background="{StaticResource SurfaceToolCard}" BorderBrush="{StaticResource ToolOutline}" BorderThickness="1" CornerRadius="{StaticResource Rad12}" Margin="0,4" ContextMenu="{StaticResource BlockMenu}">
+            <Border x:Name="subagentCard" Background="{StaticResource SurfaceToolCard}" BorderBrush="{StaticResource ToolOutline}"
+                    BorderThickness="1" CornerRadius="{StaticResource Rad12}" Margin="0,4"
+                    ContextMenu="{StaticResource BlockMenu}">
                 <StackPanel>
                     <ToggleButton x:Name="SubagentCardToggle" IsChecked="{Binding Expanded, Mode=TwoWay}" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="0" HorizontalContentAlignment="Stretch" FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Label, StringFormat='Expand or collapse subagent {0}'}" ToolTip="Show or hide this subagent's output">
                         <ToggleButton.Template>
                             <ControlTemplate TargetType="ToggleButton">
-                                <Border x:Name="header" Background="Transparent" CornerRadius="{StaticResource Rad11}" Padding="12,10">
-                                    <ContentPresenter/>
+                                <Border x:Name="header" Background="Transparent"
+                                        CornerRadius="{StaticResource Rad11}" Padding="12,8">
+                                    <ContentPresenter />
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
@@ -1186,10 +1371,12 @@
                         </ToggleButton.Template>
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -1204,15 +1391,31 @@
                             <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding Activity}" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Activity}"/>
                         </Grid>
                     </ToggleButton>
-                    <ContentControl x:Name="SubagentTranscriptBody" Style="{StaticResource DeferredToolContent}" Content="{Binding}" Visibility="{Binding Expanded, Converter={StaticResource BoolVis}}">
+                    <TextBlock Text="{Binding Activity}" FontFamily="{StaticResource Mono}" FontSize="10.5"
+                               Foreground="{StaticResource Muted}" Margin="30,0,12,8"
+                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTip="{Binding Activity}"
+                               Visibility="{Binding Activity, Converter={StaticResource ShowIf}}" />
+                    <ContentControl x:Name="SubagentTranscriptBody" Style="{StaticResource DeferredToolContent}"
+                                    Content="{Binding}" Visibility="{Binding Expanded, Converter={StaticResource BoolVis}}">
                         <ContentControl.ContentTemplate>
                             <DataTemplate>
-                                <Border BorderBrush="{StaticResource ToolOutline}" BorderThickness="0,1,0,0" Padding="14,8">
+                                <Border BorderBrush="{StaticResource ToolOutline}" BorderThickness="0,1,0,0" Padding="14,10,14,12">
                                     <StackPanel>
-                                        <TextBlock Text="{Binding TranscriptEmptyText}" FontSize="12" Margin="0,4" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Visibility="{Binding HasTranscript, Converter={StaticResource ShowIf}, ConverterParameter=invert}"/>
-                                        <ScrollViewer MaxHeight="400" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly" Visibility="{Binding HasTranscript, Converter={StaticResource BoolVis}}">
-                                            <ItemsControl ItemsSource="{Binding Transcript}"/>
-                                        </ScrollViewer>
+                                        <TextBlock Text="{Binding Task}" FontSize="12" Foreground="{StaticResource Muted}"
+                                                   TextWrapping="Wrap" Margin="0,0,0,10"
+                                                   Visibility="{Binding Task, Converter={StaticResource ShowIf}}" />
+                                        <Border BorderBrush="{StaticResource BlueSoft}" BorderThickness="2,0,0,0" Padding="12,0,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding TranscriptEmptyText}" FontSize="12" Margin="0,4"
+                                                           Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                                                           Visibility="{Binding HasTranscript, Converter={StaticResource ShowIf}, ConverterParameter=invert}" />
+                                                <ScrollViewer MaxHeight="400" VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly"
+                                                              Visibility="{Binding HasTranscript, Converter={StaticResource BoolVis}}">
+                                                    <ItemsControl ItemsSource="{Binding Transcript}" />
+                                                </ScrollViewer>
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>
@@ -1221,6 +1424,9 @@
                 </StackPanel>
             </Border>
             <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Status}" Value="errored">
+                    <Setter TargetName="subagentCard" Property="BorderBrush" Value="{StaticResource ToolErrorOutline}" />
+                </DataTrigger>
                 <DataTrigger Binding="{Binding Expanded}" Value="True">
                     <Setter TargetName="subagentChevron" Property="Text" Value=""/>
                 </DataTrigger>
@@ -1263,7 +1469,14 @@
                                 <TextBlock DockPanel.Dock="Right" FontFamily="{StaticResource Mono}" FontSize="10.5" VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="NoWrap" Visibility="{Binding HasDiffStat, Converter={StaticResource BoolVis}}">
                                     <Run Text="+" Foreground="{StaticResource Green}"/><Run Text="{Binding Added, Mode=OneWay}" Foreground="{StaticResource Green}"/><Run Text="  −" Foreground="{StaticResource Red}"/><Run Text="{Binding Removed, Mode=OneWay}" Foreground="{StaticResource Red}"/>
                                 </TextBlock>
-                                <TextBlock Text="{Binding HeaderSummary}" Foreground="{StaticResource Muted}" FontFamily="{StaticResource Mono}" FontSize="11.5" Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                                <TextBlock DockPanel.Dock="Right" FontFamily="{StaticResource Mono}" FontSize="10.5"
+                                           Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                           TextWrapping="NoWrap"
+                                           Visibility="{Binding HasLineRange, Converter={StaticResource BoolVis}}"
+                                           Text="{Binding LineRangeText}" />
+                                <TextBlock Text="{Binding HeaderSummary}" Foreground="{StaticResource Muted}"
+                                           FontFamily="{StaticResource Mono}" FontSize="11.5" Margin="10,0,0,0"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                             </DockPanel>
                         </ToggleButton>
 
@@ -1284,10 +1497,20 @@
                                         <ItemsControl ItemsSource="{Binding Agents}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <DockPanel Margin="8,1.5,0,1.5">
-                                                        <TextBlock DockPanel.Dock="Left" Text="{Binding Mark}" FontFamily="{StaticResource Icons}" FontSize="10" Foreground="{Binding StatusKey, Converter={StaticResource StatusBrush}}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding Stats}" FontSize="9.5" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}" Margin="10,0,0,0" VerticalAlignment="Center" Visibility="{Binding Stats, Converter={StaticResource ShowIf}}"/>
-                                                        <TextBlock Text="{Binding Label}" FontSize="11" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" VerticalAlignment="Center" ToolTip="{Binding PromptPreview}">
+                                                    <!-- The whole row hovers: what the agent is doing now (read from its
+                                                         transcript on disk), what it finished last, then its prompt. -->
+                                                    <DockPanel Margin="8,1.5,0,1.5" Background="Transparent"
+                                                               ToolTip="{Binding HoverText}">
+                                                        <TextBlock DockPanel.Dock="Left" Text="{Binding Mark}"
+                                                                   FontFamily="{StaticResource Icons}" FontSize="10"
+                                                                   Foreground="{Binding StatusKey, Converter={StaticResource StatusBrush}}"
+                                                                   Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding Stats}" FontSize="9.5"
+                                                                   FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}"
+                                                                   Margin="10,0,0,0" VerticalAlignment="Center"
+                                                                   Visibility="{Binding Stats, Converter={StaticResource ShowIf}}" />
+                                                        <TextBlock Text="{Binding Label}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                                                   TextWrapping="NoWrap" VerticalAlignment="Center">
                                                             <TextBlock.Style>
                                                                 <Style TargetType="TextBlock">
                                                                     <Setter Property="Foreground" Value="{StaticResource Muted}"/>
@@ -1309,8 +1532,23 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
-                        <!-- subagent transcript -->
-                        <Border BorderBrush="{StaticResource ToolOutline}" BorderThickness="0,1,0,0" Padding="14,6,12,10" Visibility="{Binding Children.Count, Converter={StaticResource ShowIf}}">
+                        <!-- subagent transcript: only while the card is open and has rows. Shown on Children.Count alone, a
+                             collapsed Agent card kept an empty ruled strip under its header. -->
+                        <Border BorderBrush="{StaticResource ToolOutline}" BorderThickness="0,1,0,0" Padding="14,6,12,10">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding Expanded}" Value="True" />
+                                                <Condition Binding="{Binding Children.Count, Converter={StaticResource ShowIf}}" Value="Visible" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
                             <Border BorderBrush="#558FAEE6" BorderThickness="2,0,0,0" Padding="12,0,0,0">
                                 <ContentControl Style="{StaticResource DeferredToolContent}" Content="{Binding}" Visibility="{Binding Expanded, Converter={StaticResource BoolVis}}">
                                     <ContentControl.ContentTemplate>
@@ -1540,6 +1778,48 @@
                 </Border>
             </Grid>
         </DataTemplate>
+        <!-- Composer pills that are a single symbol until clicked. The permission mode is its own icon in the colour
+             its menu uses (ask keeps the plain text colour); the full name is the tooltip. -->
+        <DataTemplate x:Key="ModeGlyph" DataType="{x:Type ui:ChatViewModel}">
+            <TextBlock x:Name="glyph" Text="{Binding ModeIcon}" FontFamily="{StaticResource Icons}" FontSize="12"
+                       VerticalAlignment="Center" TextWrapping="NoWrap" />
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Mode}" Value="auto">
+                    <Setter TargetName="glyph" Property="Foreground" Value="{StaticResource Green}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Mode}" Value="plan">
+                    <Setter TargetName="glyph" Property="Foreground" Value="{StaticResource Blue}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Mode}" Value="acceptEdits">
+                    <Setter TargetName="glyph" Property="Foreground" Value="{StaticResource Yellow}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Mode}" Value="bypassPermissions">
+                    <Setter TargetName="glyph" Property="Foreground" Value="{StaticResource Red}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <!-- Extended queue as one icon: plain while off, accent while on (yellow while paused) with the number of
+             prompts sent per turn beside it, e.g. "3". What is waiting and why lives in the tooltip. -->
+        <DataTemplate x:Key="ExtendedQueueGlyph" DataType="{x:Type ui:ChatViewModel}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="glyph" Text="&#xE8FD;" FontFamily="{StaticResource Icons}" FontSize="12"
+                           VerticalAlignment="Center" TextWrapping="NoWrap" />
+                <TextBlock x:Name="batch" Text="{Binding ExtendedQueueChunkSize}" FontSize="11" FontWeight="SemiBold"
+                           Margin="4,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" Visibility="Collapsed" />
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding ExtendedQueueEnabled}" Value="True">
+                    <Setter TargetName="glyph" Property="Foreground" Value="{StaticResource Accent}" />
+                    <Setter TargetName="batch" Property="Foreground" Value="{StaticResource Accent}" />
+                    <Setter TargetName="batch" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ExtendedQueuePaused}" Value="True">
+                    <Setter TargetName="glyph" Property="Foreground" Value="{StaticResource Yellow}" />
+                    <Setter TargetName="batch" Property="Foreground" Value="{StaticResource Yellow}" />
+                    <Setter TargetName="batch" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
         <DataTemplate x:Key="BridgeComposerTemplate" DataType="{x:Type ui:ChatViewModel}">
             <Border x:Name="BridgeComposerFrame" Padding="8" AllowDrop="True" PreviewDragOver="OnBridgeComposerDragOver" PreviewDrop="OnBridgeComposerDrop">
                 <Border.Style>
@@ -1567,7 +1847,7 @@
                 </Border.Style>
                 <DockPanel>
                     <!-- per-pane controls: same permission mode / model / effort a normal chat has -->
-                    <WrapPanel DockPanel.Dock="Bottom" Margin="2,7,0,0">
+                    <ui:StatusWrapPanel DockPanel.Dock="Bottom" Margin="2,7,0,0">
                         <!-- permission mode -->
                         <ToggleButton x:Name="PaneModeToggle" Style="{StaticResource GhostToggle}" Padding="7,3" AutomationProperties.Name="Pane permission mode">
                             <StackPanel Orientation="Horizontal">
@@ -1630,7 +1910,8 @@
                             </Border>
                         </Popup>
                         <!-- model -->
-                        <ToggleButton x:Name="PaneModelToggle" Style="{StaticResource GhostToggle}" Padding="7,3" Margin="2,0,0,0" AutomationProperties.Name="Pane model picker">
+                        <ToggleButton x:Name="PaneModelToggle" Style="{StaticResource GhostToggle}" Padding="7,3"
+                                      AutomationProperties.Name="Pane model picker">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="9.5" Margin="0,1,5,0" VerticalAlignment="Center" TextWrapping="NoWrap"/>
                                 <TextBlock Text="{Binding ModelDisplay}" FontSize="11" VerticalAlignment="Center"/>
@@ -1755,23 +2036,78 @@
                             </Border>
                         </Popup>
                         <!-- Keep routing and team usage together so totals cannot wrap onto a row by themselves. -->
-                        <StackPanel x:Name="SharedRoutingAndUsage" Orientation="Horizontal" Margin="6,0,0,0" VerticalAlignment="Center" DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type ui:BridgeSharedTerminal}}, FallbackValue={x:Null}}" Visibility="{Binding Target, Converter={StaticResource ShowIf}, FallbackValue=Collapsed}">
-                            <TextBlock Text="Send to" VerticalAlignment="Center" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,0,6,0"/>
-                            <ComboBox x:Name="SharedRecipientPicker" ItemsSource="{Binding Agents}" SelectedItem="{Binding Target, Mode=TwoWay}" MinWidth="100" MaxWidth="160" MinHeight="26" FontSize="11" HorizontalAlignment="Left" ToolTip="{Binding Target.BridgeTerminalLabel}" AutomationProperties.Name="Agent receiving the next prompt">
+                        <StackPanel x:Name="SharedRoutingAndUsage" Orientation="Horizontal" Margin="6,0,0,0" VerticalAlignment="Center"
+                                    ui:StatusWrapPanel.ShortensToFit="True"
+                                    DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType={x:Type ui:BridgeSharedTerminal}}, FallbackValue={x:Null}}"
+                                    Visibility="{Binding Target, Converter={StaticResource ShowIf}, FallbackValue=Collapsed}">
+                            <!-- Agent team: one terminal, no recipient to pick. Robot on, the line says who takes the next
+                                 prompt (a free agent, or a newcomer when all are busy); robot off, the team's own chat replies. -->
+                            <TextBlock x:Name="SharedTeamRouting" VerticalAlignment="Center"
+                                       FontSize="11" Margin="0,0,2,0" TextWrapping="NoWrap"
+                                       Visibility="{Binding IsAgentTeam, Converter={StaticResource ShowIf}, FallbackValue=Collapsed}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                        <Setter Property="Text" Value="{Binding TeamRoutingText}" />
+                                        <Setter Property="ToolTip" Value="Every agent's messages and actions log in this one terminal, and each newcomer starts with the team chat so far." />
+                                        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Target.AgentTeamMode}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource Green}" />
+                                            </DataTrigger>
+                                            <!-- Shortened to stay on the footer's line; the whole sentence moves to the tooltip. -->
+                                            <Trigger Property="ui:StatusWrapPanel.Fit" Value="1">
+                                                <Setter Property="Text" Value="{Binding TeamRoutingShortText}" />
+                                                <Setter Property="ToolTip" Value="{Binding TeamRoutingText}" />
+                                            </Trigger>
+                                            <Trigger Property="ui:StatusWrapPanel.Fit" Value="2">
+                                                <Setter Property="Text" Value="{Binding TeamRoutingShortText}" />
+                                                <Setter Property="ToolTip" Value="{Binding TeamRoutingText}" />
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="Send to" VerticalAlignment="Center" Foreground="{StaticResource Muted}"
+                                       FontSize="11" Margin="0,0,6,0"
+                                       Visibility="{Binding IsAgentTeam, Converter={StaticResource ShowIf}, ConverterParameter=invert, FallbackValue=Visible}" />
+                            <ComboBox x:Name="SharedRecipientPicker" ItemsSource="{Binding Agents}" SelectedItem="{Binding Target, Mode=TwoWay}"
+                                      MinWidth="100" MaxWidth="160" MinHeight="26" FontSize="11" HorizontalAlignment="Left"
+                                      ToolTip="{Binding Target.BridgeTerminalLabel}"
+                                      Visibility="{Binding IsAgentTeam, Converter={StaticResource ShowIf}, ConverterParameter=invert, FallbackValue=Visible}"
+                                      AutomationProperties.Name="Agent receiving the next prompt">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding BridgeTerminalLabel}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
-                            <TextBlock x:Name="SharedUsageTotals" Text="{Binding InlineUsageText}" ToolTip="{Binding UsageToolTip}" Visibility="{Binding HasUsage, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}" FontFamily="{StaticResource Mono}" FontSize="10.5" Foreground="{StaticResource Muted}" Margin="12,3,2,3" VerticalAlignment="Center" TextWrapping="NoWrap" AutomationProperties.Name="Total usage for all bridge workers and orchestrators"/>
+                            <TextBlock x:Name="SharedUsageTotals" ToolTip="{Binding UsageToolTip}"
+                                       Visibility="{Binding HasUsage, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                       FontFamily="{StaticResource Mono}" FontSize="10.5" Foreground="{StaticResource Muted}"
+                                       Margin="12,3,2,3" VerticalAlignment="Center" TextWrapping="NoWrap"
+                                       AutomationProperties.Name="Total usage for all bridge workers and orchestrators">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                        <Setter Property="Text" Value="{Binding InlineUsageText}" />
+                                        <Style.Triggers>
+                                            <!-- Last resort before wrapping: the cost goes (it stays in the tooltip). -->
+                                            <Trigger Property="ui:StatusWrapPanel.Fit" Value="2">
+                                                <Setter Property="Text" Value="{Binding InlineTokenText}" />
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </StackPanel>
                         <Button x:Name="PaneGlmAccountUsageButton" Style="{StaticResource GhostButton}" Padding="7,3" Margin="8,0,0,0" MinHeight="26" Click="OnShowGlmUsage" Visibility="{Binding HasGlmPlanUsage, Converter={StaticResource BoolVis}}" ToolTip="Z.ai Coding Plan usage and reset times for this agent's account" AutomationProperties.Name="Z.ai account usage">
                             <TextBlock Text="{Binding GlmUsage.Summary}" FontSize="10.5" Foreground="{StaticResource Muted}"/>
                         </Button>
-                    </WrapPanel>
-                    <!-- staged attachments for this pane (images / files sent with the next message) -->
-                    <ItemsControl DockPanel.Dock="Bottom" ItemsSource="{Binding Attachments}" Margin="2,6,2,0" ItemTemplate="{StaticResource AttachmentChip}" Visibility="{Binding HasAttachments, Converter={StaticResource ShowIf}}">
+                    </ui:StatusWrapPanel>
+                    <!-- staged attachments for this pane (images / files sent with the next message), above the text
+                         like they are in the sent message -->
+                    <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Attachments}" Margin="2,0,2,6"
+                                  ItemTemplate="{StaticResource AttachmentChip}"
+                                  Visibility="{Binding HasAttachments, Converter={StaticResource ShowIf}}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
@@ -1790,7 +2126,13 @@
 
                         <StackPanel>
                             <Grid>
-                                <TextBox IsReadOnly="{Binding IsGemini}" x:Name="PaneInput" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" Style="{x:Null}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}" CaretBrush="{StaticResource Accent}" FontSize="13" Padding="8,7" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnBridgeInputKeyDown" DataObject.Pasting="OnComposerPasting" TextChanged="OnBridgeInputChanged" LostKeyboardFocus="OnInputLostFocus" AutomationProperties.Name="Bridge message input"/>
+                                <TextBox IsReadOnly="{Binding IsRemovedProvider}" x:Name="PaneInput" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" Style="{x:Null}"
+                                         Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}"
+                                         CaretBrush="{StaticResource Accent}" FontSize="13" Padding="8,7" AcceptsReturn="True"
+                                         TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto"
+                                         PreviewKeyDown="OnBridgeInputKeyDown" DataObject.Pasting="OnComposerPasting"
+                                         TextChanged="OnBridgeInputChanged" LostKeyboardFocus="OnInputLostFocus"
+                                         AutomationProperties.Name="Bridge message input" />
                                 <!-- ElementName resolves per-pane inside this DataTemplate's namescope -->
                                 <TextBlock Text="{Binding ComposerPlaceholder}" Foreground="{StaticResource Faint}" FontSize="13" Margin="9,7,0,0" IsHitTestVisible="False" VerticalAlignment="Top">
                                     <TextBlock.Visibility>
@@ -2018,8 +2360,8 @@
                         <Button x:Name="WeatherChip" Style="{StaticResource GhostButton}" Padding="9,4" Cursor="Hand" Click="OnWeatherChipClick" VerticalAlignment="Center" Margin="0,0,6,0" DataContext="{x:Static svc:WeatherService.Instance}" ToolTip="{Binding ChipTooltip}" AutomationProperties.Name="Weather" Visibility="{Binding Enabled, Converter={StaticResource BoolVis}}">
                             <TextBlock Text="{Binding ChipText}" FontSize="11.5" Foreground="{StaticResource WeatherBlue}" VerticalAlignment="Center"/>
                         </Button>
-                        <!-- No telemetry button here. The HUD is opened from Settings > Usage, next to the same
-                             numbers it plots; a second door onto one window is a titlebar slot spent twice. -->
+                        <!-- No telemetry button here. The HUD and walls open from Settings > Appearance > Live telemetry;
+                             a second door onto one window is a titlebar slot spent twice. -->
                         <!-- Phone gets its own slot rather than a Settings page: the pairing code is only live while
                              its window is open, so the door to it has to be one click and obvious. It is a
                              toggleable extension (Settings > Extensions) and ships OFF, so the slot is empty until
@@ -2324,7 +2666,8 @@
                 </Button>
 
                 <!-- ============ home ============ -->
-                <ScrollViewer x:Name="HomeSurface" Grid.Column="1" VerticalScrollBarVisibility="Auto" Visibility="{Binding SurfaceShowHome, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolVis}}">
+                <ScrollViewer x:Name="HomeSurface" Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                              Visibility="{Binding SurfaceShowHome, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolVis}}">
                     <StackPanel MaxWidth="660" Margin="32,52,32,60">
                         <Image Width="76" Height="76" HorizontalAlignment="Center" Source="pack://application:,,,/VibeCode;component/Assets/logo.png" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" Effect="{StaticResource BrandGlow}"/>
 
@@ -2349,7 +2692,7 @@
                                         </ToggleButton>
                                         <!-- GLM. Tag is the provider id the rest of the app already speaks
                                              (GlmPreset.ProviderId), so it travels the same OnProviderPick path as
-                                             the other four. Unlike them it is spoken in-process against the selected service
+                                             the CLI providers. Unlike them it is spoken in-process against the selected service
                                              rather than through a CLI - which is what the hint under the folder
                                              box explains. -->
                                         <ToggleButton x:Name="GlmProviderToggle" Style="{StaticResource PillTab}" Tag="glm" Click="OnProviderPick" AutomationProperties.Name="Use GLM">
@@ -2360,6 +2703,7 @@
                                         </ToggleButton>
                                     </StackPanel>
                                 </Border>
+                                <!-- Which of the tab's logins and models New Chat starts on. The tabs above are its AI. -->
                                 <DockPanel>
                                     <Button Content="New Chat" Style="{StaticResource PrimaryButton}" DockPanel.Dock="Right" Margin="10,0,0,0" Padding="22,9" Click="OnStartChat"/>
                                     <Border Background="{StaticResource Bg2}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="{StaticResource Rad10}">
@@ -2531,8 +2875,13 @@
                                     </Popup>
                                 </Grid>
                                 <!-- Bridge is the headline action, so it gets its own header button instead of hiding
-                                     one level down in ⋮. The ⋮ keeps the secondary stuff (fork / swarm / subagents). -->
-                                <Button x:Name="BridgeButton" Style="{StaticResource IconButton}" Margin="0,0,4,0" Click="OnMenuBridge" Visibility="{Binding CanBridge, Converter={StaticResource BoolVis}}" ToolTip="{Binding BridgeMenuDescription, StringFormat='Bridge — {0}'}" AutomationProperties.Name="Bridge" AutomationProperties.HelpText="{Binding BridgeMenuDescription}">
+                                     one level down in ⋮. The ⋮ keeps the secondary stuff (fork / subagents). -->
+                                <Button x:Name="BridgeButton" Style="{StaticResource IconButton}"
+                                        Margin="0,0,4,0" Click="OnMenuBridge"
+                                        Visibility="{Binding CanBridge, Converter={StaticResource BoolVis}}"
+                                        ToolTip="{Binding BridgeMenuDescription, StringFormat='Bridge — {0}'}"
+                                        AutomationProperties.Name="Bridge"
+                                        AutomationProperties.HelpText="{Binding BridgeMenuDescription}">
                                     <!-- Accent lives on the glyph itself: a Foreground set on the Button does not
                                          reach the templated ContentPresenter here (same reason the messages
                                          toggle below re-binds its own Foreground). -->
@@ -2548,7 +2897,10 @@
                                             </Border>
                                         </Grid>
                                     </ToggleButton>
-                                    <Popup x:Name="ChatSubagentsPopup" PlacementTarget="{Binding ElementName=ChatSubagentsToggle}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="5" IsOpen="{Binding IsChecked, ElementName=ChatSubagentsToggle, Mode=TwoWay}">
+                                    <Popup x:Name="ChatSubagentsPopup" PlacementTarget="{Binding ElementName=ChatSubagentsToggle}"
+                                           Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="5"
+                                           ui:PopupBelow.Enabled="True"
+                                           IsOpen="{Binding IsChecked, ElementName=ChatSubagentsToggle, Mode=TwoWay}">
                                         <Border Style="{StaticResource PopupCard}" MinWidth="340" MaxWidth="600">
                                             <ContentControl Content="{Binding}" ContentTemplate="{StaticResource SubagentRoster}"/>
                                         </Border>
@@ -2603,7 +2955,21 @@
                          lagged badly. The ScrollViewer that used to be x:Name="MsgScroll" now lives inside the
                          ListBox control template (see ListBox.Template) - code-behind reaches it via FindScrollViewer. -->
                     <Grid Grid.Row="1">
-                        <ListBox x:Name="MsgList" ItemsSource="{Binding Items}" ui:NavHost.IsEnabled="True" ui:TranscriptSelection.IsEnabled="True" Background="Transparent" BorderThickness="0" Padding="0" HorizontalContentAlignment="Stretch" ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.ScrollChanged="OnMsgScrollChanged" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="1" VirtualizingPanel.CacheLengthUnit="Page">
+                        <ListBox x:Name="MsgList"
+                                 ItemsSource="{Binding DisplayedItems}"
+                                 ui:NavHost.IsEnabled="True"
+                                 ui:TranscriptSelection.IsEnabled="True"
+                                 Background="Transparent" BorderThickness="0" Padding="0"
+                                 HorizontalContentAlignment="Stretch"
+                                 ScrollViewer.CanContentScroll="True"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 ScrollViewer.ScrollChanged="OnMsgScrollChanged"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling"
+                                 VirtualizingPanel.ScrollUnit="Pixel"
+                                 VirtualizingPanel.CacheLength="1"
+                                 VirtualizingPanel.CacheLengthUnit="Page">
                             <!-- pixel-based virtualizing panel: required for smooth scrolling with variable-height items -->
                             <ListBox.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -2725,6 +3091,15 @@
                                     </Style>
                                 </Border.Style>
                                 <StackPanel>
+                                    <!-- staged attachments (images / files) sent with the next message: above the text, the same
+                                         order the sent message shows them in -->
+                                    <ItemsControl ItemsSource="{Binding Attachments}" Margin="14,10,14,0"
+                                                  ItemTemplate="{StaticResource AttachmentChip}"
+                                                  Visibility="{Binding HasAttachments, Converter={StaticResource ShowIf}}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                    </ItemsControl>
                                     <!-- The send button lives INSIDE this bubble, pinned to the right of the text box - do not move it
                                          down into the composer-controls DockPanel below. Out there it inflates that row (every ghost
                                          pill stretches to its height) and reads as a loose orb floating outside the composer. -->
@@ -2733,8 +3108,16 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBox IsReadOnly="{Binding IsGemini}" x:Name="InputBox" Grid.Column="0" Style="{x:Null}" Background="Transparent" BorderThickness="0" Foreground="{StaticResource Text}" CaretBrush="{StaticResource Accent}" SelectionBrush="{StaticResource AccentDim}" FontSize="14" Padding="16,13,6,14" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="220" VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKeyDown" DataObject.Pasting="OnComposerPasting" TextChanged="OnInputChanged" LostKeyboardFocus="OnInputLostFocus" AutomationProperties.Name="Message input"/>
-                                        <TextBlock Grid.Column="0" Text="{Binding ComposerPlaceholder}" Foreground="{StaticResource Faint}" FontSize="14" Margin="17,13,0,0" IsHitTestVisible="False" VerticalAlignment="Top">
+                                        <TextBox IsReadOnly="{Binding IsRemovedProvider}" x:Name="InputBox" Grid.Column="0" Style="{x:Null}" Background="Transparent" BorderThickness="0"
+                                                 Foreground="{StaticResource Text}" CaretBrush="{StaticResource Accent}"
+                                                 SelectionBrush="{StaticResource AccentDim}" FontSize="14" Padding="16,13,6,14"
+                                                 AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="220"
+                                                 VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnInputKeyDown"
+                                                 DataObject.Pasting="OnComposerPasting"
+                                                 TextChanged="OnInputChanged" LostKeyboardFocus="OnInputLostFocus"
+                                                 AutomationProperties.Name="Message input" />
+                                        <TextBlock Grid.Column="0" Text="{Binding ComposerPlaceholder}" Foreground="{StaticResource Faint}" FontSize="14"
+                                                   Margin="17,13,0,0" IsHitTestVisible="False" VerticalAlignment="Top">
                                             <TextBlock.Visibility>
                                                 <MultiBinding Converter="{StaticResource HintVis}">
                                                     <Binding Path="Text" ElementName="InputBox"/>
@@ -2745,13 +3128,8 @@
                                         <!-- Submit normally; Codex follow-up actions belong to the queued message in the transcript. -->
                                         <Button Grid.Column="1" Style="{StaticResource SendButton}" Click="OnSendClick" IsEnabled="{Binding CanCompose}" VerticalAlignment="Bottom" Margin="0,0,8,8"/>
                                     </Grid>
-                                    <ui:MicLevelMeter x:Name="MainMicTimeline" RecordingOwner="{Binding ElementName=MicButton}" Margin="16,0,16,10"/>
-                                    <!-- staged attachments (images / files) sent with the next message -->
-                                    <ItemsControl ItemsSource="{Binding Attachments}" Margin="14,2,14,2" ItemTemplate="{StaticResource AttachmentChip}" Visibility="{Binding HasAttachments, Converter={StaticResource ShowIf}}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                    </ItemsControl>
+                                    <ui:MicLevelMeter x:Name="MainMicTimeline" RecordingOwner="{Binding}"
+                                                      Margin="16,0,16,10" />
                                 </StackPanel>
                             </Border>
 
@@ -2838,40 +3216,74 @@
 
                             <!-- status strip -->
                             <DockPanel Margin="6,7,6,0" LastChildFill="False" MinHeight="16">
-                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" Visibility="{Binding IsWorking, Converter={StaticResource BoolVis}}">
+                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left"
+                                            Visibility="{Binding IsWorking, Converter={StaticResource BoolVis}}">
+                                    <!-- The thinking dots run only while a turn does, at 20fps. They used to start on Loaded
+                                         and repeat forever at the full frame rate, hidden or not, which kept WPF's whole
+                                         frame loop - and its render thread - busy for the life of the app. -->
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                                         <Ellipse Width="4.5" Height="4.5" Fill="{StaticResource Accent}" Margin="0,0,3,0">
-                                            <Ellipse.Triggers>
-                                                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                    <BeginStoryboard>
-                                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.45"/>
-                                                        </Storyboard>
-                                                    </BeginStoryboard>
-                                                </EventTrigger>
-                                            </Ellipse.Triggers>
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsWorking}" Value="True">
+                                                            <DataTrigger.EnterActions>
+                                                                <BeginStoryboard x:Name="WorkingDot1">
+                                                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="20">
+                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1"
+                                                                                         Duration="0:0:0.45" />
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </DataTrigger.EnterActions>
+                                                            <DataTrigger.ExitActions>
+                                                                <StopStoryboard BeginStoryboardName="WorkingDot1" />
+                                                            </DataTrigger.ExitActions>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
                                         </Ellipse>
                                         <Ellipse Width="4.5" Height="4.5" Fill="{StaticResource Accent}" Margin="0,0,3,0">
-                                            <Ellipse.Triggers>
-                                                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                    <BeginStoryboard>
-                                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True" BeginTime="0:0:0.15">
-                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.45"/>
-                                                        </Storyboard>
-                                                    </BeginStoryboard>
-                                                </EventTrigger>
-                                            </Ellipse.Triggers>
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsWorking}" Value="True">
+                                                            <DataTrigger.EnterActions>
+                                                                <BeginStoryboard x:Name="WorkingDot2">
+                                                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True" BeginTime="0:0:0.15" Timeline.DesiredFrameRate="20">
+                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1"
+                                                                                         Duration="0:0:0.45" />
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </DataTrigger.EnterActions>
+                                                            <DataTrigger.ExitActions>
+                                                                <StopStoryboard BeginStoryboardName="WorkingDot2" />
+                                                            </DataTrigger.ExitActions>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
                                         </Ellipse>
                                         <Ellipse Width="4.5" Height="4.5" Fill="{StaticResource Accent}">
-                                            <Ellipse.Triggers>
-                                                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                    <BeginStoryboard>
-                                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True" BeginTime="0:0:0.3">
-                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.45"/>
-                                                        </Storyboard>
-                                                    </BeginStoryboard>
-                                                </EventTrigger>
-                                            </Ellipse.Triggers>
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsWorking}" Value="True">
+                                                            <DataTrigger.EnterActions>
+                                                                <BeginStoryboard x:Name="WorkingDot3">
+                                                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True" BeginTime="0:0:0.3" Timeline.DesiredFrameRate="20">
+                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1"
+                                                                                         Duration="0:0:0.45" />
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </DataTrigger.EnterActions>
+                                                            <DataTrigger.ExitActions>
+                                                                <StopStoryboard BeginStoryboardName="WorkingDot3" />
+                                                            </DataTrigger.ExitActions>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
                                         </Ellipse>
                                     </StackPanel>
                                     <TextBlock Text="{Binding WorkingText}" Foreground="{StaticResource Muted}" FontSize="11" FontFamily="{StaticResource Mono}" Margin="0,0,14,0" TextWrapping="NoWrap"/>
@@ -2882,11 +3294,29 @@
                                 <Button x:Name="GlmAccountUsageButton" DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Padding="7,1" Margin="0,0,10,0" Click="OnShowGlmUsage" Visibility="{Binding HasGlmPlanUsage, Converter={StaticResource BoolVis}}" ToolTip="Z.ai Coding Plan usage and reset times" AutomationProperties.Name="Z.ai account usage">
                                     <TextBlock Text="{Binding GlmUsage.Summary}" FontSize="10.5" Foreground="{StaticResource Muted}"/>
                                 </Button>
-                                <TextBlock Text="{Binding CtxText}" Foreground="{StaticResource Muted}" FontSize="10.5" FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Text="·" Foreground="{StaticResource Faint}" FontSize="10.5" DockPanel.Dock="Left" Margin="8,0" VerticalAlignment="Center" Visibility="{Binding CostText, Converter={StaticResource ShowIf}}"/>
-                                <TextBlock Text="{Binding CostText}" Foreground="{StaticResource Faint}" FontSize="10.5" FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Text="{Binding SessionShort}" Foreground="{StaticResource Faint}" FontSize="10.5" FontFamily="{StaticResource Mono}" DockPanel.Dock="Right" ToolTip="{Binding SessionId}" VerticalAlignment="Center" TextWrapping="NoWrap"/>
-                                <ToggleButton x:Name="UsageToggle" DockPanel.Dock="Right" Padding="7,1" Margin="0,0,10,0" Checked="OnUsageChecked" Unchecked="OnUsageUnchecked" AutomationProperties.Name="Claude account usage" ToolTip="Claude plan, limits and reset times">
+                                <TextBlock Text="{Binding CtxText}" Foreground="{StaticResource Muted}" FontSize="10.5"
+                                           FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center"
+                                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                <!-- Fresh-chat handoff for providers that cannot compact (ChatViewModel.ContextMemory.cs). -->
+                                <Button DockPanel.Dock="Left" Style="{StaticResource GhostButton}" Padding="7,1" Margin="8,0,0,0"
+                                        Click="OnContinueInFreshChat"
+                                        Visibility="{Binding FreshChatHandoffAvailable, Converter={StaticResource BoolVis}}"
+                                        ToolTip="Start a new chat in this project with an editable first prompt built from this chat's checkpoint"
+                                        AutomationProperties.Name="Continue in a fresh chat">
+                                    <TextBlock Text="Continue in a fresh chat" FontSize="10.5" Foreground="{StaticResource Accent}" />
+                                </Button>
+                                <TextBlock Text="·" Foreground="{StaticResource Faint}" FontSize="10.5" DockPanel.Dock="Left"
+                                           Margin="8,0" VerticalAlignment="Center"
+                                           Visibility="{Binding CostText, Converter={StaticResource ShowIf}}" />
+                                <TextBlock Text="{Binding CostText}" Foreground="{StaticResource Faint}" FontSize="10.5"
+                                           FontFamily="{StaticResource Mono}" DockPanel.Dock="Left" VerticalAlignment="Center"
+                                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding SessionShort}" Foreground="{StaticResource Faint}" FontSize="10.5"
+                                           FontFamily="{StaticResource Mono}" DockPanel.Dock="Right" ToolTip="{Binding SessionId}"
+                                           VerticalAlignment="Center" TextWrapping="NoWrap" />
+                                <ToggleButton x:Name="UsageToggle" DockPanel.Dock="Right"
+                                              Padding="7,1" Margin="0,0,10,0" Checked="OnUsageChecked" Unchecked="OnUsageUnchecked"
+                                              AutomationProperties.Name="Claude account usage" ToolTip="Claude plan, limits and reset times">
                                     <ToggleButton.Style>
                                         <Style TargetType="ToggleButton" BasedOn="{StaticResource GhostToggle}">
                                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -2914,9 +3344,8 @@
                                             <Style.Triggers>
                                                 <MultiDataTrigger>
                                                     <MultiDataTrigger.Conditions>
-                                                        <Condition Binding="{Binding IsCodex}" Value="True"/>
-                                                        <Condition Binding="{Binding DataContext.IsCodexSignedIn, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
-                                                        <Condition Binding="{Binding DataContext.HasCodexAccountUsage, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+                                                        <Condition Binding="{Binding IsCodex}" Value="True" />
+                                                        <Condition Binding="{Binding SurfaceCodexAccount.HasUsage, RelativeSource={RelativeSource AncestorType=Window}}" Value="True" />
                                                     </MultiDataTrigger.Conditions>
                                                     <Setter Property="Visibility" Value="Visible"/>
                                                 </MultiDataTrigger>
@@ -3011,7 +3440,7 @@
                                 <!-- account usage (session · week): the bridge has no per-chat status strip, so surface
                                      the shared rate-limit numbers up here. CLICK to open the full breakdown + refresh.
                                      Hidden until /usage has produced a summary.
-                                     Four providers can be on one bridge, so every pill here is deliberately dense:
+                                     Five providers can be on one bridge, so every pill here is deliberately dense:
                                      tight padding, small type, and no dropdown chevron. The full wording lives in the
                                      tooltip and the popup. -->
                                 <ToggleButton x:Name="BridgeUsageToggle" Cursor="Hand" Margin="0,0,5,0" VerticalAlignment="Center" Checked="OnBridgeUsageChecked" Unchecked="OnBridgeUsageUnchecked" AutomationProperties.Name="Claude account usage" ToolTip="{Binding Summary, Source={x:Static svc:UsageService.Instance}, StringFormat=Claude — {0}. Click for details.}" Visibility="{Binding BridgeUsesClaude, Converter={StaticResource BoolVis}}">
@@ -3103,27 +3532,62 @@
                                             <StackPanel Margin="5">
                                                 <!-- Branch the WHOLE roster into a second bridge that starts with
                                                      everything these agents know. The original keeps running. -->
-                                                <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left" HorizontalAlignment="Stretch" Padding="9,8" Click="OnMenuForkBridge" IsEnabled="{Binding CanForkBridge}" ToolTip="{Binding ForkBridgeToolTip}" AutomationProperties.Name="Fork bridge" AutomationProperties.HelpText="{Binding ForkBridgeToolTip}">
+                                                <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
+                                                        HorizontalAlignment="Stretch" Padding="9,8" Click="OnMenuForkBridge"
+                                                        IsEnabled="{Binding CanForkBridge}"
+                                                        ToolTip="{Binding ForkBridgeToolTip}"
+                                                        AutomationProperties.Name="{Binding ForkBridgeTitle}"
+                                                        AutomationProperties.HelpText="{Binding ForkBridgeToolTip}">
                                                     <StackPanel Orientation="Horizontal">
                                                         <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="13" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Width="16" TextAlignment="Center"/>
                                                         <StackPanel Margin="11,0,0,0">
-                                                            <TextBlock Text="Fork whole bridge" FontSize="12.5" Foreground="{StaticResource Text}"/>
-                                                            <TextBlock Text="{Binding ForkBridgeToolTip}" FontSize="10.5" Foreground="{StaticResource Faint}" TextWrapping="Wrap" MaxWidth="270"/>
+                                                            <TextBlock Text="{Binding ForkBridgeTitle}" FontSize="12.5"
+                                                                       Foreground="{StaticResource Text}" />
+                                                            <TextBlock Text="{Binding ForkBridgeToolTip}" FontSize="10.5"
+                                                                       Foreground="{StaticResource Faint}" TextWrapping="Wrap"
+                                                                       MaxWidth="270" />
                                                         </StackPanel>
                                                     </StackPanel>
                                                 </Button>
-                                                <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="6,4"/>
                                                 <!-- Points at the per-agent fork rather than duplicating it: this menu
-                                                     has no idea which agent you meant, that agent's ⋮ does. -->
-                                                <TextBlock Text="To fork one agent on its own, open that agent's ⋮ menu and choose Fork this agent." FontSize="10.5" Foreground="{StaticResource Faint}" TextWrapping="Wrap" MaxWidth="270" Margin="10,2,10,6"/>
+                                                     has no idea which agent you meant, that agent's ⋮ does. A team's one
+                                                     terminal has no per-agent menus, so a team forks only as a whole. -->
+                                                <StackPanel Visibility="{Binding IsAgentTeamBridge, Converter={StaticResource ShowIf}, ConverterParameter=invert}">
+                                                    <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="6,4" />
+                                                    <TextBlock Text="To fork one agent on its own, open that agent's ⋮ menu and choose Fork this agent."
+                                                               FontSize="10.5" Foreground="{StaticResource Faint}"
+                                                               TextWrapping="Wrap" MaxWidth="270" Margin="10,2,10,6" />
+                                                </StackPanel>
+                                                <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="6,4" />
+                                                <!-- Text the user wants at the top of every message this Bridge's agents
+                                                     receive (MainWindow.MemoryContext.cs). Rarely used, so it lives here. -->
+                                                <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"
+                                                        HorizontalAlignment="Stretch" Padding="9,8" Click="OnOpenBridgePrompt"
+                                                        AutomationProperties.Name="Bridge prompt">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE70B;" FontFamily="{StaticResource Icons}" FontSize="13"
+                                                                   Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                                                                   Width="16" TextAlignment="Center" />
+                                                        <StackPanel Margin="11,0,0,0">
+                                                            <TextBlock Text="Bridge prompt" FontSize="12.5"
+                                                                       Foreground="{StaticResource Text}" />
+                                                            <TextBlock Text="Added to the top of every message the agents get"
+                                                                       FontSize="10.5" Foreground="{StaticResource Faint}"
+                                                                       TextWrapping="Wrap" MaxWidth="270" />
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Button>
                                             </StackPanel>
                                         </Border>
                                     </Popup>
                                 </Grid>
                                 <!-- Stays enabled at the agent cap so a click can explain the limit (was silently
                                      disabled with no feedback). OnAddBridgeAgent opens the provider menu when room
-                                     remains, otherwise a dialog that points at Settings → Bridge. -->
-                                <Button Style="{StaticResource GhostButton}" Padding="10,5" Click="OnAddBridgeAgent" ToolTip="{Binding AddBridgeAgentToolTip}" AutomationProperties.Name="Add bridge agent">
+                                     remains, otherwise a dialog that points at Settings → Bridge. Shown for an agent team
+                                     too: it is how a team gets a Bridge, the team moving whole into the first pane. -->
+                                <Button x:Name="BridgeAddAgentButton" Style="{StaticResource GhostButton}" Padding="10,5" Click="OnAddBridgeAgent"
+                                        ToolTip="{Binding AddBridgeAgentToolTip}"
+                                        AutomationProperties.Name="Add bridge agent">
                                     <Button.ContextMenu>
                                         <ContextMenu Style="{StaticResource DarkContextMenu}" Placement="Bottom">
                                             <MenuItem Tag="claude" Click="OnAddBridgeProvider" AutomationProperties.Name="Add Claude Code agent">
@@ -3172,8 +3636,24 @@
                                 <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="13" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
                                 <StackPanel Margin="9,0,0,0" VerticalAlignment="Center">
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Bridge" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center"/>
-                                        <Button x:Name="BridgeTerminalsButton" Content="{Binding BridgeTerminalsText}" Margin="8,0,0,0" Padding="7,3" Click="OnBridgeTerminals" ToolTip="Review an agent, return to all activity, or change the layout" AutomationProperties.Name="View bridge terminals">
+                                        <TextBlock x:Name="BridgeHeaderTitle" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                                    <Setter Property="Text" Value="Bridge" />
+                                                    <Style.Triggers>
+                                                        <!-- "Agent team" only while two or more agents work at once; otherwise the chat's own name. -->
+                                                        <DataTrigger Binding="{Binding DataContext.IsAgentTeam, ElementName=BridgeSharedPanel}" Value="True">
+                                                            <Setter Property="Text" Value="{Binding DataContext.TeamHeaderTitle, ElementName=BridgeSharedPanel}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <Button x:Name="BridgeTerminalsButton" Content="{Binding BridgeTerminalsText}"
+                                                Margin="8,0,0,0" Padding="7,3" Click="OnBridgeTerminals"
+                                                ToolTip="Review an agent, return to all activity, or change the layout"
+                                                Visibility="{Binding DataContext.IsAgentTeam, ElementName=BridgeSharedPanel, Converter={StaticResource ShowIf}, ConverterParameter=invert, FallbackValue=Visible}"
+                                                AutomationProperties.Name="View bridge terminals">
                                             <Button.Style>
                                                 <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
                                                     <Style.Triggers>
@@ -3306,7 +3786,10 @@
                                                             </Border>
                                                         </Grid>
                                                     </ToggleButton>
-                                                    <Popup PlacementTarget="{Binding ElementName=PaneSubagentsToggle}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="5" IsOpen="{Binding IsChecked, ElementName=PaneSubagentsToggle, Mode=TwoWay}">
+                                                    <Popup PlacementTarget="{Binding ElementName=PaneSubagentsToggle}" Placement="Bottom"
+                                                           StaysOpen="False" AllowsTransparency="True" VerticalOffset="5"
+                                                           ui:PopupBelow.Enabled="True"
+                                                           IsOpen="{Binding IsChecked, ElementName=PaneSubagentsToggle, Mode=TwoWay}">
                                                         <Border Style="{StaticResource PopupCard}" MinWidth="340" MaxWidth="600">
                                                             <ContentControl Content="{Binding}" ContentTemplate="{StaticResource SubagentRoster}"/>
                                                         </Border>
@@ -3539,8 +4022,21 @@
                                             </DockPanel>
                                         </Border>
                                         <!-- messages (UI-virtualized so long transcripts stay smooth) -->
-                                        <Grid Grid.Row="1">
-                                            <ListBox Background="Transparent" BorderThickness="0" Padding="0" HorizontalContentAlignment="Stretch" ItemsSource="{Binding Items}" ui:NavHost.IsEnabled="True" ui:TranscriptSelection.IsEnabled="True" ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="1" VirtualizingPanel.CacheLengthUnit="Page" ui:AutoScroll.Enabled="True">
+                                        <Grid Grid.Row="1" Visibility="{Binding HasTeamTerminal, Converter={StaticResource ShowIf}, ConverterParameter=invert}">
+                                            <ListBox Background="Transparent" BorderThickness="0" Padding="0"
+                                                     HorizontalContentAlignment="Stretch"
+                                                     ItemsSource="{Binding DisplayedItems}"
+                                                     ui:NavHost.IsEnabled="True"
+                                                     ui:TranscriptSelection.IsEnabled="True"
+                                                     ScrollViewer.CanContentScroll="True"
+                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                     VirtualizingPanel.IsVirtualizing="True"
+                                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                                     VirtualizingPanel.ScrollUnit="Pixel"
+                                                     VirtualizingPanel.CacheLength="1"
+                                                     VirtualizingPanel.CacheLengthUnit="Page"
+                                                     ui:AutoScroll.Enabled="True">
                                                 <ListBox.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <VirtualizingStackPanel/>
@@ -3585,7 +4081,18 @@
                                         </Grid>
                                         <!-- "Your messages" lives in the pane ⋮ menu (not floating over the transcript). -->
 
-                                        <ContentControl Grid.Row="2" Content="{Binding}" ContentTemplate="{StaticResource BridgeComposerTemplate}"/>
+                                        <ContentControl Grid.Row="2" Content="{Binding}" ContentTemplate="{StaticResource BridgeComposerTemplate}"
+                                                        Visibility="{Binding HasTeamTerminal, Converter={StaticResource ShowIf}, ConverterParameter=invert}" />
+                                        <!-- A pane whose robot has summoned teammates is that team's home: its one terminal - every
+                                             teammate's messages and actions, one composer - replaces the pane's own transcript, and the
+                                             rest of the Bridge stays as it is. Built only for such a pane (null content shows nothing). -->
+                                        <ContentControl Grid.Row="1" Grid.RowSpan="2" Content="{Binding TeamTerminal}" Focusable="False">
+                                            <ContentControl.Resources>
+                                                <DataTemplate DataType="{x:Type ui:BridgeSharedTerminalViewModel}">
+                                                    <ui:BridgeSharedTerminal />
+                                                </DataTemplate>
+                                            </ContentControl.Resources>
+                                        </ContentControl>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
@@ -3729,8 +4236,10 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel>
-                                    <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Blue}" FontWeight="SemiBold" FontSize="12.5" TextWrapping="NoWrap">
-                                        <Run Text="/"/><Run Text="{Binding Name, Mode=OneWay}"/>
+                                    <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Mono}"
+                                               Foreground="{StaticResource Blue}" FontWeight="SemiBold" FontSize="12.5"
+                                               TextWrapping="NoWrap">
+                                        <Run Text="{Binding Prefix, Mode=OneWay}" /><Run Text="{Binding Name, Mode=OneWay}" />
                                     </TextBlock>
                                     <TextBlock DockPanel.Dock="Left" Text="{Binding ArgumentHint}" FontFamily="{StaticResource Mono}" Foreground="{StaticResource Faint}" FontSize="11.5" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" Visibility="{Binding ArgumentHint, Converter={StaticResource ShowIf}}"/>
                                     <TextBlock Text="{Binding Description}" Foreground="{StaticResource Muted}" FontSize="12" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" HorizontalAlignment="Right"/>
@@ -3743,8 +4252,9 @@
 
             <!-- mode popup -->
             <!-- chat menu (fork), opened from the header's ⋯ button. Bridge is deliberately NOT here — it's a
-                 first-class header button. Neither are swarm/subagents — they have their own header button. -->
-            <Popup x:Name="MorePopup" PlacementTarget="{Binding ElementName=MoreToggle}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" Closed="OnMorePopupClosed">
+                 first-class header button. Neither are subagents — they have their own header button. -->
+            <Popup x:Name="MorePopup" PlacementTarget="{Binding ElementName=MoreToggle}" Placement="Bottom" StaysOpen="False"
+                   AllowsTransparency="True" Closed="OnMorePopupClosed">
                 <Border Style="{StaticResource PopupCard}" MinWidth="268" MaxWidth="340">
                     <StackPanel Margin="5">
                         <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left" HorizontalAlignment="Stretch" Padding="9,7" Click="OnMenuFork" AutomationProperties.Name="Fork session" Visibility="{Binding CanFork, Converter={StaticResource BoolVis}}">
@@ -3976,10 +4486,14 @@
                 <Border Style="{StaticResource PopupCard}" Width="304">
                     <StackPanel Margin="14,11" DataContext="{x:Static svc:UsageService.Instance}">
                         <DockPanel>
-                            <Border DockPanel.Dock="Right" Background="{StaticResource AccentSoft}" CornerRadius="{StaticResource Rad99}" Padding="8,1.5" VerticalAlignment="Center" Visibility="{Binding Plan, Converter={StaticResource ShowIf}}">
-                                <TextBlock Text="{Binding Plan}" FontSize="9.5" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
+                            <Border DockPanel.Dock="Right" Background="{StaticResource AccentSoft}" CornerRadius="{StaticResource Rad99}"
+                                    Padding="8,1.5" VerticalAlignment="Center"
+                                    Visibility="{Binding HasData, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="Google login" FontSize="9.5" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Accent}" />
                             </Border>
-                            <TextBlock Text="Claude account usage" FontWeight="SemiBold" FontSize="12.5" VerticalAlignment="Center"/>
+                            <TextBlock Text="Gemini account usage" FontWeight="SemiBold" FontSize="12.5"
+                                       VerticalAlignment="Center" />
                         </DockPanel>
                         <ItemsControl ItemsSource="{Binding Limits}" Margin="0,9,0,0">
                             <ItemsControl.ItemTemplate>
@@ -3995,10 +4509,10 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <!-- Why the list is empty. Without this the card renders as a blank box with a Refresh button
-                             for every failure (signed-out account, dead CLI, timeout) and looks like a rate limit. -->
-                        <TextBlock Text="{Binding Status}" FontSize="10.5" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,9,0,2" Visibility="{Binding HasStatus, Converter={StaticResource BoolVis}}"/>
-                        <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="0,4,0,7"/>
+                        <TextBlock Text="{Binding Status}" FontSize="10.5" Foreground="{StaticResource Muted}"
+                                   TextWrapping="Wrap" Margin="0,9,0,2"
+                                   Visibility="{Binding HasStatus, Converter={StaticResource BoolVis}}" />
+                        <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="0,4,0,7" />
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="9,3" Click="OnBridgeUsageRefresh" ToolTip="Refresh usage now">
                                 <StackPanel Orientation="Horizontal">
@@ -4006,7 +4520,8 @@
                                     <TextBlock Text="Refresh" FontSize="10.5" Foreground="{StaticResource Muted}" Margin="6,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
-                            <TextBlock Text="{Binding UpdatedText}" FontSize="9.5" Foreground="{StaticResource Faint}" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding UpdatedText}" FontSize="9.5" Foreground="{StaticResource Faint}"
+                                       VerticalAlignment="Center" />
                         </DockPanel>
                     </StackPanel>
                 </Border>
@@ -4040,71 +4555,113 @@
             </Popup>
 
             <!-- Codex usage details: shared by normal Codex chats and the Bridge header, independent from
-                 Claude's /usage popup and backed by account/rateLimits/read. -->
-            <Popup x:Name="BridgeCodexUsagePopup" PlacementTarget="{Binding ElementName=BridgeCodexUsageToggle}" Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="6" Closed="OnBridgeCodexUsagePopupClosed">
+                 Claude's /usage popup and backed by account/rateLimits/read. One card per login the opening pill
+                 stands for - the chat's own, or each one this window's Bridge runs on; the code-behind supplies them. -->
+            <Popup x:Name="BridgeCodexUsagePopup" PlacementTarget="{Binding ElementName=BridgeCodexUsageToggle}"
+                   Placement="Bottom" StaysOpen="False" AllowsTransparency="True" VerticalOffset="6"
+                   DataContext="{x:Null}" Closed="OnBridgeCodexUsagePopupClosed">
                 <Border Style="{StaticResource PopupCard}" Width="352" MaxHeight="560">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel Margin="14,11" DataContext="{Binding CurrentCodexAccount}">
-                            <DockPanel>
-                                <Border DockPanel.Dock="Right" Background="{StaticResource AccentSoft}" CornerRadius="{StaticResource Rad99}" Padding="8,1.5" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding PlanDisplay}" FontSize="9.5" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
-                                </Border>
-                                <TextBlock Text="OpenAI Codex usage" FontWeight="SemiBold" FontSize="12.5" VerticalAlignment="Center"/>
-                            </DockPanel>
+                        <ItemsControl x:Name="CodexUsageAccountCards" ItemsSource="{Binding}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type svc:CodexAccountInfo}">
+                                    <StackPanel Margin="14,11">
+                                        <DockPanel>
+                                            <Border DockPanel.Dock="Right" Background="{StaticResource AccentSoft}" CornerRadius="{StaticResource Rad99}"
+                                                    Padding="8,1.5" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding PlanDisplay}" FontSize="9.5" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource Accent}" />
+                                            </Border>
+                                            <TextBlock Text="OpenAI Codex usage" FontWeight="SemiBold" FontSize="12.5"
+                                                       VerticalAlignment="Center" />
+                                        </DockPanel>
 
-                            <TextBlock Text="{Binding Label}" FontSize="10.5" Foreground="{StaticResource Muted}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Label}" FontSize="10.5" Foreground="{StaticResource Muted}"
+                                                   Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
 
-                            <Border Background="{StaticResource AmberSoft}" BorderBrush="{StaticResource Amber}" BorderThickness="1" CornerRadius="{StaticResource Rad6}" Padding="8,5" Margin="0,9,0,0" Visibility="{Binding HasRateLimitStatus, Converter={StaticResource BoolVis}}">
-                                <TextBlock Text="{Binding RateLimitStatusDisplay}" FontSize="10.5" Foreground="{StaticResource Amber}" FontWeight="SemiBold"/>
-                            </Border>
+                                        <Border Background="{StaticResource AmberSoft}" BorderBrush="{StaticResource Amber}"
+                                                BorderThickness="1" CornerRadius="{StaticResource Rad6}" Padding="8,5" Margin="0,9,0,0"
+                                                Visibility="{Binding HasRateLimitStatus, Converter={StaticResource BoolVis}}">
+                                            <TextBlock Text="{Binding RateLimitStatusDisplay}" FontSize="10.5"
+                                                       Foreground="{StaticResource Amber}" FontWeight="SemiBold" />
+                                        </Border>
 
-                            <ItemsControl ItemsSource="{Binding UsageLimits}" Margin="0,11,0,0">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="{x:Type svc:CodexUsageLimit}">
-                                        <StackPanel Margin="0,0,0,12">
-                                            <DockPanel Margin="0,0,0,4">
-                                                <TextBlock DockPanel.Dock="Right" Text="{Binding Percent, StringFormat={}{0}%}" FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="SemiBold" Foreground="{Binding Percent, Converter={StaticResource UsageBrush}}" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                                <TextBlock Text="{Binding Label}" FontSize="11.5" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-                                            </DockPanel>
-                                            <ProgressBar Style="{StaticResource SlimProgress}" Height="4" Value="{Binding Percent, Mode=OneWay}" Maximum="100" Foreground="{Binding Percent, Converter={StaticResource UsageBrush}}"/>
-                                            <TextBlock Text="{Binding DetailDisplay}" FontSize="9.5" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/>
-                                            <TextBlock Text="{Binding ResetDisplay, StringFormat=resets {0}}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,2,0,0" Visibility="{Binding HasReset, Converter={StaticResource BoolVis}}"/>
-                                            <TextBlock Text="{Binding StatusDisplay}" FontSize="9.5" Foreground="{StaticResource Amber}" Margin="0,2,0,0" Visibility="{Binding HasStatus, Converter={StaticResource BoolVis}}"/>
+                                        <ItemsControl ItemsSource="{Binding UsageLimits}" Margin="0,11,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type svc:CodexUsageLimit}">
+                                                    <StackPanel Margin="0,0,0,12">
+                                                        <DockPanel Margin="0,0,0,4">
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Percent, StringFormat={}{0}%}"
+                                                                       FontFamily="{StaticResource Mono}" FontSize="11"
+                                                                       FontWeight="SemiBold"
+                                                                       Foreground="{Binding Percent, Converter={StaticResource UsageBrush}}"
+                                                                       VerticalAlignment="Center" Margin="8,0,0,0" />
+                                                            <TextBlock Text="{Binding Label}" FontSize="11.5"
+                                                                       Foreground="{StaticResource Text}"
+                                                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                                        </DockPanel>
+                                                        <ProgressBar Style="{StaticResource SlimProgress}" Height="4"
+                                                                     Value="{Binding Percent, Mode=OneWay}" Maximum="100"
+                                                                     Foreground="{Binding Percent, Converter={StaticResource UsageBrush}}" />
+                                                        <TextBlock Text="{Binding DetailDisplay}" FontSize="9.5"
+                                                                   Foreground="{StaticResource Muted}" Margin="0,4,0,0" />
+                                                        <TextBlock Text="{Binding ResetDisplay, StringFormat=resets {0}}" FontSize="9.5"
+                                                                   Foreground="{StaticResource Faint}" Margin="0,2,0,0"
+                                                                   Visibility="{Binding HasReset, Converter={StaticResource BoolVis}}" />
+                                                        <TextBlock Text="{Binding StatusDisplay}" FontSize="9.5"
+                                                                   Foreground="{StaticResource Amber}" Margin="0,2,0,0"
+                                                                   Visibility="{Binding HasStatus, Converter={StaticResource BoolVis}}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <StackPanel>
+                                            <Border Background="{StaticResource Bg2}" CornerRadius="{StaticResource Rad6}" Padding="8,5" Margin="0,0,0,6"
+                                                    Visibility="{Binding HasCreditDetails, Converter={StaticResource BoolVis}}">
+                                                <TextBlock Text="{Binding CreditDetailsDisplay}" FontSize="10"
+                                                           Foreground="{StaticResource Muted}" />
+                                            </Border>
+                                            <Border Background="{StaticResource Bg2}" CornerRadius="{StaticResource Rad6}" Padding="8,5" Margin="0,0,0,6"
+                                                    Visibility="{Binding HasResetCredits, Converter={StaticResource BoolVis}}">
+                                                <TextBlock Text="{Binding ResetCreditsDisplay}" FontSize="10"
+                                                           Foreground="{StaticResource Muted}" />
+                                            </Border>
+                                            <Border Background="{StaticResource Bg2}" CornerRadius="{StaticResource Rad6}" Padding="8,6" Margin="0,0,0,6"
+                                                    Visibility="{Binding HasSpendLimit, Converter={StaticResource BoolVis}}">
+                                                <StackPanel>
+                                                    <TextBlock Text="Workspace spend limit" FontSize="10.5"
+                                                               Foreground="{StaticResource Text}" />
+                                                    <TextBlock Text="{Binding SpendLimit.Summary}" FontSize="9.5"
+                                                               Foreground="{StaticResource Muted}" Margin="0,2,0,0" />
+                                                    <TextBlock Text="{Binding SpendLimit.ResetDisplay, StringFormat=resets {0}}"
+                                                               FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,2,0,0" />
+                                                </StackPanel>
+                                            </Border>
                                         </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
 
-                            <StackPanel>
-                                <Border Background="{StaticResource Bg2}" CornerRadius="{StaticResource Rad6}" Padding="8,5" Margin="0,0,0,6" Visibility="{Binding HasCreditDetails, Converter={StaticResource BoolVis}}">
-                                    <TextBlock Text="{Binding CreditDetailsDisplay}" FontSize="10" Foreground="{StaticResource Muted}"/>
-                                </Border>
-                                <Border Background="{StaticResource Bg2}" CornerRadius="{StaticResource Rad6}" Padding="8,5" Margin="0,0,0,6" Visibility="{Binding HasResetCredits, Converter={StaticResource BoolVis}}">
-                                    <TextBlock Text="{Binding ResetCreditsDisplay}" FontSize="10" Foreground="{StaticResource Muted}"/>
-                                </Border>
-                                <Border Background="{StaticResource Bg2}" CornerRadius="{StaticResource Rad6}" Padding="8,6" Margin="0,0,0,6" Visibility="{Binding HasSpendLimit, Converter={StaticResource BoolVis}}">
-                                    <StackPanel>
-                                        <TextBlock Text="Workspace spend limit" FontSize="10.5" Foreground="{StaticResource Text}"/>
-                                        <TextBlock Text="{Binding SpendLimit.Summary}" FontSize="9.5" Foreground="{StaticResource Muted}" Margin="0,2,0,0"/>
-                                        <TextBlock Text="{Binding SpendLimit.ResetDisplay, StringFormat=resets {0}}" FontSize="9.5" Foreground="{StaticResource Faint}" Margin="0,2,0,0"/>
+                                        <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="0,4,0,7" />
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="9,3"
+                                                    Click="OnBridgeCodexUsageRefresh" ToolTip="Refresh Codex usage now">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE72C;" FontFamily="{StaticResource Icons}" FontSize="10"
+                                                               Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
+                                                    <TextBlock Text="Refresh" FontSize="10.5" Foreground="{StaticResource Muted}"
+                                                               Margin="6,0,0,0" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding UsageUpdatedText}" FontSize="9.5"
+                                                           Foreground="{StaticResource Faint}" />
+                                                <TextBlock Text="Live subscription limits from Codex" FontSize="9"
+                                                           Foreground="{StaticResource Faint}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DockPanel>
                                     </StackPanel>
-                                </Border>
-                            </StackPanel>
-
-                            <Rectangle Height="1" Fill="{StaticResource BorderSoft}" Margin="0,4,0,7"/>
-                            <DockPanel>
-                                <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="9,3" Click="OnBridgeCodexUsageRefresh" ToolTip="Refresh Codex usage now">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="" FontFamily="{StaticResource Icons}" FontSize="10" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
-                                        <TextBlock Text="Refresh" FontSize="10.5" Foreground="{StaticResource Muted}" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                </Button>
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding UsageUpdatedText}" FontSize="9.5" Foreground="{StaticResource Faint}"/>
-                                    <TextBlock Text="Live subscription limits from Codex" FontSize="9" Foreground="{StaticResource Faint}" Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </DockPanel>
-                        </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </ScrollViewer>
                 </Border>
             </Popup>
@@ -4126,6 +4683,19 @@
                         </Grid.RowDefinitions>
 
                         <DockPanel Grid.Row="0" LastChildFill="True">
+<Button x:Name="DiscordPingsButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                                    Padding="12,8" Margin="0,0,10,0" VerticalAlignment="Center"
+                                    Click="OnToggleDiscordPings"
+                                    ToolTip="Get a Discord ping when an account's usage resets"
+                                    AutomationProperties.Name="Discord reset pings">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xEA8F;" FontFamily="{StaticResource Icons}" FontSize="12"
+                                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock x:Name="DiscordPingsButtonLabel" Text="Discord pings"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+
                             <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="" Click="OnCloseAccountManager" ToolTip="Close account manager" AutomationProperties.Name="Close account manager"/>
                             <StackPanel>
                                 <TextBlock Text="Account manager" Foreground="{StaticResource Text}" FontSize="22" FontWeight="SemiBold"/>
@@ -4133,7 +4703,7 @@
                             </StackPanel>
                         </DockPanel>
 
-                        <Grid Grid.Row="1" Margin="0,18,0,14">
+                        <Grid x:Name="AccountManagerFilters" Grid.Row="1" Margin="0,18,0,14">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -4198,7 +4768,9 @@
                             </Grid>
                         </Grid>
 
-                        <Border Grid.Row="2" Background="{StaticResource Bg1}" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="{StaticResource Rad12}" ClipToBounds="True">
+                        <Border x:Name="AccountManagerListCard" Grid.Row="2" Background="{StaticResource Bg1}"
+                                BorderBrush="{StaticResource BorderSoft}"
+                                BorderThickness="1" CornerRadius="{StaticResource Rad12}" ClipToBounds="True">
                             <Grid Margin="10,9">
                                 <Grid>
                                     <!-- Unified roster used by the All accounts filter. The implicit account-type
@@ -4222,9 +4794,10 @@
                                     <!-- Claude accounts -->
                                     <Grid x:Name="ClaudeAccountsPanel" Visibility="Collapsed">
                                         <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="*"/>
-                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
                                         <DockPanel Grid.Row="0" Margin="8,4,8,10">
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding Accounts.Count, StringFormat={}{0} saved}" Foreground="{StaticResource Faint}" FontSize="10.5" VerticalAlignment="Bottom"/>
@@ -4233,8 +4806,18 @@
                                                 <TextBlock Text="Select an account to make Claude the provider for new chats." Foreground="{StaticResource Faint}" FontSize="11" Margin="0,3,0,0"/>
                                             </StackPanel>
                                         </DockPanel>
-                                        <TextBlock x:Name="ClaudeAccountEmptyText" Grid.Row="1" Panel.ZIndex="2" Text="No Claude accounts are saved yet. Add one below to get started." Foreground="{StaticResource Faint}" FontSize="11.5" TextWrapping="Wrap" Margin="20" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
-                                        <ListBox x:Name="ClaudeAccountList" Grid.Row="1" ItemContainerStyle="{StaticResource AccountManagerListItem}" ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Auto" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel">
+                                        <TextBlock x:Name="ClaudeAccountEmptyText" Grid.Row="2" Panel.ZIndex="2"
+                                                   Text="No Claude accounts are saved yet. Add one below to get started."
+                                                   Foreground="{StaticResource Faint}" FontSize="11.5" TextWrapping="Wrap"
+                                                   Margin="20" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Visibility="Collapsed" />
+                                        <ListBox x:Name="ClaudeAccountList" Grid.Row="2"
+                                                 ItemContainerStyle="{StaticResource AccountManagerListItem}"
+                                                 ScrollViewer.CanContentScroll="True"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 VirtualizingPanel.IsVirtualizing="True"
+                                                 VirtualizingPanel.VirtualizationMode="Recycling"
+                                                 VirtualizingPanel.ScrollUnit="Pixel">
                                             <ListBox.ItemsPanel>
                                                 <ItemsPanelTemplate>
                                                     <VirtualizingStackPanel/>
@@ -4273,7 +4856,10 @@
                                                 </DataTemplate>
                                             </ListBox.ItemTemplate>
                                         </ListBox>
-                                        <TextBlock Grid.Row="2" Text="Showing your live login — no account selected yet" Visibility="{Binding AccountIsFallback, Converter={StaticResource BoolVis}}" Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" Margin="12,8,12,4"/>
+                                        <TextBlock Grid.Row="3" Text="Showing your live login — no account selected yet"
+                                                   Visibility="{Binding AccountIsFallback, Converter={StaticResource BoolVis}}"
+                                                   Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap"
+                                                   Margin="12,8,12,4" />
                                     </Grid>
 
                                     <!-- OpenAI Codex accounts -->
@@ -4298,7 +4884,13 @@
                                             </ListBox.ItemsPanel>
                                             <ListBox.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type svc:CodexAccountInfo}">
-                                                    <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1" Click="OnSwitchCodexAccount" ContextMenu="{StaticResource CodexAccountMenu}" PreviewMouseRightButtonDown="OnCodexAccountRightDown" ToolTip="Click to switch · right-click to test or remove" AutomationProperties.Name="{Binding Label}">
+                                                    <Button Style="{StaticResource GhostButton}" HorizontalContentAlignment="Stretch"
+                                                            HorizontalAlignment="Stretch" Padding="10,7" Margin="0,1"
+                                                            Click="OnSwitchCodexAccount"
+                                                            ContextMenu="{StaticResource CodexAccountMenu}"
+                                                            PreviewMouseRightButtonDown="OnCodexAccountRightDown"
+                                                            ToolTip="Click to switch · right-click to test, reset usage or remove"
+                                                            AutomationProperties.Name="{Binding Label}">
                                                         <DockPanel>
                                                             <TextBlock DockPanel.Dock="Right" Text="" FontFamily="{StaticResource Icons}" FontSize="13" Foreground="{StaticResource Green}" VerticalAlignment="Center" Margin="12,0,2,0" Visibility="{Binding IsVibeCodeSelected, Converter={StaticResource BoolVis}}"/>
                                                             <Border DockPanel.Dock="Right" Background="#33E0A64E" CornerRadius="{StaticResource Rad6}" Padding="7,3" VerticalAlignment="Center" Margin="10,0,0,0" Visibility="{Binding NeedsRelogin, Converter={StaticResource BoolVis}}">
@@ -4330,6 +4922,9 @@
                                             </ListBox.ItemTemplate>
                                         </ListBox>
                                     </Grid>
+
+
+                                    <!-- Gemini: Google Antigravity's own Google login, plus any Gemini API keys. -->
 
 
                                     <!-- GLM accounts retain their service so subscription and API routes stay distinct. -->
@@ -4375,15 +4970,160 @@
                             </Grid>
                         </Border>
 
-                        <Grid Grid.Row="3" Margin="2,14,2,0">
+                        <!-- Discord reset pings: replaces the filters and the list while open (the header button
+                             toggles it). Every binding reads the one service, so a ping sent in the background
+                             updates the status line without this panel refreshing anything. -->
+                        <Border x:Name="DiscordPingsPanel" Grid.Row="1" Grid.RowSpan="3" Margin="0,18,0,0"
+                                Visibility="Collapsed" Background="{StaticResource Bg1}"
+                                BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                CornerRadius="{StaticResource Rad12}" ClipToBounds="True">
+                            <Grid Margin="20,17,20,12">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+
+                                <StackPanel>
+                                    <TextBlock Text="Discord reset pings" Foreground="{StaticResource Text}"
+                                               FontSize="14" FontWeight="SemiBold" />
+                                    <TextBlock Foreground="{StaticResource Faint}" FontSize="11" TextWrapping="Wrap"
+                                               Margin="0,3,0,0"
+                                               Text="When an account's usage limit resets, VibeCode posts in your Discord channel and pings @everyone, so you know it's ready again. It uses the usage checks VibeCode already runs." />
+                                </StackPanel>
+
+                                <StackPanel Grid.Row="1" Margin="0,16,0,0">
+                                    <TextBlock Text="WEBHOOK" Style="{StaticResource Caption}" FontSize="9"
+                                               Margin="2,0,0,6" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid Height="38">
+                                            <TextBox x:Name="DiscordWebhookBox" Padding="13,0,13,0"
+                                                     VerticalContentAlignment="Center" FontSize="12"
+                                                     KeyDown="OnDiscordWebhookKeyDown"
+                                                     AutomationProperties.Name="Discord webhook URL"
+                                                     AutomationProperties.HelpText="Paste the webhook URL from your Discord channel's Integrations settings" />
+                                            <TextBlock Text="Paste a webhook URL: Edit Channel ▸ Integrations ▸ Webhooks ▸ Copy Webhook URL"
+                                                       Foreground="{StaticResource Faint}" FontSize="12"
+                                                       HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                       Margin="15,0,0,0" IsHitTestVisible="False"
+                                                       TextTrimming="CharacterEllipsis">
+                                                <TextBlock.Visibility>
+                                                    <MultiBinding Converter="{StaticResource HintVis}">
+                                                        <Binding Path="Text" ElementName="DiscordWebhookBox" />
+                                                        <Binding Path="IsKeyboardFocusWithin" ElementName="DiscordWebhookBox" />
+                                                    </MultiBinding>
+                                                </TextBlock.Visibility>
+                                            </TextBlock>
+                                        </Grid>
+                                        <Button x:Name="DiscordSaveButton" Grid.Column="1" Style="{StaticResource PrimaryButton}"
+                                                Padding="15,8" Margin="10,0,0,0" Click="OnSaveDiscordWebhook"
+                                                AutomationProperties.Name="Save Discord webhook">
+                                            <TextBlock Text="Save" />
+                                        </Button>
+                                        <Button x:Name="DiscordTestButton" Grid.Column="2" Style="{StaticResource GhostButton}"
+                                                Padding="13,8" Margin="8,0,0,0" Click="OnTestDiscordWebhook"
+                                                ToolTip="Post a test ping to the channel"
+                                                AutomationProperties.Name="Send a test ping">
+                                            <TextBlock Text="Send test" />
+                                        </Button>
+                                    </Grid>
+                                    <TextBlock x:Name="DiscordWebhookProblem" Foreground="{StaticResource Red}" FontSize="11"
+                                               TextWrapping="Wrap" Margin="2,7,0,0" Visibility="Collapsed" />
+                                    <DockPanel Margin="2,9,0,0"
+                                               Visibility="{Binding HasWebhook, Source={x:Static svc:DiscordResetPings.Instance}, Converter={StaticResource BoolVis}}">
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="10,4"
+                                                Click="OnRemoveDiscordWebhook" AutomationProperties.Name="Remove Discord webhook">
+                                            <TextBlock Text="Remove" FontSize="11" />
+                                        </Button>
+                                        <TextBlock VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource Muted}"
+                                                   TextTrimming="CharacterEllipsis">
+                                            <Run Text="&#xE73E;" FontFamily="{StaticResource Icons}" Foreground="{StaticResource Green}" />
+                                            <Run Text=" Saved, sealed to this Windows account · " />
+                                            <Run Text="{Binding MaskedWebhook, Source={x:Static svc:DiscordResetPings.Instance}, Mode=OneWay}"
+                                                 FontFamily="{StaticResource Mono}" />
+                                        </TextBlock>
+                                    </DockPanel>
+                                    <TextBlock x:Name="DiscordStatusText" FontSize="11" TextWrapping="Wrap" Margin="2,7,0,0"
+                                               Text="{Binding StatusText, Source={x:Static svc:DiscordResetPings.Instance}, Mode=OneWay}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                                <Setter Property="Foreground" Value="{StaticResource Faint}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding StatusIsError, Source={x:Static svc:DiscordResetPings.Instance}}"
+                                                                 Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource Amber}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+
+                                <DockPanel Grid.Row="2" Margin="0,18,0,0">
+                                    <TextBlock x:Name="DiscordAccountCount" DockPanel.Dock="Right"
+                                               Foreground="{StaticResource Faint}" FontSize="10.5"
+                                               VerticalAlignment="Bottom" Margin="0,0,0,1" />
+                                    <StackPanel>
+                                        <TextBlock Text="ACCOUNTS" Style="{StaticResource Caption}" FontSize="9"
+                                                   Margin="2,0,0,8" />
+                                        <CheckBox x:Name="DiscordAllAccounts" Click="OnDiscordAllAccounts" Margin="2,0,0,0"
+                                                  AutomationProperties.Name="Ping for all accounts">
+                                            <TextBlock Text="All accounts" FontSize="12.5" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Text}" />
+                                        </CheckBox>
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <Border Grid.Row="3" Margin="0,10,0,0" BorderBrush="{StaticResource BorderSoft}"
+                                        BorderThickness="0,1,0,0">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,4,0,0">
+                                        <ItemsControl x:Name="DiscordAccountList" Margin="20,0,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <CheckBox IsChecked="{Binding IsOn}" Margin="2,6" Click="OnDiscordAccountToggled"
+                                                              AutomationProperties.Name="{Binding Label}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Label}" FontSize="12.5"
+                                                                       Foreground="{StaticResource Text}" />
+                                                            <TextBlock Text="{Binding Detail}" FontSize="11"
+                                                                       Foreground="{StaticResource Faint}" Margin="10,0,0,0"
+                                                                       VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </CheckBox>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <Grid x:Name="AccountManagerFooter" Grid.Row="3" Margin="2,14,2,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="AccountManagerFooterHint" Foreground="{StaticResource Faint}" FontSize="10.5" TextWrapping="Wrap" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="0,0,16,0" MaxWidth="380"/>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <Button x:Name="AccountResetFiltersButton" Style="{StaticResource GhostButton}" Padding="12,9" Margin="0,0,10,0" Click="OnResetAccountFilters" AutomationProperties.Name="Reset account filters" Visibility="Collapsed">
-                                    <TextBlock Text="Reset filters"/>
+                            <TextBlock x:Name="AccountManagerActionStatus" Grid.ColumnSpan="2" Visibility="Collapsed"
+                                       Foreground="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,10"
+                                       AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock x:Name="AccountManagerFooterHint" Grid.Row="1" Foreground="{StaticResource Faint}"
+                                       FontSize="10.5" TextWrapping="Wrap" VerticalAlignment="Center"
+                                       HorizontalAlignment="Left" Margin="0,0,16,0" MaxWidth="380" />
+                            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
+                                <Button x:Name="AccountResetFiltersButton" Style="{StaticResource GhostButton}"
+                                        Padding="12,9" Margin="0,0,10,0" Click="OnResetAccountFilters"
+                                        AutomationProperties.Name="Reset account filters" Visibility="Collapsed">
+                                    <TextBlock Text="Reset filters" />
                                 </Button>
                                 <Button x:Name="AccountManagerAddKeyButton" Style="{StaticResource GhostButton}" Padding="12,9" Margin="0,0,10,0" Click="OnAddApiKeyAccount" AutomationProperties.Name="Add API key for selected provider">
                                     <StackPanel Orientation="Horizontal">

@@ -28,11 +28,11 @@ internal static partial class Program
         var now = DateTimeOffset.UtcNow;
         var chat = Chat(@"C:\Recent", "Codex 1", "Recently active");
         bool Visible(DateTimeOffset at) => AgentActivitySnapshot.Build([chat], at).Count > 0;
-        Activity(chat, now.AddMinutes(-9));
-        Check("Agents active nine minutes ago remain on the wall", Visible(now));
-        Activity(chat, now.AddMinutes(-10));
-        Check("Agents remain visible immediately before ten minutes", Visible(now.AddTicks(-1)));
-        Check("Idle agents disappear at exactly ten minutes", !Visible(now));
+        Activity(chat, now.AddSeconds(-50));
+        Check("Agents active fifty seconds ago remain on the wall", Visible(now));
+        Activity(chat, now.AddMinutes(-1));
+        Check("Agents remain visible immediately before one minute", Visible(now.AddTicks(-1)));
+        Check("Idle agents disappear at exactly one minute", !Visible(now));
         Activity(chat, now.AddMinutes(-30));
         Check("Chats inactive for thirty minutes are excluded", !Visible(now));
         chat.Status = "running"; Activity(chat, now.AddHours(-3));
@@ -45,10 +45,10 @@ internal static partial class Program
         chat.Status = "starting";
         Check("Booting a CLI alone does not qualify as recent work", !Visible(now));
         chat.Status = "idle";
-        typeof(ChatViewModel).GetField("_lastAssistantAt", Flags)!.SetValue(chat, now.AddMinutes(-7));
+        typeof(ChatViewModel).GetField("_lastAssistantAt", Flags)!.SetValue(chat, now.AddSeconds(-45));
         Check("Older sessions can use a genuine assistant activity timestamp", Visible(now));
-        typeof(ChatViewModel).GetField("_lastAssistantAt", Flags)!.SetValue(chat, now.AddMinutes(-12));
-        Check("Legacy assistant timestamps also expire after ten minutes", !Visible(now));
+        typeof(ChatViewModel).GetField("_lastAssistantAt", Flags)!.SetValue(chat, now.AddMinutes(-2));
+        Check("Legacy assistant timestamps also expire after one minute", !Visible(now));
         chat.Close();
 
         var rows = new[] {
@@ -61,7 +61,7 @@ internal static partial class Program
         Check("Totals include cache tiers once and exclude stale/future rows", usage.Report.Total == 400 && usage.Report.TotalIn == 370 && usage.Report.Output == 30);
         Check("Both graphs and total cover the exact same hour", usage.Buckets.Sum(b => b.Total) == usage.Report.Total
             && usage.Report.Models.Sum(m => m.Total) == usage.Report.Total);
-        Check("Hourly token history is independent of the ten-minute agent window", usage.Report.Total == 400
+        Check("Hourly token history is independent of the one-minute agent window", usage.Report.Total == 400
             && usage.TokensPerMinute == 400.0 / 60 && usage.TokensPerTurn == 200 && usage.RecentTokensPerMinute == 5);
         Check("Partial five-minute edge buckets retain boundary tokens", usage.Buckets.Count == 13 && usage.Buckets.First().Total == 375 && usage.Buckets.Last().Total == 25);
         Check("No activity produces zero-filled charts", WorkflowUsageSnapshot.Build([], now).Buckets.All(b => b.Total == 0));
@@ -130,9 +130,9 @@ internal static partial class Program
         Check("Compact analytics keep their heading within the visible viewport", panel.TranslatePoint(new Point(), wallScroll).Y >= -.5
             && panel.ActualHeight <= wallScroll.ViewportHeight + 1);
         Capture(wall, 760, 520, "workflow-usage-compact.png");
-        recent.Status = "idle"; Activity(recent, DateTimeOffset.UtcNow.AddMinutes(-10).AddMilliseconds(400));
+        recent.Status = "idle"; Activity(recent, DateTimeOffset.UtcNow.AddMinutes(-1).AddMilliseconds(400));
         wall.Refresh();
-        Check("A finished agent stays visible until its ten minutes elapse", graph.NodeCount == 2);
+        Check("A finished agent stays visible until its one minute elapse", graph.NodeCount == 2);
         PumpFor(1500);
         Check("The real refresh timer removes the expired agent and directory", graph.NodeCount == 0);
         wall.Close();

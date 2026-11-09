@@ -7,7 +7,7 @@ public static class CodexModelCatalog
     private static readonly string[] MaxEfforts = ["low", "medium", "high", "xhigh", "max"];
 
     /// <summary>
-    /// Recommended Codex models as of 2026-09-30, then the GPT-5.6 family that is still available
+    /// Recommended Codex models as of 2026-10-29, then the GPT-5.6 family that is still available
     /// during the GPT-6 rollout. GPT-6 Luna stops at Max; the others include Ultra.
     /// </summary>
     public static readonly ModelSpec[] Current =
@@ -16,6 +16,8 @@ public static class CodexModelCatalog
             "Our most capable model for complex work across code, apps, and research.", UltraEfforts),
         new("gpt-6.1-sol", "GPT-6.1 Sol",
             "Near-Astra performance for complex coding and professional work at a lower cost.", UltraEfforts),
+        new("gpt-6.1-terra", "GPT-6.1 Terra",
+            "Balanced GPT-6.1 agentic coding model at half GPT-6.1 Sol's price.", UltraEfforts),
         new("gpt-6-sol", "GPT-6 Sol",
             "Built for complex coding and agentic workflows, with stronger factual reliability than GPT-5.6 Sol.",
             UltraEfforts),

@@ -22,10 +22,10 @@ public static class JarvisSettingsCatalog
         Add("General", "RunInBackground ContinueAfterLimitResets DefaultProvider DefaultMode DefaultModel DefaultEffort DefaultCodexModel DefaultCodexEffort DefaultGlmModel DefaultGlmEffort FastMode");
         Add("Appearance", "UiMode Borderless ThinkingOrbStyle CompactMode Backgrounds ActiveBackground RandomBackground BackgroundVisibility");
         Add("Notifications", "NotifyOnTurnEnd NotifyOnAwaitingInput NotificationSound");
-        Add("Bridge", "BridgeOrchestratorCount BridgeOrchestratorWorkerCounts DualMonitorBridge DualMonitorDoubleSessions BridgeAgentLimit BridgePeerMessaging ShowAgentMessageDividers SwarmMaxWorkers AgentSupervisionEnabled SupervisionStaleSeconds SupervisionIdleSeconds SupervisionInterventionGraceSeconds SupervisionMaxTaskSeconds SupervisionMaxInterventions SupervisionMaxRestarts SupervisionLoopRepeatThreshold");
+        Add("Bridge", "BridgeOrchestratorCount BridgeOrchestratorWorkerCounts DualMonitorBridge DualMonitorDoubleSessions BridgeAgentLimit BridgePeerMessaging ShowAgentMessageDividers AgentSupervisionEnabled SupervisionStaleSeconds SupervisionIdleSeconds SupervisionInterventionGraceSeconds SupervisionMaxTaskSeconds SupervisionMaxInterventions SupervisionMaxRestarts SupervisionLoopRepeatThreshold");
         Add("Usage", "TelemetryOnCompanionDisplay TelemetryLiveAnimation TelemetryWallRangeHours");
         Add("Projects", "ShowOnlyOwnedSessions HiddenProjects IsolateChatsByAccount");
-        Add("Extensions", "SecondBrainEnabled AgentMemoryEnabled AgentMemoryAutoRecall AgentMemoryAutoRemember AgentMemoryEndpoint SpotifyEnabled SpotifyClientId WeatherEnabled WeatherPlace WeatherLat WeatherLon WeatherCountryCode GroqSpeechEnabled PhoneEnabled PhoneBridgeEnabled PhoneBridgePort");
+        Add("Extensions", "SecondBrainEnabled AgentMemoryEnabled AgentMemoryAutoRecall AgentMemoryAutoRemember AgentMemoryEndpoint MemoryRetentionDays ContextCheckpointNudgePercent BackgroundMemoryReview SpotifyEnabled SpotifyClientId WeatherEnabled WeatherPlace WeatherLat WeatherLon WeatherCountryCode GroqSpeechEnabled GptWhisperEnabled PhoneEnabled PhoneBridgeEnabled PhoneBridgePort");
         Add("Jarvis", "JarvisProvider JarvisModel JarvisEffort JarvisVoiceEnabled JarvisVoiceId JarvisSpeechRate JarvisSpeechVolume");
         Add("Privacy", "HideEmails");
         return result;
@@ -154,10 +154,12 @@ public static class JarvisSettingsCatalog
             && (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
             throw Invalid(name, "an absolute http or https URL");
         if (name == nameof(AppSettings.BridgeOrchestratorWorkerCounts) && value is int[] counts
-            && (counts.Length > 4 || counts.Any(count => count is < 0 or > SwarmPolicy.HardMaxWorkers)))
+            && (counts.Length > 4 || counts.Any(count => count is < 0 or > MaxOrchestratorWorkers)))
             throw Invalid(name, "up to four worker counts from 0 to 16");
         return value;
     }
+
+    private const int MaxOrchestratorWorkers = 16;
 
     private static ArgumentException Invalid(string name, string expected) => new($"{name} requires {expected}.");
     private static (double Minimum, double Maximum)? Range(string name) => name switch
@@ -165,7 +167,8 @@ public static class JarvisSettingsCatalog
         nameof(AppSettings.BackgroundVisibility) or nameof(AppSettings.JarvisSpeechVolume) => (0, 100),
         nameof(AppSettings.JarvisSpeechRate) => (0.6, 1.5),
         nameof(AppSettings.BridgeAgentLimit) => (BridgeAgentPolicy.MinimumAgentLimit, BridgeAgentPolicy.MaximumAgentLimit),
-        nameof(AppSettings.SwarmMaxWorkers) => (SwarmPolicy.MinMaxWorkers, SwarmPolicy.HardMaxWorkers),
+        nameof(AppSettings.IdleSleepMinutes) => (0, 1440),
+        nameof(AppSettings.PacingThresholdPercent) => (50, 100),
         nameof(AppSettings.BridgeOrchestratorCount) => (1, 4),
         nameof(AppSettings.SupervisionStaleSeconds) or nameof(AppSettings.SupervisionIdleSeconds)
             or nameof(AppSettings.SupervisionInterventionGraceSeconds) => (1, 86_400),
@@ -174,8 +177,9 @@ public static class JarvisSettingsCatalog
         nameof(AppSettings.SupervisionLoopRepeatThreshold) => (2, 100),
         nameof(AppSettings.TelemetryWallRangeHours) => (1, 720),
         nameof(AppSettings.PhoneBridgePort) => (0, 65535),
-        nameof(AppSettings.WeatherLat) => (-90, 90),
-        nameof(AppSettings.WeatherLon) => (-180, 180),
+        nameof(AppSettings.WeatherLat) => (-90, 90), nameof(AppSettings.WeatherLon) => (-180, 180),
+        nameof(AppSettings.MemoryRetentionDays) => (MemoryRetention.MinimumDays, MemoryRetention.MaximumDays),
+        nameof(AppSettings.ContextCheckpointNudgePercent) => (0, 95),
         _ => null,
     };
 

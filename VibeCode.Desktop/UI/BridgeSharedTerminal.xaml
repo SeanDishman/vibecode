@@ -1,8 +1,10 @@
 <UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="clr-namespace:VibeCode.UI" x:Class="VibeCode.UI.BridgeSharedTerminal" Background="{DynamicResource SurfacePane}" FontFamily="{DynamicResource Ui}" UseLayoutRounding="True" SizeChanged="OnPanelSizeChanged">
     <UserControl.Resources>
-        <ui:StatusBrushConverter x:Key="StatusBrush"/>
-        <BooleanToVisibilityConverter x:Key="BoolVis"/>
-        <ui:NonEmptyToVisibilityConverter x:Key="ShowIf"/>
+        <ui:StatusBrushConverter x:Key="StatusBrush" />
+        <BooleanToVisibilityConverter x:Key="BoolVis" />
+        <ui:NonEmptyToVisibilityConverter x:Key="ShowIf" />
+        <!-- Thoughts use the app's own collapsed brain row (the shell's ThinkingItem template), the same as every chat.
+             A thought with no text gets no row here at all (BridgeTranscriptEntry.HasContent). -->
         <DataTemplate DataType="{x:Type ui:BridgeTranscriptEntry}">
             <Border x:Name="EntryBorder" MaxWidth="920" Margin="20,0" Padding="0,4" HorizontalAlignment="Stretch" BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0">
                 <Grid x:Name="EntryRoot">
@@ -16,6 +18,10 @@
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Owner.IsBridgeManager}" Value="True">
                                             <Setter Property="Text" Value="Orchestrator"/>
+                                        </DataTrigger>
+                                        <!-- Agent team: the chosen name is the headline, so the seat and provider go here. -->
+                                        <DataTrigger Binding="{Binding Owner.IsAgentTeamMember}" Value="True">
+                                            <Setter Property="Text" Value="{Binding Owner.AgentTeamRole}" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -52,8 +58,10 @@
         </DataTemplate>
     </UserControl.Resources>
     <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition x:Name="RosterColumn" Width="232"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <Border BorderBrush="{DynamicResource SurfaceOutline}" BorderThickness="0,0,1,0" Background="{DynamicResource SurfaceBar}">
+        <Grid.ColumnDefinitions><ColumnDefinition x:Name="RosterColumn" Width="232" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+        <!-- An agent team is one terminal: no roster to click between, so the list is gone and the log fills the width. -->
+        <Border x:Name="RosterPanel" BorderBrush="{DynamicResource SurfaceOutline}" BorderThickness="0,0,1,0" Background="{DynamicResource SurfaceBar}"
+                Visibility="{Binding IsAgentTeam, Converter={StaticResource ShowIf}, ConverterParameter=invert}">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Top" Margin="12,14,12,10">
                     <DockPanel>
@@ -158,7 +166,22 @@
                     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter>
                 </Style></ListBox.ItemContainerStyle>
             </ListBox>
-            <TextBlock Grid.Row="1" Text="Choose an agent below to begin, or start an orchestrator with its own workers." Foreground="{DynamicResource Muted}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="360" Margin="24,36" HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="{Binding Activity.IsEmpty, Converter={StaticResource BoolVis}}"/>
+            <TextBlock x:Name="EmptyActivityHint" Grid.Row="1"
+                       Foreground="{DynamicResource Muted}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
+                       MaxWidth="360" Margin="24,36" HorizontalAlignment="Center" VerticalAlignment="Top"
+                       IsHitTestVisible="False"
+                       Visibility="{Binding Activity.IsEmpty, Converter={StaticResource BoolVis}}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Text" Value="Choose an agent below to begin, or start an orchestrator with its own workers." />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsAgentTeam}" Value="True">
+                                <Setter Property="Text" Value="Each prompt starts a new agent. Every agent's messages and actions log here." />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
             <StackPanel Grid.Row="2" MaxWidth="920" Margin="16,10,16,12">
                 <ContentControl x:Name="SharedComposer" Content="{Binding Target}" ContentTemplate="{DynamicResource BridgeComposerTemplate}"/>
             </StackPanel>

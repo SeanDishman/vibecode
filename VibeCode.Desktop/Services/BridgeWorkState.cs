@@ -15,14 +15,37 @@ public sealed class BridgeWorkState
     public HashSet<string> SetupMessages { get; set; } = new();
     public HashSet<string> SetupReads { get; set; } = new();
     public List<BridgeWorkTask> Tasks { get; set; } = new();
+    public Dictionary<string, List<string>> RequiredOutputs { get; set; } = new();
     public Dictionary<string, string> OrchestratorObjectives { get; set; } = new();
     public BridgeCentralPlan? CentralPlan { get; set; }
     public BridgeUsageSummary PlanningUsage { get; set; } = new();
+    /// <summary>The user's "Fact check orchestrator" choice: once every agent stops, each orchestrator is asked whether
+    /// it really did everything the user asked, and has to confirm with bridge_mark_task_done.</summary>
+    public bool FactCheckOrchestrators { get; set; }
+    /// <summary>The user's "Plan steps" choice. On, orchestrators publish their groups' steps with bridge_set_plan before
+    /// dispatch, the team's progress through them shows above the chat, and an idle team is reminded of unfinished
+    /// steps. Off, they assign work directly with bridge_dispatch_task and there is no step plan at all. A journal saved
+    /// before the option existed reads as on, which is how those Bridges ran.</summary>
+    public bool PlanSteps { get; set; } = true;
 
     // Runtime-only: a saved bridge must not start model turns just because it was reopened.
     internal bool IdlePlanRemindersPaused { get; set; }
     internal bool IdlePlanReminderScheduled { get; set; }
     internal Dictionary<string, string> IdlePlanReminderSignatures { get; } = new(StringComparer.Ordinal);
+    // Also runtime-only: a reopened bridge asks nothing until the user sends work, and that starts every check over.
+    internal bool FactCheckScheduled { get; set; }
+    /// <summary>Fact checks sent to each orchestrator for its current request.</summary>
+    internal Dictionary<string, int> FactChecksSent { get; } = new(StringComparer.Ordinal);
+    /// <summary>Each orchestrator's answer: done or blocked, or unconfirmed once the last check went unanswered.</summary>
+    internal Dictionary<string, string> FactCheckOutcomes { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>New work for this orchestrator: its next stop is checked again from the first question.</summary>
+    internal void ResetFactCheck(string? orchestratorId)
+    {
+        if (orchestratorId is null) return;
+        FactChecksSent.Remove(orchestratorId);
+        FactCheckOutcomes.Remove(orchestratorId);
+    }
 
     public static string PeerKey(string from, string to) => from + ":" + to;
     public bool Confirmed(string agentId) => ConfirmedVersions.GetValueOrDefault(agentId) == PlanVersion;
@@ -78,6 +101,7 @@ public sealed class BridgeWorkTask
     public string Instruction { get; set; } = "";
     public List<string> Dependencies { get; set; } = new();
     public List<string> Files { get; set; } = new();
+    public List<string> Outputs { get; set; } = new();
     public string State { get; set; } = "planned";
     public string Summary { get; set; } = "";
     public string Evidence { get; set; } = "";

@@ -58,6 +58,87 @@ internal static partial class Program
         }
     }
 
+    private static void VerifyReviewNavigation()
+    {
+        var resources = Application.Current.Resources;
+        resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(new Uri("/VibeCode;component/Themes/Dark.xaml", UriKind.Relative)));
+        resources["BoolVis"] = new BooleanToVisibilityConverter();
+        resources["ShowIf"] = new NonEmptyToVisibilityConverter();
+        foreach (var theme in new[] { "Dark", "Borderless", "Cli" })
+        {
+            var dictionary = (ResourceDictionary)Application.LoadComponent(new Uri("/VibeCode;component/Themes/" + theme + ".xaml", UriKind.Relative));
+            resources.MergedDictionaries.Add(dictionary);
+            var (vm, team) = Team("review-navigation-" + theme, 4);
+            foreach (var agent in team) agent.Status = "idle";
+            foreach (var manager in new[] { team[0], team[2] })
+            {
+                Property(manager, "IsBridgeManager", true);
+                Property(manager, "BridgeCoordinatesOnly", true);
+            }
+            Property(team[1], "BridgeCoordinatorAgentId", team[0].BridgeAgentId);
+            Property(team[3], "BridgeCoordinatorAgentId", team[2].BridgeAgentId);
+            foreach (var peer in team.Skip(1)) vm.Chats.Remove(peer);
+            vm.SetBridgeTerminalMode(true);
+            for (var index = 0; index < team.Length; index++)
+            {
+                team[index].Items.Add(new TextItem { Text = "Visible activity from agent " + (index + 1) });
+                team[index].Draft = "Keep draft " + (index + 1);
+            }
+            Property(vm, "ActiveChat", team[0]);
+            Property(vm, "ShowBridge", true);
+            var shell = (MainWindow)typeof(MainWindow).GetConstructors(Flags).Single(c => c.GetParameters().Length == 3).Invoke([vm, null, true]);
+            try
+            {
+                CaptureShell(shell, 1440, 900, "review-navigation-" + theme + "-all.png");
+                var panel = (BridgeSharedTerminal)shell.FindName("BridgeSharedPanel");
+                var roster = (ListBox)panel.FindName("AgentRoster");
+                var transcript = (ListBox)panel.FindName("SharedTranscript");
+                var activity = vm.SharedBridgeTerminal.Activity;
+                void Review(ChatViewModel agent)
+                {
+                    var button = Descendants<Button>(panel).Single(b => Equals(b.Content, "Review") && ReferenceEquals(b.DataContext, agent));
+                    button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    shell.UpdateLayout();
+                }
+                Review(team[1]);
+                Check(theme + " Review inspects exactly one worker without hiding its team", vm.SharedBridgeTerminal.IsReviewing
+                    && transcript.Items.Cast<BridgeTranscriptEntry>().Single().Owner == team[1] && roster.Items.Count == 4);
+                vm.SetBridgeTerminalMode(true);
+                Check(theme + " background roster refresh leaves the open review intact", vm.SharedBridgeTerminal.IsReviewing
+                    && transcript.Items.Cast<BridgeTranscriptEntry>().Single().Owner == team[1]);
+                CaptureShell(shell, 1440, 900, "review-navigation-" + theme + "-worker.png");
+                roster.SelectedItem = team[2];
+                shell.UpdateLayout();
+                Check(theme + " selecting another agent exits Review and restores all activity", !vm.SharedBridgeTerminal.IsReviewing
+                    && vm.SharedBridgeTerminal.ActivityTitle == "All activity" && transcript.Items.Count == 4
+                    && ReferenceEquals(transcript.ItemsSource, activity) && vm.SharedBridgeTerminal.Target == team[2]);
+                Check(theme + " switching agents preserves drafts, sessions and the single terminal", team.Select((agent, index) =>
+                    agent.Draft == "Keep draft " + (index + 1) && agent.BridgeSingleTerminal && !Session(agent).HasExited).All(kept => kept)
+                    && Descendants<TextBox>(panel).Single(t => t.Name == "PaneInput").DataContext == team[2]);
+                CaptureShell(shell, 1440, 900, "review-navigation-" + theme + "-restored.png");
+                Review(team[3]);
+                Check(theme + " Review remains explicit when changing worker groups", vm.SharedBridgeTerminal.IsReviewing
+                    && transcript.Items.Cast<BridgeTranscriptEntry>().Single().Owner == team[3]);
+                var recipient = Descendants<ComboBox>(panel).Single(p => p.Name == "SharedRecipientPicker");
+                recipient.SelectedItem = team[0];
+                shell.UpdateLayout();
+                Check(theme + " recipient picker also exits Review", !vm.SharedBridgeTerminal.IsReviewing
+                    && transcript.Items.Count == 4 && vm.SharedBridgeTerminal.Target == team[0]);
+                Review(team[0]);
+                var showAll = Descendants<Button>(panel).Single(b => Equals(b.Content, "Show all agents"));
+                Check(theme + " Show all agents is available while reviewing", showAll.Visibility == Visibility.Visible);
+                showAll.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                Check(theme + " explicit Show all still restores the shared activity", !vm.SharedBridgeTerminal.IsReviewing
+                    && transcript.Items.Count == 4);
+            }
+            finally
+            {
+                shell.Close();
+                resources.MergedDictionaries.Remove(dictionary);
+            }
+        }
+    }
+
     private static void VerifySharedActivity()
     {
         var (vm, team) = Team("shared-activity", 3);
@@ -82,6 +163,19 @@ internal static partial class Program
         Check("streaming updates use the live item without copying", ((TextItem)panel.Entries[1].Item).Text.EndsWith("passed."));
         panel.Review(team[1]);
         Check("review filters activity without hiding the roster", panel.Activity.Cast<BridgeTranscriptEntry>().Count() == 1 && panel.Agents.Count == 3);
+        vm.SetBridgeTerminalMode(true);
+        Check("background roster reconciliation preserves an explicit agent review", panel.IsReviewing
+            && panel.Activity.Cast<BridgeTranscriptEntry>().All(entry => ReferenceEquals(entry.Owner, team[1])));
+        panel.Target = team[0];
+        Check("choosing another recipient exits review and restores all team activity", !panel.IsReviewing
+            && panel.ActivityTitle == "All activity" && panel.Activity.Cast<BridgeTranscriptEntry>().Count() == 2
+            && ReferenceEquals(panel.Target, team[0]) && ReferenceEquals(panel.Activity, view));
+        panel.Review(team[1]);
+        vm.SelectBridgeTerminal(team[0]);
+        Check("direct terminal selection also exits review", !panel.IsReviewing && panel.Activity.Cast<BridgeTranscriptEntry>().Count() == 2);
+        panel.Review(team[0]);
+        Check("explicit Review on the selected recipient still opens its conversation", panel.IsReviewing
+            && panel.Activity.Cast<BridgeTranscriptEntry>().Single().Owner == team[0]);
         panel.ShowAll();
         Check("returning to all activity keeps the viewport and both agents", ReferenceEquals(panel.Activity, view) && panel.Activity.Cast<BridgeTranscriptEntry>().Count() == 2);
         var pending = new PendingItem();

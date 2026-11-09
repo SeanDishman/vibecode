@@ -65,7 +65,7 @@ public sealed partial class BridgeMailboxStore
             .SelectMany(m => new[] { m.From, m.To }).FirstOrDefault(b => b.Closed && b.AgentId == agentId);
         if (departed is not null)
         {
-            if (number <= 0 || _agents.Any(a => a.Number == number)) throw new ArgumentException("Mailbox agent number must be positive and unique.", nameof(number));
+            RequireFreeNumber(number);
             departed.Number = number; departed.Closed = false;
             _agents.Add(departed);
         }
@@ -75,14 +75,38 @@ public sealed partial class BridgeMailboxStore
             if (!restored.Attached) { restored.Attached = true; Interlocked.Increment(ref _attachedCount); }
             return restored;
         }
-        if (number <= 0 || _agents.Any(a => a.Number == number))
-            throw new ArgumentException("Mailbox agent number must be positive and unique.", nameof(number));
+        RequireFreeNumber(number);
         var box = new Mailbox(this, number, label, agentId ?? Guid.NewGuid().ToString("N")) { Attached = true };
         _agents.Add(box);
         Interlocked.Increment(ref _attachedCount);
         try { SaveSnapshot(); }
         catch { _agents.Remove(box); Interlocked.Decrement(ref _attachedCount); throw; }
         return box;
+    }
+
+    private void RequireFreeNumber(int number)
+    {
+        if (number <= 0)
+            throw new BridgeMailboxRosterException($"The Bridge supplied mailbox number {number}; agent numbers must be positive.");
+        if (_agents.Any(a => a.Number == number))
+            throw new BridgeMailboxRosterException($"Mailbox number {number} is still assigned to another agent. The saved mailboxes must be reconciled with the current Bridge roster.");
+    }
+
+    /// <summary>Reconcile the complete live roster before attaching any individual mailbox. Restored boxes
+    /// are loaded lazily, so a pane can leave or be renumbered before its saved mailbox is attached. Stable
+    /// IDs determine ownership; a reused display number must never give a new agent somebody else's inbox.</summary>
+    public void ReconcileRoster(IReadOnlyDictionary<string, int> roster)
+    {
+        RequireAvailable();
+        if (roster.Keys.Any(string.IsNullOrWhiteSpace) || roster.Values.Any(n => n <= 0)
+            || roster.Values.Distinct().Count() != roster.Count)
+            throw new BridgeMailboxRosterException("The current Bridge roster contains missing or repeated agent numbers. No mailbox ownership was changed.");
+
+        // Use the same departure behavior as closing an attached pane: surviving inboxes keep their
+        // historical messages and departed sender IDs, while the old slot becomes available again.
+        foreach (var box in _agents.Where(box => !roster.ContainsKey(box.AgentId)).ToArray()) Close(box);
+        var numbers = _agents.ToDictionary(box => box, box => roster[box.AgentId]);
+        if (numbers.Any(pair => pair.Key.Number != pair.Value)) Renumber(numbers);
     }
 
     public Message Deliver(Mailbox from, Mailbox to, string body, int hop, DateTimeOffset now, bool setupMessage = false)
@@ -306,3 +330,5 @@ public sealed partial class BridgeMailboxStore
         if (File.Exists(path)) File.Delete(path);
     }
 }
+
+internal sealed class BridgeMailboxRosterException(string message) : ArgumentException(message);

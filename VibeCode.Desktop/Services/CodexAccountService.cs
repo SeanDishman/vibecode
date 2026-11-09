@@ -31,6 +31,7 @@ public sealed class CodexAccountInfo : INotifyPropertyChanged
     public IReadOnlyList<CodexUsageLimit> UsageLimits { get; init; } = Array.Empty<CodexUsageLimit>();
     public DateTimeOffset? UsageUpdatedAt { get; init; }
     public int? AvailableResetCredits { get; init; }
+    public bool HasPendingUsageReset { get; init; }
     public bool? HasCredits { get; init; }
     public bool? UnlimitedCredits { get; init; }
     public string CreditBalance { get; init; } = "";
@@ -38,6 +39,7 @@ public sealed class CodexAccountInfo : INotifyPropertyChanged
     public string RateLimitStatus { get; init; } = "";
 
     public bool NeedsRelogin => !Usable;
+    public bool HasUsage => SessionPercent is not null || WeekPercent is not null;
     public bool IncludedUsageExhausted => SessionPercent >= 100 || WeekPercent >= 100 || RateLimitStatus == "rate_limit_reached";
     public bool CanUseCredits => (HasCredits == true || UnlimitedCredits == true)
                                 && !CodexCreditPolicy.IsBlockingStatus(RateLimitStatus) && SpendLimit?.RemainingPercent is not <= 0;
@@ -78,6 +80,12 @@ public sealed class CodexAccountInfo : INotifyPropertyChanged
         }
     }
     public bool HasResetCredits => AvailableResetCredits is > 0;
+    public bool CanResetUsage => Usable && (HasPendingUsageReset || AvailableResetCredits is not <= 0);
+    public string ResetUsageToolTip => NeedsRelogin ? "Sign in again before resetting usage."
+        : HasPendingUsageReset ? "Check the previous reset attempt without spending another reset."
+        : AvailableResetCredits == 0 ? "No earned resets available."
+        : AvailableResetCredits is { } count ? $"Use one earned reset for this account. {count} available."
+        : "Use one earned reset for this account, if available.";
     public string ResetCreditsDisplay => AvailableResetCredits is { } count
         ? $"{count} earned limit reset{(count == 1 ? "" : "s")} available"
         : "";
@@ -139,7 +147,7 @@ public sealed class CodexAccountInfo : INotifyPropertyChanged
 /// and are committed only after Codex reports a stable account id, so adding an account can never overwrite one that
 /// is already saved.
 /// </summary>
-public sealed class CodexAccountService
+public sealed partial class CodexAccountService
 {
     public static CodexAccountService Instance { get; } = new();
     public static event Action? AccountsChanged;
@@ -258,12 +266,7 @@ public sealed class CodexAccountService
                 var accounts = LoadAccounts();
                 var account = accounts.FirstOrDefault(x => x.Metadata.Id == id);
                 if (account is null) return CodexAccountOutcome.Missing;
-                // Allow removing the active/main account: fall back to another usable login, or nothing.
-                if (ResolveActiveId(accounts) == id)
-                {
-                    var next = accounts.FirstOrDefault(x => x.Metadata.Id != id && IsUsable(x));
-                    WriteActive(next?.Metadata.Id);
-                }
+                var wasActive = ResolveActiveId(accounts) == id;
 
                 if (account.Metadata.UsesLegacyHome)
                 {
@@ -277,7 +280,15 @@ public sealed class CodexAccountService
                     var root = Path.GetFullPath(StoreRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
                     if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("Refused to remove an account directory outside VibeCode's account store.");
-                    DeleteDirectoryRobust(full);
+                    ForgetLoginOnly(account);
+                }
+
+                // Allow removing the active/main account: fall back to another usable login, or nothing. The
+                // selection moves only after the login is really gone, so a refused removal changes nothing.
+                if (wasActive)
+                {
+                    var next = accounts.FirstOrDefault(x => x.Metadata.Id != id && IsUsable(x));
+                    WriteActive(next?.Metadata.Id);
                 }
                 changed = true;
             }
@@ -374,7 +385,9 @@ public sealed class CodexAccountService
                 string ResolveHome(string? id)
                 {
                     id ??= ResolveActiveId(accounts);
-                    var stored = accounts.FirstOrDefault(x => x.Metadata.Id == id);
+                    // A removed account keeps its history, so its chats can still be moved to another login.
+                    var stored = accounts.FirstOrDefault(x => x.Metadata.Id == id)
+                                 ?? (id is null ? null : FindRemovedAccount(id));
                     return stored is not null ? HomeOf(stored) : LegacyHome;
                 }
                 var fromHome = ResolveHome(fromAccountId);
@@ -466,6 +479,9 @@ public sealed class CodexAccountService
         {
             var accounts = LoadAccounts();
             var existing = accounts.FirstOrDefault(x => x.Metadata.Id == result.AccountId);
+            // Signing back in to an account that was removed earlier picks its kept folder up again, so its old
+            // Codex conversations become resumable instead of being stranded beside a fresh, empty home.
+            existing ??= FindRemovedAccount(result.AccountId!);
             var accountDirectory = existing?.DirectoryPath ?? AvailableAccountDirectory(result.AccountId!);
             var metadata = existing?.Metadata ?? new SavedAccount
             {
@@ -485,6 +501,8 @@ public sealed class CodexAccountService
             metadata.Email = result.Email ?? metadata.Email;
             metadata.Plan = result.Plan ?? metadata.Plan;
             WriteMetadata(accountDirectory, metadata);
+            foreach (var marker in new[] { RemovedMetadataName, RemovedNoteName })
+                try { File.Delete(Path.Combine(accountDirectory, marker)); } catch { /* the account is listed again either way */ }
             WriteActive(metadata.Id);
         }
     }
@@ -594,25 +612,26 @@ public sealed class CodexAccountService
     {
         var active = ResolveActiveId(accounts);
         return accounts.Select(x => new CodexAccountInfo
-        {
-            Id = x.Metadata.Id,
-            Name = x.Metadata.Name,
-            Email = x.Metadata.Email,
-            Plan = x.Metadata.Plan,
-            IsCurrent = x.Metadata.Id == active,
-            Usable = IsUsable(x),
-            SavedAt = x.Metadata.SavedAt,
-            SessionPercent = x.Metadata.SessionPercent,
-            WeekPercent = x.Metadata.WeekPercent,
-            UsageLimits = EffectiveUsageLimits(x.Metadata),
-            UsageUpdatedAt = x.Metadata.UsageUpdatedAt,
-            AvailableResetCredits = x.Metadata.AvailableResetCredits,
-            HasCredits = x.Metadata.HasCredits,
-            UnlimitedCredits = x.Metadata.UnlimitedCredits,
-            CreditBalance = x.Metadata.CreditBalance,
-            SpendLimit = x.Metadata.SpendLimit,
-            RateLimitStatus = x.Metadata.RateLimitStatus,
-        })
+            {
+                Id = x.Metadata.Id,
+                Name = x.Metadata.Name,
+                Email = x.Metadata.Email,
+                Plan = x.Metadata.Plan,
+                IsCurrent = x.Metadata.Id == active,
+                Usable = IsUsable(x),
+                SavedAt = x.Metadata.SavedAt,
+                SessionPercent = x.Metadata.SessionPercent,
+                WeekPercent = x.Metadata.WeekPercent,
+                UsageLimits = EffectiveUsageLimits(x.Metadata),
+                UsageUpdatedAt = x.Metadata.UsageUpdatedAt,
+                AvailableResetCredits = x.Metadata.AvailableResetCredits,
+                HasPendingUsageReset = HasPendingReset(x.DirectoryPath),
+                HasCredits = x.Metadata.HasCredits,
+                UnlimitedCredits = x.Metadata.UnlimitedCredits,
+                CreditBalance = x.Metadata.CreditBalance,
+                SpendLimit = x.Metadata.SpendLimit,
+                RateLimitStatus = x.Metadata.RateLimitStatus,
+            })
             .OrderByDescending(x => x.IsCurrent)
             .ThenByDescending(x => x.SavedAt)
             .ToList();
@@ -680,6 +699,57 @@ public sealed class CodexAccountService
             try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best effort */ }
             throw;
         }
+    }
+
+    private const string RemovedMetadataName = "removed-account.json";
+    private const string RemovedNoteName = "REMOVED-ACCOUNT.txt";
+
+    /// <summary>
+    /// Remove a saved Codex login and nothing else.
+    ///
+    /// This used to delete the whole account directory, and with it <c>home</c> - the account's CODEX_HOME and its
+    /// entire resumable thread store (<c>sessions\</c>, <c>archived_sessions\</c>, <c>session_index.jsonl</c>), while
+    /// the confirmation promised it "only forgets VibeCode's saved copy of the login". Claude's
+    /// <see cref="AccountService"/> learned the same lesson. Only <c>auth.json</c> is deleted now. The metadata is
+    /// renamed, which drops the row from <see cref="List"/> but remembers the folder, so signing in to the same
+    /// account again resumes its old conversations.
+    /// </summary>
+    private static void ForgetLoginOnly(StoredAccount account)
+    {
+        // Credential first: if Windows refuses it, nothing has changed yet and the removal reports SaveFailed.
+        var auth = Path.Combine(HomeOf(account), "auth.json");
+        if (File.Exists(auth)) File.Delete(auth);
+        File.Move(Path.Combine(account.DirectoryPath, "account.json"),
+            Path.Combine(account.DirectoryPath, RemovedMetadataName), overwrite: true);
+        try
+        {
+            File.WriteAllText(Path.Combine(account.DirectoryPath, RemovedNoteName),
+                $"This Codex account was removed from VibeCode on {DateTime.Now:yyyy-MM-dd HH:mm}." + Environment.NewLine +
+                "Its saved login (home\\auth.json) was deleted. Its conversation history under home\\sessions and" + Environment.NewLine +
+                "home\\archived_sessions was deliberately KEPT - removing an account is not meant to delete anything you wrote." + Environment.NewLine +
+                "Sign in with the same account again to resume those chats, or delete this folder by hand to reclaim the space.");
+        }
+        catch { /* the note is a courtesy, not part of the operation */ }
+    }
+
+    /// <summary>The kept folder of a removed (non-legacy) account with this id, if there is one.</summary>
+    private static StoredAccount? FindRemovedAccount(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id) || !Directory.Exists(StoreRoot)) return null;
+        foreach (var directory in Directory.EnumerateDirectories(StoreRoot))
+        {
+            var name = Path.GetFileName(directory);
+            if (name.StartsWith(".", StringComparison.Ordinal) || name.Equals("unavailable", StringComparison.OrdinalIgnoreCase)) continue;
+            var path = Path.Combine(directory, RemovedMetadataName);
+            if (!File.Exists(path) || File.Exists(Path.Combine(directory, "account.json"))) continue;
+            try
+            {
+                var metadata = JsonSerializer.Deserialize<SavedAccount>(File.ReadAllText(path));
+                if (metadata is { UsesLegacyHome: false } && metadata.Id == id) return new StoredAccount(metadata, directory);
+            }
+            catch { /* an unreadable marker just means that folder is not reused */ }
+        }
+        return null;
     }
 
     /// <summary>Delete an account directory even when the codex CLI has scaffolded read-only bits inside it (a

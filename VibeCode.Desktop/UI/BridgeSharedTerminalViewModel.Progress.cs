@@ -15,7 +15,7 @@ public sealed partial class BridgeSharedTerminalViewModel
         ? "Now: " + current : PlanSteps.Any(s => s.State is "blocked" or "failed" or "interrupted")
             ? "Needs attention: " + string.Join(" · ", PlanSteps.Where(s => s.State is "blocked" or "failed" or "interrupted").Select(s => s.Title))
             : HasPlan && CompletedSteps == TotalSteps ? "All planned steps are complete" : "Waiting for the next step";
-    public string PlanAgreementText => Agents.FirstOrDefault()?.BridgeWork is { } work
+    public string PlanAgreementText => Agents.FirstOrDefault()?.BridgeWork is { PlanSteps: true } work
         ? $"Plan v{work.PlanVersion}" + (work.DispatchStarted ? " · Setup closed" : " · Planning") : "";
 
     private void RefreshProgress()
@@ -25,7 +25,8 @@ public sealed partial class BridgeSharedTerminalViewModel
             _shownPlanAgreement = PlanAgreementText;
             Raise(nameof(PlanAgreementText));
         }
-        var work = Agents.FirstOrDefault()?.BridgeWork;
+        // With Plan steps off the team has no plan to show progress through, only directly assigned work.
+        var work = Agents.FirstOrDefault()?.BridgeWork is { PlanSteps: true } planned ? planned : null;
         var steps = work?.Tasks.Select((task, index) => new BridgePlanStep(task.Id, task.Title, task.State,
             $"{index + 1}. {task.Title}",
             (Agents.FirstOrDefault(a => a.BridgeAgentId == task.OwnerId)?.BridgeTerminalIdentity ?? "Departed agent") + " · " +

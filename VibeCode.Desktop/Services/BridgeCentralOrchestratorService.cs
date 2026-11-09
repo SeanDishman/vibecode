@@ -127,7 +127,7 @@ public static class BridgeCentralOrchestratorService
                 if (BridgeErrorRecovery.IsTransient(response))
                 {
                     waiting = true;
-                    stageChanged?.Invoke("Temporary provider error. Continuing in 1 minute…");
+                    stageChanged?.Invoke("Temporary provider error. Retrying breath.");
                     try { await Task.Delay(BridgeErrorRecovery.Delay, timeout.Token); }
                     finally { waiting = false; }
                     if (session.HasExited)

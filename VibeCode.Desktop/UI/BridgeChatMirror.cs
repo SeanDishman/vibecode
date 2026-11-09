@@ -163,6 +163,11 @@ internal sealed class BridgeChatMirror : IDisposable
             pane.Status, active, DateTimeOffset.UtcNow, messages.ToArray());
     }
 
+    /// <summary>How many messages <see cref="Capture"/> exports, without building their text: a directory listing
+    /// counts every chat, and a long chat's tool output is large.</summary>
+    internal static int MessageCount(ChatViewModel pane) => RootItems(pane).Count(item => item is UserItem { FromSubagent: false }
+        or TextItem { HasText: true } or ToolItem or SubagentItem or BannerItem or DividerItem);
+
     private void OnWriteFailed(string error)
     {
         _timer.Dispatcher.BeginInvoke(new Action(() =>

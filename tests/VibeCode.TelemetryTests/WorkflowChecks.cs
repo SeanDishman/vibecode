@@ -98,11 +98,34 @@ internal static partial class Program
             Chat(NoDirectoryWorkspace.Folder, "", "Plan the next release"),
         };
         fixture[3].AuthNeeded = true;
+        // What each agent is doing, as its own transcript shows it: the captures must show real NOW/LAST lines.
+        Steps(fixture[0], Tool("Read", "done", """{"file_path":"C:\\Projects\\Commerce\\src\\search\\ProductSearch.ts"}"""),
+            Tool("Bash", "running", """{"command":"\"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -Command \"npm test -- search\""}"""));
+        Steps(fixture[1], Tool("Grep", "done", """{"pattern":"applyCoupon","path":"src"}"""),
+            Tool("Edit", "running", """{"file_path":"C:\\Projects\\Commerce\\src\\checkout\\CheckoutForm.tsx"}"""));
+        var inventory = Tool("Edit", "done", """{"file_path":"C:\\Projects\\Commerce\\api\\inventory.ts"}""");
+        foreach (var kind in Enumerable.Repeat("add", 12).Concat(Enumerable.Repeat("del", 3))) inventory.DiffLines.Add(new DiffLine { Kind = kind, Text = "" });
+        Steps(fixture[2], inventory);
+        Steps(fixture[3], Tool("Read", "done", """{"file_path":"C:\\Projects\\Commerce\\docs\\payment-states.md"}"""));
+        foreach (var (status, text) in new[] { ("completed", "Lay out the graph"), ("completed", "Draw agent cards"), ("in_progress", "Animate flows by model speed"),
+            ("pending", "Verify reduced motion"), ("pending", "Capture wall screenshots") })
+            fixture[4].Todos.Add(new TodoEntry { Status = status, Text = text });
+        Steps(fixture[4], Tool("Bash", "done", """{"command":"dotnet build","description":"Build the desktop app"}"""), new ThinkingItem { Streaming = true });
+        Steps(fixture[5], Tool("Bash", "error", """{"command":"dotnet test","description":"Run the keyboard UI checks"}""", error: true));
+        Steps(fixture[6], Tool("WebFetch", "running", """{"url":"https://developer.mozilla.org/en-US/docs/Web/CSS/grid"}"""));
+        Set(fixture[7], "BridgeActivitySummary", "Reviewed pricing contrast; filed 3 fixes");
         foreach (var chat in fixture) source.Chats.Add(chat);
         var wall = new WorkflowTelemetryWindow(source) { Left = 6200, Top = 200, WindowStartupLocation = WindowStartupLocation.Manual, ShowInTaskbar = false };
         wall.Show(); wall.Refresh();
         var graph = (WorkflowGraph)wall.FindName("Graph");
         var search = (TextBox)wall.FindName("Search");
+        string Face(ChatViewModel chat) => CardText(graph.Children.OfType<Button>().Single(b => b.Tag is AgentActivityNode n && n.Id == chat.BridgeAgentId));
+        Check("Fixture cards show live commands, edits and fetches", Face(fixture[0]).Contains("Running npm test -- search")
+            && Face(fixture[1]).Contains("Editing CheckoutForm.tsx") && Face(fixture[6]).Contains("Fetching developer.mozilla.org"));
+        Check("Fixture cards show what each agent finished last", Face(fixture[0]).Contains("Read ProductSearch.ts")
+            && Face(fixture[2]).Contains("Edited inventory.ts  +12 \u22123") && Face(fixture[7]).Contains("Reviewed pricing contrast"));
+        Check("Plan progress and failures are visible on the card", Face(fixture[4]).Contains("2/5") && Face(fixture[4]).Contains("Thinking")
+            && Face(fixture[5]).Contains("Run the keyboard UI checks"));
         var filter = (ComboBox)wall.FindName("ProjectFilter");
         var working = (CheckBox)wall.FindName("WorkingOnly");
         Capture(wall, 1280, 800, "workflow-desktop.png");

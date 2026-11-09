@@ -14,7 +14,7 @@ public sealed partial class ChatViewModel
 
     /// <summary>A running root turn can accept guidance without starting another turn.</summary>
     public bool CanSteer => HasSteerableTurn && !_steerSubmitting && !_steerQueueHold;
-    private bool HasSteerableTurn => SupportsSteer && !RewindHoldsDispatch && !_interruptRequested
+    private bool HasSteerableTurn => SupportsSteer && !ModelRestartHoldsDispatch && !_interruptRequested
         && !_sendAllQueuedNowRequested && _status == "running"
         && _session is ISteerableSession { CanSteer: true };
 
@@ -87,10 +87,7 @@ public sealed partial class ChatViewModel
         Raise(nameof(CanSendQueuedNow));
         try
         {
-            // A user can request workers mid-turn, including after lowering the limit in Settings.
-            var policy = SwarmPolicy.SessionRuntimeRule(Provider, SwarmMaxWorkers);
-            var wireText = string.IsNullOrWhiteSpace(policy) ? text : policy + "\n\n" + text;
-            await session.SteerAsync(BuildContent(wireText, !string.IsNullOrWhiteSpace(wireText), atts));
+            await session.SteerAsync(BuildContent(text, hasText, atts));
         }
         catch (Exception ex)
         {
@@ -114,7 +111,7 @@ public sealed partial class ChatViewModel
         _lastLocalUserAt = DateTime.UtcNow;
         if (_activeMemoryPrompt is { } prompt)
             _activeMemoryPrompt = prompt + "\n\n[User steered the active turn]\n" + MemoryPrompt(text, atts);
-        InsertBeforeQueued(new UserItem { Text = text, Attachments = atts, Owner = this });
+        InsertBeforeQueued(new UserItem { Text = text, Attachments = atts, Owner = this, IsLocalSubmission = true });
         ItemsChanged?.Invoke();
         MessageSent?.Invoke();
         return true;
@@ -127,19 +124,28 @@ public sealed partial class ChatViewModel
     internal async Task<bool> RequestBridgeTaskTitleNowAsync()
     {
         if (!UsesBridgeTaskTitle || BridgeHeaderTaskTitle.Length > 0 || !CanSteer
-            || _session is not ISteerableSession session) return false;
+            || _session is not ISteerableSession) return false;
         BridgeTaskTitleChangesThisTurn = 0;   // a count left from an earlier bridge must not refuse this title
+        // Best effort: the next request still carries the usual reminder.
+        return await SteerAppNoteAsync(BridgeTaskTitlePolicy.JoinReminder(Provider));
+    }
+
+    /// <summary>Steer the app's own note into the running turn: no bubble, prompt history or memory record. False when
+    /// the turn can't take it (idle, Kimi, another steer being submitted) or the provider did not confirm it.</summary>
+    private async Task<bool> SteerAppNoteAsync(string note)
+    {
+        if (!CanSteer || _session is not ISteerableSession session) return false;
         _steerSubmitting = true;
         Raise(nameof(CanSteer));
         Raise(nameof(CanSendQueuedNow));
         try
         {
-            await session.SteerAsync(BuildContent(BridgeTaskTitlePolicy.JoinReminder(Provider), true, null));
+            await session.SteerAsync(BuildContent(note, true, null));
             return true;
         }
         catch (Exception)
         {
-            return false;   // best effort: the next request still carries the usual reminder
+            return false;
         }
         finally
         {

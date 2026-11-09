@@ -104,7 +104,6 @@ class ChatActions(
     val onFast: (Boolean) -> Unit,
     val onSendQueued: (Int) -> Unit,
     val onCancelQueued: (Int) -> Unit,
-    val onUndo: (Int) -> Unit,
     val onPin: () -> Unit,
     val onClosePane: () -> Unit,
 )
@@ -283,7 +282,7 @@ private fun ChatTopBar(state: UiState, actions: ChatActions) {
 @Composable
 private fun MessageRow(message: Message, index: Int, state: UiState, actions: ChatActions) {
     when (message.kind) {
-        "user" -> UserBubble(message, state.undoing, actions.onUndo)
+        "user" -> UserBubble(message)
         "assistant" -> AssistantText(message)
         "thinking" -> ThinkingCard(message, index)
         "tool" -> ToolCard(message, index)
@@ -300,8 +299,7 @@ private fun MessageRow(message: Message, index: Int, state: UiState, actions: Ch
 }
 
 @Composable
-private fun UserBubble(message: Message, undoing: Boolean, onUndo: (Int) -> Unit) {
-    var confirming by remember(message.ordinal) { mutableStateOf(false) }
+private fun UserBubble(message: Message) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Column(
             modifier = Modifier
@@ -325,33 +323,6 @@ private fun UserBubble(message: Message, undoing: Boolean, onUndo: (Int) -> Unit
                 )
             }
 
-            if (message.wasUndone) {
-                Spacer(Modifier.height(6.dp))
-                Text("Changes undone", style = MaterialTheme.typography.labelSmall, color = VibeColors.Amber)
-            } else if (message.canUndo && message.ordinal >= 0) {
-                Spacer(Modifier.height(6.dp))
-                if (!confirming) {
-                    ActionButton("Rewind to here", VibeColors.Muted, enabled = !undoing) { confirming = true }
-                } else {
-                    // Rewinding rolls files back on a machine the user cannot see, so it asks first — and says
-                    // how many later turns it would take with it.
-                    Text(
-                        if (message.cascades > 0)
-                            "Undo this and the ${message.cascades} later prompt${if (message.cascades == 1) "" else "s"}?"
-                        else "Undo this turn's file changes?",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = VibeColors.Amber,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ActionButton("Rewind", VibeColors.Amber, enabled = !undoing) {
-                            confirming = false
-                            onUndo(message.ordinal)
-                        }
-                        ActionButton("Cancel", VibeColors.Faint) { confirming = false }
-                    }
-                }
-            }
         }
     }
 }

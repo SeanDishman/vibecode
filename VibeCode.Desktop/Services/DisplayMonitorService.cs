@@ -18,8 +18,11 @@ internal static class DisplayMonitorService
 {
     private const int SmCmonitors = 80;
     private const uint MonitorDefaultToNearest = 2;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
     private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
+    private static readonly nint HwndTopmost = -1;
     private const uint DisplayDeviceAttachedToDesktop = 0x00000001;
     private const uint DisplayDeviceMirroringDriver = 0x00000008;
 
@@ -46,6 +49,15 @@ internal static class DisplayMonitorService
         return new(monitor, info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom);
     }
 
+    /// <summary>The usable part of a window's display - without the taskbar - in physical pixels.</summary>
+    public static MonitorWorkArea WorkAreaFor(Window window)
+    {
+        var monitor = MonitorFor(window, ensureHandle: true);
+        var info = new MonitorInfoEx { Size = Marshal.SizeOf<MonitorInfoEx>() };
+        if (!GetMonitorInfo(monitor, ref info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return new(monitor, info.Work.Left, info.Work.Top, info.Work.Right, info.Work.Bottom);
+    }
+
     public static MonitorWorkArea WindowPixelBounds(Window window)
     {
         if (!GetWindowRect(new WindowInteropHelper(window).EnsureHandle(), out var rect))
@@ -58,6 +70,17 @@ internal static class DisplayMonitorService
         if (!SetWindowPos(new WindowInteropHelper(window).EnsureHandle(), nint.Zero,
                 bounds.Left, bounds.Top, bounds.Width, bounds.Height, SwpNoZOrder | SwpNoActivate))
             throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
+    /// <summary>
+    /// Put an already-topmost window back on top of the topmost band without moving or activating it. The taskbar
+    /// is topmost too, and the shell raises it again when focus leaves a full-screen window; WPF's Topmost does
+    /// nothing for a window whose flag is already set, so only this brings a full-screen wall back over it.
+    /// </summary>
+    public static void RaiseTopmost(Window window)
+    {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd != nint.Zero) SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SwpNoSize | SwpNoMove | SwpNoActivate);
     }
 
     public static bool TryGetCompanionWorkArea(Window mainWindow, out MonitorWorkArea target)

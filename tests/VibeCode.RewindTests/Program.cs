@@ -61,6 +61,84 @@ internal static partial class Program
                 await VerifyStopAndCascade(provider, bridge);
         await VerifyFileConflict();
         await VerifyTextOnlyAndSteerOverlap();
+        await VerifySteeredPromptRewind(bridge: false);
+        await VerifySteeredPromptRewind(bridge: true);
+        await VerifyCheckpointBudget();
+    }
+
+    private static TurnRollbackCheckpoint BudgetFailure(ChatViewModel chat)
+    {
+        var archive = Path.Combine(chat.Cwd, "Archive");
+        Directory.CreateDirectory(archive);
+        // Each file fits the individual-file limit, but the archived tree exceeds the total budget.
+        // SetLength avoids filling a large byte array; failed capture only needs file metadata.
+        for (var i = 0; i < 27; i++)
+        {
+            using var file = File.Create(Path.Combine(archive, $"old-source-{i}.txt"));
+            file.SetLength(10 * 1024 * 1024);
+        }
+        var checkpoint = TurnRollbackCheckpoint.Begin(chat.Cwd);
+        Checkpoints.Add(checkpoint);
+        return checkpoint;
+    }
+
+    private static async Task VerifyCheckpointBudget()
+    {
+        var chat = Chat("checkpoint-budget", "codex", true);
+        var path = Path.Combine(chat.Cwd, "source.cs");
+        File.WriteAllText(path, "original source");
+        var earlier = Prompt(chat, "Earlier valid prompt", null, null, completed: true);
+        var failed = BudgetFailure(chat);
+        Check("budget: archived source reproduces failed capture", !failed.CaptureSucceeded
+            && failed.UnavailableReason?.Contains("256 MB") == true);
+        var prompt = new UserItem { Text = "Prompt without a snapshot", Owner = chat };
+        Call(prompt, "AttachRollbackCheckpoint", failed);
+        chat.Items.Add(prompt);
+        Field(chat, "_activeRollback", failed);
+        chat.Status = "running";
+        chat.Draft = "unsent draft";
+        Check("budget: failed checkpoint arrow allows an explanation", prompt.ShowUndo && prompt.CanRequestUndo && !prompt.CanUndo);
+        var result = await chat.StopAndUndoPromptAsync(prompt);
+        Check("budget: failed rewind returns immediately without stopping the agent", !result.Success
+            && Session(chat).Interrupts == 0 && chat.Status == "running");
+        Check("budget: failed rewind preserves files, prompt and draft", chat.Items.Contains(prompt)
+            && chat.Draft == "unsent draft" && File.ReadAllText(path) == "original source");
+        result = await chat.StopAndUndoPromptAsync(earlier);
+        Check("budget: unavailable newer prompt prevents partial cascade or Stop", !result.Success
+            && result.Message.Contains("newer prompt") && Session(chat).Interrupts == 0 && !Checkpoint(earlier).WasRolledBack
+            && chat.Items.Contains(earlier) && chat.Items.Contains(prompt));
+        failed.Complete();
+        Field(chat, "_activeRollback", null);
+        chat.Status = "idle";
+
+        File.WriteAllText(Path.Combine(chat.Cwd, ".vibecode-undoignore"), "Archive/\nartifacts/\n");
+        var fresh = Prompt(chat, "Fresh prompt with exclusions", path, "new agent edit", completed: true);
+        result = await chat.StopAndUndoPromptAsync(fresh);
+        Check("budget: exclusions make new source edits rewind successfully", result.Success && result.RestoredFiles == 1
+            && File.ReadAllText(path) == "original source" && !chat.Items.Contains(fresh));
+        Check("budget: rewind leaves excluded archive intact", new FileInfo(Path.Combine(chat.Cwd, "Archive", "old-source-0.txt")).Length
+            == 10 * 1024 * 1024);
+    }
+
+    private static async Task VerifySteeredPromptRewind(bool bridge)
+    {
+        var label = bridge ? "bridge steer rewind" : "normal steer rewind";
+        var chat = Chat(label, "codex", bridge);
+        var path = Path.Combine(chat.Cwd, "source.cs");
+        File.WriteAllText(path, "original");
+        var first = Prompt(chat, "Initial instruction", path, "agent edit", completed: false);
+        Field(chat, "_activeRollback", Checkpoint(first));
+        chat.Status = "running";
+        chat.Items.Add(new TextItem { Text = "Work before the correction" });
+        Check(label + ": mid-turn correction is accepted", await chat.SteerAsync("Correct that instruction"));
+        var correction = chat.Items.OfType<UserItem>().Last();
+        Check(label + ": correction belongs to the active checkpoint", correction.Text == "Correct that instruction"
+            && !correction.ShowUndo && first.CanRequestUndo);
+        Session(chat).OnInterrupt = () => SealActive(chat);
+        var result = await chat.StopAndUndoPromptAsync(first);
+        Check(label + ": original arrow stops and rewinds the whole steered turn", result.Success
+            && Session(chat).Interrupts == 1 && File.ReadAllText(path) == "original"
+            && !chat.Items.Contains(first) && !chat.Items.Contains(correction));
     }
 
     private static async Task VerifyStopAndCascade(string provider, bool bridge)
@@ -217,7 +295,7 @@ internal static partial class Program
         if (!done()) throw new TimeoutException("Rewind fixture did not finish.");
     }
 
-    private sealed class FakeSession : ICodingSession
+    private sealed class FakeSession : ICodingSession, ISteerableSession
     {
 #pragma warning disable CS0067
         public event Action<JsonNode>? MessageReceived;
@@ -234,6 +312,8 @@ internal static partial class Program
         public int Interrupts { get; private set; }
         public Action? OnInterrupt { get; set; }
         public Action? OnSend { get; set; }
+        public bool CanSteer => true;
+        public Task SteerAsync(JsonNode content) => Task.CompletedTask;
         public void Start() { }
         public void SendUser(JsonNode content) { OnSend?.Invoke(); Sent.Add(content.ToJsonString().Replace("\\n", "\n")); }
         public Task InterruptAsync() { Interrupts++; OnInterrupt?.Invoke(); return Task.CompletedTask; }

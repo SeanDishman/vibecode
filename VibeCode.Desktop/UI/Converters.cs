@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -164,7 +166,7 @@ public static class AutoScroll
                 attached = inner;
                 // Rebinding a shared feed can settle by a couple of text lines as its
                 // virtualized message groups are measured. Keep that small gap following.
-                detach = Attach(inner, GetScrollToBottomOnShow(fe) ? 48 : 24);
+                detach = Attach(inner, GetScrollToBottomOnShow(fe) ? 48 : 24, fe as ItemsControl);
             }
             else
             {
@@ -225,10 +227,49 @@ public static class AutoScroll
         Resolve();
     }
 
-    private static Action Attach(ScrollViewer sv, double tolerance)
+    private static Action Attach(ScrollViewer sv, double tolerance, ItemsControl? items)
     {
         var stick = true;   // start pinned to the newest message
-        void Pin() => sv.ScrollToBottom();
+        void Pin()
+        {
+            // Never while the user is selecting across messages: a busy team's output pinning the bottom under a drag
+            // fought the drag's own edge scrolling and moved the range out from under the pointer.
+            if (!HasReadingSelection(sv) && !(items is ListBox list && TranscriptSelection.IsSelecting(list))) sv.ScrollToBottom();
+        }
+
+        void OnItemsChanged(object? sender, NotifyCollectionChangedEventArgs args)
+        {
+            // A tall new row can make recycling correct the offset UP while the estimated extent grows.
+            // Request the bottom before that measurement, while we still know the reader was following.
+            // Waiting for ScrollChanged would mistake the layout correction for an upward user scroll.
+            if (stick) Pin();
+        }
+
+        // Scroll commands are queued by WPF. Capture user intent before an incoming item in the same
+        // dispatcher turn can enqueue a follow command after the user's request to read earlier output.
+        bool IsTranscriptScroll(object? source)
+        {
+            for (var node = source as DependencyObject; node is not null;)
+            {
+                if (node is ScrollViewer viewer) return ReferenceEquals(viewer, sv);
+                node = node is Visual or System.Windows.Media.Media3D.Visual3D
+                    ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
+            }
+            return false;
+        }
+        MouseWheelEventHandler onWheel = (_, args) =>
+        {
+            if (args.Delta > 0 && IsTranscriptScroll(args.OriginalSource)) stick = false;
+        };
+        ScrollEventHandler onScrollBar = (_, args) =>
+        {
+            if (args.NewValue < sv.VerticalOffset && args.OriginalSource is ScrollBar { Orientation: Orientation.Vertical }
+                && IsTranscriptScroll(args.OriginalSource)) stick = false;
+        };
+        KeyEventHandler onKey = (_, args) =>
+        {
+            if ((args.Key is Key.Up or Key.PageUp or Key.Home) && IsTranscriptScroll(args.OriginalSource)) stick = false;
+        };
 
         void OnScrollChanged(object sender, ScrollChangedEventArgs a)
         {
@@ -248,6 +289,10 @@ public static class AutoScroll
         RequestBringIntoViewEventHandler onBringIntoView = (_, ev) => ev.Handled = true;
         sv.ScrollChanged += OnScrollChanged;
         sv.AddHandler(FrameworkElement.RequestBringIntoViewEvent, onBringIntoView, true);
+        sv.AddHandler(UIElement.MouseWheelEvent, onWheel, true);
+        sv.AddHandler(ScrollBar.ScrollEvent, onScrollBar, true);
+        sv.PreviewKeyDown += onKey;
+        if (items is not null) ((INotifyCollectionChanged)items.Items).CollectionChanged += OnItemsChanged;
 
         // A pane whose transcript is already IN it when the scroller is built never sees the extent grow, so following
         // growth is not enough on its own - it would sit at the top until the agent happened to say something. That is
@@ -264,12 +309,17 @@ public static class AutoScroll
         {
             sv.ScrollChanged -= OnScrollChanged;
             sv.RemoveHandler(FrameworkElement.RequestBringIntoViewEvent, onBringIntoView);
+            sv.RemoveHandler(UIElement.MouseWheelEvent, onWheel);
+            sv.RemoveHandler(ScrollBar.ScrollEvent, onScrollBar);
+            sv.PreviewKeyDown -= onKey;
+            if (items is not null) ((INotifyCollectionChanged)items.Items).CollectionChanged -= OnItemsChanged;
             sv.IsVisibleChanged -= OnVisibilityChanged;
         };
     }
 
     internal static bool ShouldFollowBottom(ScrollViewer sv, ScrollChangedEventArgs change, bool wasFollowing, double tolerance)
     {
+        if (HasReadingSelection(sv)) return false;
         if (sv.VerticalOffset >= sv.ScrollableHeight - tolerance) return true;
         var layoutChanged = change.ExtentHeightChange != 0 || change.ViewportHeightChange != 0 || change.ViewportWidthChange != 0;
         var bottomChange = change.ExtentHeightChange - change.ViewportHeightChange;
@@ -279,6 +329,15 @@ public static class AutoScroll
         var movedUp = change.VerticalChange < -0.5 && change.VerticalChange < Math.Min(0, bottomChange) - 0.5;
         if (movedUp || !layoutChanged && change.VerticalChange != 0) return false;
         return wasFollowing;
+    }
+
+    /// <summary>New output must not move a thought passage while the user is dragging or copying its text.</summary>
+    internal static bool HasReadingSelection(DependencyObject root)
+    {
+        if (root is StreamingTextBox { IsReadingSelection: true }) return true;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            if (HasReadingSelection(VisualTreeHelper.GetChild(root, i))) return true;
+        return false;
     }
 
     // First ScrollViewer in the visual subtree (the scroll host inside a ListBox/control template).
@@ -536,7 +595,7 @@ public sealed class UsageBrushConverter : IValueConverter
     public object ConvertBack(object? v, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 
-/// <summary>Shortens a usage summary for the bridge header pills. A bridge can run four providers at once, and the
+/// <summary>Shortens a usage summary for the bridge header pills. A bridge can run five providers at once, and the
 /// long forms ("49% session · 36% week", "2 accounts · max 72%") pushed Announce and Add agent off the header. This
 /// only abbreviates whole words - the numbers, separators and ordering are left exactly as the provider produced
 /// them - so an unfamiliar summary ("checking…", "sign in again") still passes through readable rather than mangled.

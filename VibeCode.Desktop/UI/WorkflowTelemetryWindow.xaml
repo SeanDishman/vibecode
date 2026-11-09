@@ -20,10 +20,15 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Frame" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="12" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
-                        </Border>
+                        <Grid>
+                            <Border x:Name="Frame" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                            </Border>
+                            <!-- Agent state along the left edge; project hubs leave it unset. -->
+                            <Border Width="3" HorizontalAlignment="Left" Margin="1,16" CornerRadius="0,3,3,0" IsHitTestVisible="False"
+                                    Background="{Binding (ui:WorkflowGraph.Rail), RelativeSource={RelativeSource TemplatedParent}}" />
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Frame" Property="Background" Value="{DynamicResource Bg3}" />
@@ -41,7 +46,7 @@
             </Setter>
         </Style>
     </Window.Resources>
-    <Border BorderThickness="1" BorderBrush="{DynamicResource Border}" Background="{DynamicResource Bg0}">
+    <Border x:Name="WindowFrame" BorderThickness="1" BorderBrush="{DynamicResource Border}" Background="{DynamicResource Bg0}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="40" />
@@ -56,8 +61,8 @@
                         <ToggleButton x:Name="Pin" Style="{DynamicResource IconToggle}" Content="&#xE840;" FontFamily="{DynamicResource Icons}"
                                       Width="34" Height="28" ToolTip="Keep on top" AutomationProperties.Name="Keep workflow wall on top"
                                       Checked="OnPinChanged" Unchecked="OnPinChanged" />
-                        <Button Style="{DynamicResource IconButton}" Content="&#xE740;" FontFamily="{DynamicResource Icons}"
-                                Width="34" Height="28" Click="OnFullScreen" ToolTip="Toggle full screen (F11)" AutomationProperties.Name="Toggle workflow wall full screen" />
+                        <Button x:Name="FullScreenButton" Style="{DynamicResource IconButton}" Content="&#xE740;" FontFamily="{DynamicResource Icons}"
+                                Width="34" Height="28" Click="OnFullScreen" ToolTip="Full screen (F11)" AutomationProperties.Name="Toggle workflow wall full screen" />
                         <Button Style="{DynamicResource IconButton}" Content="&#xE8BB;" FontFamily="{DynamicResource Icons}"
                                 Width="34" Height="28" Click="OnClose" ToolTip="Close (Esc)" AutomationProperties.Name="Close workflow wall" />
                     </StackPanel>
@@ -72,16 +77,25 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
                     <TextBlock x:Name="Clock" FontFamily="{DynamicResource Mono}" FontSize="12" HorizontalAlignment="Right" />
-                    <TextBlock Text="Working now or active within 10 minutes" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0" />
+                    <TextBlock Text="Working now or active within 1 minute" Foreground="{DynamicResource Muted}" FontSize="11" Margin="0,6,0,0" />
                 </StackPanel>
             </Grid>
             <Grid Grid.Row="2" Margin="24,0,24,16">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="230" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="180" /><ColumnDefinition Width="230" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <ComboBox x:Name="ProjectFilter" DisplayMemberPath="Label" SelectedValuePath="Key" MinHeight="32"
+                <!-- How the wall draws the same agents: the flow graph, or one of the visualizers after it. -->
+                <ComboBox x:Name="ViewPicker" DisplayMemberPath="Label" SelectedValuePath="Key" MinHeight="32" Margin="0,0,12,0"
+                          SelectionChanged="OnViewChanged" ToolTip="Choose how the wall draws your agents" AutomationProperties.Name="Workflow view">
+                    <ComboBox.ItemContainerStyle>
+                        <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                            <Setter Property="ToolTip" Value="{Binding Description}" />
+                        </Style>
+                    </ComboBox.ItemContainerStyle>
+                </ComboBox>
+                <ComboBox x:Name="ProjectFilter" Grid.Column="1" DisplayMemberPath="Label" SelectedValuePath="Key" MinHeight="32"
                           SelectionChanged="OnFilterChanged" AutomationProperties.Name="Filter workflow by project" />
-                <Grid Grid.Column="1" Margin="12,0">
+                <Grid Grid.Column="2" Margin="12,0">
                     <TextBox x:Name="Search" Padding="10,6" VerticalContentAlignment="Center"
                              TextChanged="OnFilterChanged" ToolTip="Find a project, agent, model or task" AutomationProperties.Name="Search projects and agents" />
                     <TextBlock Text="Search projects and agents" Foreground="{DynamicResource Muted}" IsHitTestVisible="False"
@@ -98,10 +112,14 @@
                         </TextBlock.Style>
                     </TextBlock>
                 </Grid>
-                <CheckBox x:Name="WorkingOnly" Grid.Column="2" Content="Working only" VerticalAlignment="Center" Margin="0,0,12,0"
+                <CheckBox x:Name="WorkingOnly" Grid.Column="3" Content="Working only" VerticalAlignment="Center" Margin="0,0,12,0"
                           Checked="OnFilterChanged" Unchecked="OnFilterChanged" AutomationProperties.Name="Show working agents only" />
-                <Button Grid.Column="3" Content="Clear" Padding="10,6" Click="OnClear" ToolTip="Clear search and filters"
+                <Button Grid.Column="4" Content="Clear" Padding="10,6" Click="OnClear" ToolTip="Clear search and filters"
                         AutomationProperties.Name="Clear workflow filters" />
+                <!-- The Town Crier's recap of today, this month or this year, drawn in the look of the view. -->
+                <Button x:Name="NoticeBoardButton" Grid.Column="5" Content="Notice board" Padding="10,6" Margin="8,0,0,0" Click="OnNoticeBoard"
+                        ToolTip="Read the notice board: today's turns, tokens, estimated cost and edits"
+                        AutomationProperties.Name="Read the notice board recap" />
             </Grid>
             <ScrollViewer x:Name="WallScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           SizeChanged="OnWallSizeChanged" CanContentScroll="False" AutomationProperties.Name="Workflow and token telemetry">
@@ -110,7 +128,7 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <Border x:Name="MapFrame" Height="400" Margin="12,0" Background="{DynamicResource CodeBg}" CornerRadius="12" ClipToBounds="True">
                 <Grid>
-                    <Border IsHitTestVisible="False" Opacity="0.45">
+                    <Border x:Name="MapDots" IsHitTestVisible="False" Opacity="0.45">
                         <Border.Background>
                             <DrawingBrush TileMode="Tile" Viewport="0,0,24,24" ViewportUnits="Absolute" Viewbox="0,0,24,24" ViewboxUnits="Absolute">
                                 <DrawingBrush.Drawing>
@@ -125,9 +143,25 @@
                                   CanContentScroll="False" Padding="12,16" VerticalContentAlignment="Top" AutomationProperties.Name="Projects and agents graph">
                         <ui:WorkflowGraph x:Name="Graph" HorizontalAlignment="Stretch" VerticalAlignment="Top" />
                     </ScrollViewer>
+                    <ui:WorkflowTavernView x:Name="Tavern" Visibility="Collapsed" />
+                    <ui:WorkflowOfficeView x:Name="Office" Visibility="Collapsed" />
+                    <ui:WorkflowFloorView x:Name="Floor" Visibility="Collapsed" />
+                    <ScrollViewer x:Name="LanesScroll" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  CanContentScroll="False" AutomationProperties.Name="Agent swimlanes">
+                        <ui:WorkflowLanesView x:Name="Lanes" VerticalAlignment="Top" />
+                    </ScrollViewer>
+                    <ui:WorkflowBoardView x:Name="Board" Visibility="Collapsed" />
+                    <!-- Sky and weather for the drawn scenes. Auto follows the clock and the Weather extension. -->
+                    <StackPanel x:Name="SceneControls" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Margin="0,12,14,0" Visibility="Collapsed">
+                        <ComboBox x:Name="SkyPicker" Width="132" MinHeight="28" DisplayMemberPath="Label" SelectedValuePath="Key"
+                                  SelectionChanged="OnSceneChanged" ToolTip="Time of day in the scene" AutomationProperties.Name="Scene sky" />
+                        <ComboBox x:Name="WeatherPicker" Width="168" MinHeight="28" Margin="8,0,0,0" DisplayMemberPath="Label" SelectedValuePath="Key"
+                                  SelectionChanged="OnSceneChanged" ToolTip="Weather in the scene" AutomationProperties.Name="Scene weather" />
+                    </StackPanel>
                     <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="30" MaxWidth="480">
                         <TextBlock x:Name="EmptyTitle" Text="No recent agent activity" FontSize="20" FontWeight="SemiBold" TextAlignment="Center" />
-                        <TextBlock x:Name="EmptyDetail" Text="Agents appear while working and disappear after 10 minutes without work."
+                        <TextBlock x:Name="EmptyDetail" Text="Agents appear while working and disappear after 1 minute without work."
                                    Margin="0,10,0,0" Foreground="{DynamicResource Muted}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Grid>
@@ -220,8 +254,8 @@
             </ScrollViewer>
             <Grid Grid.Row="4" Margin="24,12,24,14">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <TextBlock Text="Lines show directories and orchestrator teams. Moving dots mean working." TextWrapping="Wrap"
-                           Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0" />
+                <TextBlock x:Name="Legend" TextWrapping="Wrap" Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0"
+                           Text="Packets stream from working agents into their project or team at each model's OpenRouter speed (1 packet ≈ 20 tokens of public median throughput, not this machine's traffic). Dashed lines are idle." />
                 <TextBlock Grid.Column="1" x:Name="VisibleCount" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" />
             </Grid>
         </Grid>

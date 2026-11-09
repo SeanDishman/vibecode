@@ -8,10 +8,14 @@ public sealed partial class ChatViewModel
     internal Action? ProjectChatTurnStarting { get; set; }
     private bool _sendingAutomaticContinuation;
 
-    private void SendAutomaticContinuation(string text)
+    private void SendAutomaticContinuation(string text) => SendAutomaticContinuationCore(text, plainText: false);
+
+    private void SendPlainAutomaticContinuation(string text) => SendAutomaticContinuationCore(text, plainText: true);
+
+    private void SendAutomaticContinuationCore(string text, bool plainText)
     {
         _sendingAutomaticContinuation = true;
-        try { SendNow(text, null); }
+        try { SendNowCore(text, null, goalCheck: false, plainText); }
         finally { _sendingAutomaticContinuation = false; }
     }
 

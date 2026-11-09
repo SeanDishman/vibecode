@@ -29,10 +29,12 @@ public sealed class McpServerDefinition
     public string? BearerTokenEnvironmentVariable { get; set; }
     public int StartupTimeoutSeconds { get; set; } = McpCatalog.DefaultStartupTimeoutSeconds;
     public int ToolTimeoutSeconds { get; set; } = McpCatalog.DefaultToolTimeoutSeconds;
+    /// <summary>A stdio server VibeCode starts once and multiplexes for every agent (see <see cref="SharedMcpHub"/>).</summary>
+    public bool ShareAcrossAgents { get; set; }
 
     [JsonIgnore] public bool IsStdio => Transport == McpCatalog.StdioTransport;
     [JsonIgnore] public bool IsSse => Transport == McpCatalog.SseTransport;
-    [JsonIgnore] public string TransportLabel => IsStdio ? "Local Â· stdio" : IsSse ? "Remote Â· legacy SSE" : "Remote Â· Streamable HTTP";
+    [JsonIgnore] public string TransportLabel => IsStdio ? "Local · stdio" : IsSse ? "Remote · legacy SSE" : "Remote · Streamable HTTP";
     [JsonIgnore]
     public string EndpointSummary => IsStdio
         ? (Arguments?.Count ?? 0) == 0
@@ -49,13 +51,15 @@ public sealed class McpServerDefinition
             var targets = new List<string>();
             if (UseClaude) targets.Add("Claude");
             if (UseCodex && !IsSse) targets.Add("Codex");
-            return targets.Count == 0 ? "No compatible CLI selected" : string.Join(" Â· ", targets);
+            return targets.Count == 0 ? "No compatible CLI selected" : string.Join(" · ", targets);
         }
     }
     [JsonIgnore]
     public string CompatibilityNote => IsSse
         ? "Legacy SSE is sent to Claude; current Codex releases do not support it."
         : "Applied to each selected CLI when a chat next starts or reconnects.";
+    /// <summary>The MCP list's "  ·  shared · 1 process · 13 agents", or empty for a per-agent server.</summary>
+    [JsonIgnore] public string SharingSummary => ShareAcrossAgents && IsStdio ? "  ·  " + SharedMcpHub.Instance.Summary(Id) : "";
 
     public McpServerDefinition Clone() => new()
     {
@@ -73,6 +77,7 @@ public sealed class McpServerDefinition
         BearerTokenEnvironmentVariable = BearerTokenEnvironmentVariable,
         StartupTimeoutSeconds = StartupTimeoutSeconds,
         ToolTimeoutSeconds = ToolTimeoutSeconds,
+        ShareAcrossAgents = ShareAcrossAgents,
     };
 }
 
@@ -196,6 +201,20 @@ public static partial class McpCatalog
         }
         return changed;
     }
+
+    /// <summary>
+    /// Bundled MCP servers that do the same job for every agent and keep no per-agent state, so VibeCode runs ONE shared
+    /// process for all of them by default instead of a copy per chat (2026-10 census: ~29 Blender stacks / 3.5 GB).
+    /// Blender's add-on bridge: every copy drives the same Blender socket. Not Godot: godot-mcp keeps one running game
+    /// per process (run_project kills the previous one; stop_project and get_debug_output act on it), so a shared copy
+    /// would let one agent stop or read another's game. It stays one per agent unless the user ticks Share.
+    /// Matched by launch signature, not id, because VibeCode writes these with a fresh GUID id. User-added servers that
+    /// are not one of these keep today's per-agent behaviour unless the user opts them in.
+    /// </summary>
+    public static bool IsKnownShareableServer(McpServerDefinition? definition) =>
+        definition is { IsStdio: true, Enabled: true }
+        && definition.Arguments.Prepend(definition.Command).Any(part => part is not null
+            && part.Contains("mcp-for-blender", StringComparison.OrdinalIgnoreCase));
 
     public static IReadOnlyList<McpValidationMessage> Validate(
         McpServerDefinition definition, IEnumerable<McpServerDefinition>? catalog = null)
@@ -510,7 +529,8 @@ public static partial class McpCatalog
             fields.Add($"startup_timeout_sec = {definition.StartupTimeoutSeconds}");
             fields.Add($"tool_timeout_sec = {definition.ToolTimeoutSeconds}");
             fields.Add("enabled = true");
-            if (definition.IsStdio && definition.Id == BridgeMcpConnection.ManagedId)
+            // The built-in Bridge is preapproved over either transport: the stdio relay or the in-app HTTP endpoint.
+            if (definition.Id == BridgeMcpConnection.ManagedId)
                 fields.Add("tools = { " + string.Join(", ", AgentStatus.Mcp.Bridge.BridgeMcpTools.Create((_, _) => new JsonObject())
                     .Select(tool => TomlString(tool.Name) + " = { approval_mode = \"approve\" }")) + " }");
             if (definition.IsStdio && string.Equals(definition.Id, ManagedMemoryMcpPolicy.ServerId, StringComparison.Ordinal))

@@ -46,7 +46,7 @@ private fun fixtureState(scenario: String): UiState {
             status = "pending", requestId = "plan", permKind = "plan"))
         "queued" -> listOf(Message("queued", text = "A queued sample prompt that is safe to cancel or send in this fixture.", ordinal = 1))
         else -> listOf(
-            Message("user", "Please review this sample implementation.", ordinal = 0, canUndo = true),
+            Message("user", "Please review this sample implementation.", ordinal = 0),
             Message("tool", text = code, name = "Read", status = "complete", summary = "src/sample.kt"),
             Message("assistant", "**Sample response**\n\nThis is synthetic text for testing reading, scrolling, and code selection.\n\n```kotlin\n$code\n```\n\nThe final line remains visible above the composer."),
         )
@@ -113,7 +113,6 @@ private fun Fixture(initial: String) {
             onMode = { state = state.copy(detail = state.detail.copy(mode = it), options = state.options?.copy(mode = it)) },
             onFast = { state = state.copy(detail = state.detail.copy(fast = it)) },
             onSendQueued = { state = state.copy(messages = emptyList()) }, onCancelQueued = { state = state.copy(messages = emptyList()) },
-            onUndo = { state = state.copy(messages = state.messages.map { it.copy(wasUndone = true) }) },
             onPin = {}, onClosePane = back,
         ))
     }

@@ -95,6 +95,11 @@ internal static class ProviderModelCatalog
         // description, so a row whose title was already right but whose description was not still has to be saved.
         var before = models.Select(m => (m.Value, m.Display, m.Description)).ToList();
 
+        // Older versions are not offered even when the CLI or a remembered catalog lists them. Default is a policy
+        // row, kept whatever it resolves to.
+        models.RemoveAll(m => !string.Equals(m.Value, "default", StringComparison.OrdinalIgnoreCase)
+            && (ClaudeModelCatalog.IsUnlisted(m.Value) || ClaudeModelCatalog.IsUnlisted(m.ResolvedModel)));
+
         for (int i = 0; i < models.Count; i++)
             models[i] = Retitle(models[i]);
 
@@ -126,13 +131,14 @@ internal static class ProviderModelCatalog
         && (string.Equals(ClaudeModelCatalog.CanonicalId(m.Value), id, StringComparison.OrdinalIgnoreCase)
             || string.Equals(ClaudeModelCatalog.CanonicalId(m.ResolvedModel), id, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Names to fall back on when a bare tier alias arrives with no resolvedModel to read.</summary>
+    /// <summary>Names to fall back on when a bare tier alias arrives with no resolvedModel to read. A "haiku" alias that
+    /// does resolve to Haiku 4.5, as on Claude Code before 2.1.293, is unlisted and dropped before it needs a title.</summary>
     private static readonly Dictionary<string, string> AliasNames = new(StringComparer.OrdinalIgnoreCase)
     {
         ["opus"] = ClaudeModelCatalog.Find(ClaudeModelCatalog.Opus)!.Name,
         ["sonnet"] = ClaudeModelCatalog.Find(ClaudeModelCatalog.Sonnet)!.Name,
-        ["haiku"] = ClaudeModelCatalog.Find(ClaudeModelCatalog.Haiku)!.Name,
         ["fable"] = ClaudeModelCatalog.Find(ClaudeModelCatalog.Fable)!.Name,
+        ["haiku"] = ClaudeModelCatalog.Find(ClaudeModelCatalog.Haiku)!.Name,
         ["mythos"] = "Mythos 5.1",
     };
 
@@ -226,7 +232,8 @@ internal static class ProviderModelCatalog
         SupportsUltrafastMode = m.SupportsUltrafastMode,
     };
 
-    /// <summary>Current Opus, Fable, and Sonnet first; earlier versions and default follow.</summary>
+    /// <summary>Current Opus, Fable and Sonnet first; earlier versions follow, then Haiku (in the slot Haiku 4.5 held), then
+    /// default.</summary>
     private static int Rank(ModelChoice m)
     {
         if (string.Equals(m.Value, "default", StringComparison.OrdinalIgnoreCase)) return 900;
@@ -296,7 +303,7 @@ internal static class ProviderModelCatalog
                     Value = m.Value,
                     Display = m.Display,
                     Description = m.Description,
-                    ResolvedModel = m.Resolved,
+                    ResolvedModel = m.Value,
                     SupportsEffort = GlmPreset.IsZai(ApiKeyAccountService.Instance.SelectedGlmBackend),
                     EffortLevels = GlmPreset.EffortsFor(ApiKeyAccountService.Instance.SelectedGlmBackend).ToList(),
                 })
@@ -306,6 +313,22 @@ internal static class ProviderModelCatalog
             Choice(provider, "default", $"{DisplayName(provider)} default", $"{DisplayName(provider)} chooses the recommended model."),
         ],
     };
+
+    /// <summary>The models one GLM service serves. The new-chat picker passes the chosen account's service, which need
+    /// not be the selected one: a Baseten id sent to Z.ai, or the reverse, fails the first turn.</summary>
+    internal static IReadOnlyList<ModelChoice> GlmModels(string? backend) =>
+        GlmPreset.ModelsFor(backend)
+            .Select(m => new ModelChoice
+            {
+                Provider = GlmPreset.ProviderId,
+                Value = m.Value,
+                Display = m.Display,
+                Description = m.Description,
+                ResolvedModel = m.Value,
+                SupportsEffort = GlmPreset.IsZai(backend),
+                EffortLevels = GlmPreset.EffortsFor(backend).ToList(),
+            })
+            .ToList();
 
     private static IReadOnlyList<ModelChoice> CodexFallback()
     {

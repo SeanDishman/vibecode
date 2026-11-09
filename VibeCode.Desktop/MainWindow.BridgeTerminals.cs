@@ -42,7 +42,7 @@ public partial class MainWindow
                     : BridgeRosterForWindow.First(p => !ReferenceEquals(p, host) && p.Provider == setup.Provider);
                 _vm.ConfigureBridgeOrchestrators(coordinator, setup.WorkerAllocation, setup.Objective, setup.SingleTerminal,
                     orchestratorConfiguration: setup.OrchestratorConfiguration, workerConfiguration: setup.WorkerConfiguration,
-                    centralConfiguration: setup.CentralConfiguration);
+                    centralConfiguration: setup.CentralConfiguration, factCheck: setup.FactCheck, planSteps: setup.PlanSteps);
                 if (originalHost.Draft.Trim() == setup.Objective) originalHost.Draft = "";
             }
             else _vm.SetBridgeTerminalMode(false, OwnsSecondaryBridge);
@@ -73,17 +73,19 @@ public partial class MainWindow
         _orchestratorSetupDraft ??= new BridgeSetupPanel();
         var setup = new BridgeOrchestratorWindow(host, maximum, _orchestratorSetupDraft,
             workerCapacity: _ => Math.Max(0, Services.BridgeAgentPolicy.ClampLimit(Services.AppSettings.Current.BridgeAgentLimit)
-                - BridgeRosterForWindow.Count - 1 + BridgeRosterForWindow.Count(p => !p.IsBridgeManager &&
+                - Services.BridgeAgentPolicy.Seats(BridgeRosterForWindow) - 1 + BridgeRosterForWindow.Count(p => !p.IsBridgeManager &&
                     p.BridgeCoordinatorAgentId is null && p.AvailableForBridgeAssignment &&
                     p.Provider == _orchestratorSetupDraft.WorkerConfiguration.Provider)),
-            hasOtherOrchestrators: BridgeRosterForWindow.Any(p => p.IsBridgeManager))
-        { Owner = this };
+            hasOtherOrchestrators: BridgeRosterForWindow.Any(p => p.IsBridgeManager),
+            projectedAgentCount: (managers, workers) => Services.BridgeAgentPolicy.Seats(BridgeRosterForWindow) + managers + Math.Max(0,
+                workers - BridgeRosterForWindow.Count(p => !p.IsBridgeManager && p.BridgeCoordinatorAgentId is null &&
+                    p.AvailableForBridgeAssignment && p.Provider == _orchestratorSetupDraft.WorkerConfiguration.Provider))) { Owner = this };
         if (setup.ShowDialog() != true) return;
         try
         {
             _vm.LaunchBridgeOrchestrators(host, setup.WorkerAllocation, setup.Objective, setup.SingleTerminal, setup.Provider,
                 orchestratorConfiguration: setup.OrchestratorConfiguration, workerConfiguration: setup.WorkerConfiguration,
-                centralConfiguration: setup.CentralConfiguration);
+                centralConfiguration: setup.CentralConfiguration, factCheck: setup.FactCheck, planSteps: setup.PlanSteps);
             _orchestratorSetupDraft = null;
             if (host.Draft.Trim() == setup.Objective) host.Draft = "";
             RefreshBridgePartitions();
@@ -255,7 +257,7 @@ public partial class MainWindow
         all.Click += (_, _) => { _vm.SetBridgeTerminalMode(true, OwnsSecondaryBridge); SharedTerminalForWindow.ShowAll(); };
         menu.Items.Add(all);
         AddLayout("Single terminal", true);
-        AddLayout("Separate terminals", false);
+        if (_vm.CanUseSeparateBridgeTerminals(OwnsSecondaryBridge)) AddLayout("Separate terminals", false);
         menu.IsOpen = true;
         e.Handled = true;
 

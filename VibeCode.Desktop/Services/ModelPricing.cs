@@ -31,6 +31,8 @@ public static class ModelPricing
         // Current Claude lineup: https://platform.claude.com/docs/en/about-claude/pricing
         ["claude-opus-5-5"] = new(4.00, 20.00),
         ["claude-sonnet-5-5"] = new(2.00, 10.00),
+        // Haiku 5.5 (2026-10-07): prompts over 100K tokens cost 5x - see TurnCost.
+        ["claude-haiku-5-5"]  = new(0.10, 0.50),
         // Earlier models retain their own rates; Sonnet 5 now shares the $2/$10 tier.
         ["claude-opus-5"] = new(5.00, 25.00),
         ["claude-opus-4-8"] = new(5.00, 25.00),
@@ -42,8 +44,8 @@ public static class ModelPricing
         ["claude-sonnet-4-5"] = new(3.00, 15.00),
         ["claude-haiku-4-5"] = new(1.00, 5.00),
 
-        // OpenAI standard short-context rates, updated 2026-09-30. Cache-write is 1.25x input.
-        // GPT-6.1 Sol's cache reads are 0.05x input; the other listed OpenAI models use 0.10x.
+        // OpenAI standard short-context rates, updated 2026-10-29. Cache-write is 1.25x input.
+        // GPT-6.1 Sol's and Terra's cache reads are 0.05x input; the other listed OpenAI models use 0.10x.
         // https://developers.openai.com/api/docs/pricing
         // GPT-5.6 Sol's $4/$20 is the promotional rate OpenAI says runs at least through 2026-11-21.
         // TurnCost applies the long-context rate only when an individual request's size is known.
@@ -120,6 +122,7 @@ public static class ModelPricing
             : id.Equals("claude-opus-5-5", StringComparison.OrdinalIgnoreCase)
                 ? 0.05
             : id.Equals("gpt-6.1-sol", StringComparison.OrdinalIgnoreCase)
+              || id.Equals("gpt-6.1-terra", StringComparison.OrdinalIgnoreCase)
                 ? 0.05
                 // GLM's cache-hit rate is per model, read from the endpoint: 0.20x input on 4.7 and 5.3 Flash,
                 // 0.10x on the 5.2 pair (which is what CacheReadMultiplier already is).
@@ -139,6 +142,12 @@ public static class ModelPricing
             inputUsd *= 2;
             outputUsd *= 1.5;
         }
+        // Haiku 5.5's prompts over 100K tokens: $0.50/$2.50, cache writes and reads scaled the same.
+        if (contextInputTokens > 100_000 && id.Equals("claude-haiku-5-5", StringComparison.OrdinalIgnoreCase))
+        {
+            inputUsd *= 5;
+            outputUsd *= 5;
+        }
         return (inputUsd + outputUsd) * SpeedMultiplier(id, serviceTier) / 1_000_000.0;
     }
 
@@ -154,7 +163,7 @@ public static class ModelPricing
         if (tier is not ("fast" or "priority")) return 1;
         if (id == "gpt-5.5") return 2.5;
         return id is "claude-opus-5-5" or "claude-opus-5" or "claude-opus-4-8"
-            or "gpt-6-astra" or "gpt-6.1-sol" or "gpt-6-sol" or "gpt-6-luna"
+            or "gpt-6-astra" or "gpt-6.1-sol" or "gpt-6.1-terra" or "gpt-6-sol" or "gpt-6-luna"
             or "gpt-5.6-sol" or "gpt-5.6-terra" or "gpt-5.6-luna" ? 2 : 1;
     }
 

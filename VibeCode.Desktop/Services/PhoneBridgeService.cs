@@ -32,7 +32,7 @@ namespace VibeCode.Services;
 ///
 /// What a paired phone can do, stated plainly, because the endpoint list has grown well past "read my chats":
 /// it can send prompts, answer permission prompts (including "always allow"), switch the permission mode as far
-/// as bypassPermissions, change model and effort, start a new chat in any existing folder, rewind a turn, and
+/// as bypassPermissions, change model and effort, start a new chat in any existing folder, and
 /// close a pane. That is deliberate - the point of the app is to be the desktop from the sofa - and it is not a
 /// privilege escalation, because a device that can send one prompt to an agent with Bash already has arbitrary
 /// code execution on this machine. The paired signing key and token are the trust boundary.
@@ -248,6 +248,7 @@ public sealed class PhoneBridgeService : Observable
 
     public void Stop(bool remember = true)
     {
+        LanShareService.Instance.Stop();
         lock (_gate)
         {
             _cancel?.Cancel();
@@ -910,7 +911,6 @@ public sealed class PhoneBridgeService : Observable
                 "mode" when request.Method == "POST" => await SetModeAsync(id, request).ConfigureAwait(false),
                 "fast" when request.Method == "POST" => await SetFastAsync(id, request).ConfigureAwait(false),
                 "queue" when request.Method == "POST" => await QueueAsync(id, request).ConfigureAwait(false),
-                "undo" when request.Method == "POST" => await UndoAsync(id, request).ConfigureAwait(false),
                 "pin" when request.Method == "POST" => await PinAsync(id).ConfigureAwait(false),
                 "title" when request.Method == "POST" => await TitleAsync(id, request).ConfigureAwait(false),
                 "close" when request.Method == "POST" => await CloseAsync(id).ConfigureAwait(false),
@@ -946,6 +946,9 @@ public sealed class PhoneBridgeService : Observable
     {
         mirror.Watch(id);
         var clientVersion = IntArg(request, "v", -1);
+        // Opening a chat on the phone wakes a sleeping one, exactly like opening it on the desktop.
+        if (clientVersion < 0)
+            await OnUi(vm => { vm.Chats.FirstOrDefault(c => c.BridgeId == id)?.Wake(); return true; }).ConfigureAwait(false);
         // Watch() only takes effect on the next rebuild, so the first request for a chat has to give the mirror
         // time to notice - otherwise opening a chat on the phone shows an empty transcript for one poll.
         var wait = WaitSeconds(request);
@@ -1210,7 +1213,7 @@ public sealed class PhoneBridgeService : Observable
         return ok ? Json(new JsonObject { ["ok"] = true }) : Fail(400, "fast mode is not available for this chat");
     }
 
-    // ---------------- queue, rewind, chat lifecycle ----------------
+    // ---------------- queue and chat lifecycle ----------------
 
     private async Task<Response> QueueAsync(string id, Request request)
     {
@@ -1230,37 +1233,6 @@ public sealed class PhoneBridgeService : Observable
         }).ConfigureAwait(false);
 
         return ok ? Json(new JsonObject { ["ok"] = true }) : Fail(404, "that queued prompt is no longer waiting");
-    }
-
-    /// <summary>Rewinds the workspace to just before the given prompt and puts its text back in the composer.</summary>
-    private async Task<Response> UndoAsync(string id, Request request)
-    {
-        var ordinal = Body(request)?["ord"]?.GetValue<int>() ?? -1;
-        if (ordinal < 0) return Fail(400, "missing ord");
-
-        var vm = _vm;
-        var ui = _ui;
-        if (vm is null || ui is null) return Fail(503, "desktop not ready");
-
-        var device = _requestDevice.Value;
-        var requestCancellation = _requestCancellation.Value;
-        var result = await ui.InvokeAsync(async () =>
-        {
-            lock (_gate)
-                if (device is null || !_devices.Contains(device) || requestCancellation.IsCancellationRequested)
-                    return (Found: false, Ok: false, Message: "phone revoked");
-            var chat = vm.Chats.FirstOrDefault(c => c.BridgeId == id);
-            var prompt = chat?.Items.OfType<UserItem>().ElementAtOrDefault(ordinal);
-            if (chat is null || prompt is null) return (Found: false, Ok: false, Message: "unknown prompt");
-            if (!prompt.CanRequestUndo) return (Found: true, Ok: false, Message: "that prompt can no longer be undone");
-            var rollback = await chat.StopAndUndoPromptAsync(prompt).ConfigureAwait(true);
-            return (Found: true, Ok: rollback.Success, Message: rollback.Message);
-        }).Task.Unwrap().ConfigureAwait(false);
-
-        if (!result.Found) return Fail(404, result.Message);
-        return result.Ok
-            ? Json(new JsonObject { ["ok"] = true, ["message"] = result.Message })
-            : Fail(400, result.Message.Length > 0 ? result.Message : "undo failed");
     }
 
     private async Task<Response> PinAsync(string id)

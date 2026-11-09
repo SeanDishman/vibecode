@@ -41,7 +41,12 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
     public bool IsBridge => _vm.SecondaryIsBridge;
     public string BridgeSummary => _vm.SecondaryBridgeSummary;
     public string BridgeProjectPath => _vm.SecondaryBridgeProjectPath;
+    public bool BridgeUsesGemini => _vm.SecondaryBridgeUsesGemini;
     public bool BridgeUsesClaude => _vm.SecondaryBridgeUsesClaude;
+    public IReadOnlyList<CodexAccountInfo> BridgeCodexAccounts => _vm.SecondaryBridgeCodexAccounts;
+    public string BridgeCodexUsageSummary => _vm.SecondaryBridgeCodexUsageSummary;
+    public bool HasBridgeCodexUsage => _vm.SecondaryHasBridgeCodexUsage;
+    public bool BridgeCodexAtLimit => _vm.SecondaryBridgeCodexAtLimit;
     public bool BridgeUsesCodex => _vm.SecondaryBridgeUsesCodex;
     public bool HasMinimizedBridgePanes => _vm.SecondaryHasMinimizedBridgePanes;
     public bool CanAnnounceToBridge => _vm.SecondaryCanAnnounceToBridge;
@@ -56,10 +61,6 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
         "Fork runs on the main window — open this bridge there to branch it";
 
     // ---- not roster-scoped: the same answer in either window ----
-    public bool IsCodexSignedIn => _vm.IsCodexSignedIn;
-    public bool HasCodexAccountUsage => _vm.HasCodexAccountUsage;
-    public bool CodexAtLimit => _vm.CodexAtLimit;
-    public string CodexAccountUsage => _vm.CodexAccountUsage;
     public string BridgeHint => _vm.BridgeHint;
 
     /// <summary>
@@ -85,10 +86,6 @@ public sealed class BridgeSurfaceContext : INotifyPropertyChanged
 
         switch (name)
         {
-            case nameof(MainViewModel.IsCodexSignedIn):
-            case nameof(MainViewModel.HasCodexAccountUsage):
-            case nameof(MainViewModel.CodexAtLimit):
-            case nameof(MainViewModel.CodexAccountUsage):
             case nameof(MainViewModel.BridgeHint):
                 Raise(name);
                 break;

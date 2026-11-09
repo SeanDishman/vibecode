@@ -66,7 +66,10 @@ public partial class SettingsWindow : Window
     private readonly ObservableCollection<BgEntry> _backgrounds = new();
     private readonly ObservableCollection<HiddenEntry> _hidden = new();
     private readonly ObservableCollection<McpServerDefinition> _mcpServers = new();
+    private readonly ObservableCollection<SkillDefinition> _skills = new();
+    private readonly ObservableCollection<DiscoveredSkill> _foundSkills = new();
     private bool _ready;
+    private bool _syncingBridgeAgentLimit;
     private bool _refreshingMcp;
 
     public SettingsWindow()
@@ -85,6 +88,8 @@ public partial class SettingsWindow : Window
         BgList.ItemsSource = _backgrounds;
         HiddenList.ItemsSource = _hidden;
         McpList.ItemsSource = _mcpServers;
+        SkillsList.ItemsSource = _skills;
+        FoundSkillsList.ItemsSource = _foundSkills;
         Loaded += (_, _) =>
         {
             EnableDarkTitleBar();
@@ -95,18 +100,23 @@ public partial class SettingsWindow : Window
             VisSlider.Value = Math.Clamp(s.BackgroundVisibility, 0, 80);
             ClientIdBox.Text = s.SpotifyClientId ?? "";
             HideEmailsToggle.IsChecked = s.HideEmails;
+            NoClaudeCreditToggle.IsChecked = s.NoClaudeCredit;
             RunInBackgroundToggle.IsChecked = s.RunInBackground;
+            TerminalEnabledToggle.IsChecked = s.TerminalEnabled;
             ContinueAfterLimitResetsToggle.IsChecked = s.ContinueAfterLimitResets;
+            IdleSleepSlider.Value = Math.Clamp(s.IdleSleepMinutes, 0, 240);
             BorderlessToggle.IsChecked = s.Borderless;
             CompactModeToggle.IsChecked = s.CompactMode;
             AgentMessageDividersToggle.IsChecked = s.ShowAgentMessageDividers;
             NotifyTurnEndToggle.IsChecked = s.NotifyOnTurnEnd;
             NotifyAwaitingInputToggle.IsChecked = s.NotifyOnAwaitingInput;
-            SwarmMaxSlider.Value = SwarmPolicy.ClampMaxWorkers(s.SwarmMaxWorkers);
             DualMonitorBridgeToggle.IsChecked = s.DualMonitorBridge;
             DualMonitorDoubleSessionsToggle.IsChecked = s.DualMonitorDoubleSessions;
             BridgePeerMessagingToggle.IsChecked = s.BridgePeerMessaging;
+            BridgeToolsInProcessToggle.IsChecked = s.BridgeToolsInProcess;
             BridgeAgentLimitSlider.Value = s.BridgeAgentLimit;
+            BridgeAgentLimitBox.Text = s.BridgeAgentLimit.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            PacingThresholdSlider.Value = s.PacingThresholdPercent;
             SupervisionEnabledToggle.IsChecked = s.AgentSupervisionEnabled;
             SupervisionStaleSlider.Value = Math.Clamp(s.SupervisionStaleSeconds, 30, 1800);
             SupervisionGraceSlider.Value = Math.Clamp(s.SupervisionInterventionGraceSeconds, 30, 600);
@@ -115,11 +125,14 @@ public partial class SettingsWindow : Window
             TelemetryAnimationToggle.IsChecked = s.TelemetryLiveAnimation;
             RebuildNotificationSounds();
             InitializeThinkingOrbPicker();
+            InitializeWorkflowWallStylePicker();
             InitializeJarvisSettings();
             SecondBrainToggle.IsChecked = s.SecondBrainEnabled;
+            InitializeMemoryContextSettings();
             RebuildBackgrounds();
             RefreshHidden();
             RefreshMcpServers();
+            RefreshSkills();
             RefreshModeCards();
             _ready = true;
             InitializeSettingsSearch();
@@ -339,6 +352,20 @@ public partial class SettingsWindow : Window
         AppSettings.Current.Save();
     }
 
+    private void OnIdleSleepChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.IdleSleepMinutes = (int)Math.Round(e.NewValue);
+        AppSettings.Current.Save();   // the next idle sweep, a minute at most away, uses it
+    }
+
+    private void OnPacingThresholdChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.PacingThresholdPercent = (int)Math.Round(e.NewValue);
+        AppSettings.Current.Save();   // read at every dispatch and summon, so it applies straight away
+    }
+
     private void OnCompactModeChanged(object sender, RoutedEventArgs e)
     {
         if (!_ready) return;
@@ -473,10 +500,46 @@ public partial class SettingsWindow : Window
         AppSettings.Current.Save();   // fires Changed -> live bridge panes are re-briefed with (or without) the channel
     }
 
-    private void OnBridgeAgentLimitChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void OnBridgeToolsInProcessChanged(object sender, RoutedEventArgs e)
     {
         if (!_ready) return;
+        AppSettings.Current.BridgeToolsInProcess = BridgeToolsInProcessToggle.IsChecked == true;
+        AppSettings.Current.Save();   // read at each chat launch; running agents keep the transport they started with
+    }
+
+    private void OnBridgeAgentLimitChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_ready || _syncingBridgeAgentLimit) return;
+        _syncingBridgeAgentLimit = true;
+        try
+        {
+            BridgeAgentLimitBox.Text = BridgeAgentPolicy.ClampLimit((int)Math.Round(e.NewValue)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            BridgeAgentLimitError.Visibility = Visibility.Collapsed;
+        }
+        finally { _syncingBridgeAgentLimit = false; }
         AppSettings.Current.BridgeAgentLimit = BridgeAgentPolicy.ClampLimit((int)Math.Round(e.NewValue));
+        AppSettings.Current.Save();
+    }
+
+    private void OnBridgeAgentLimitTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_ready || _syncingBridgeAgentLimit) return;
+        if (!int.TryParse(BridgeAgentLimitBox.Text.Trim(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var limit)
+            || limit < BridgeAgentPolicy.MinimumAgentLimit || limit > BridgeAgentPolicy.MaximumAgentLimit)
+        {
+            BridgeAgentLimitError.Text = $"Enter a whole number from {BridgeAgentPolicy.MinimumAgentLimit} to {BridgeAgentPolicy.MaximumAgentLimit}. The saved limit is unchanged.";
+            BridgeAgentLimitError.Visibility = Visibility.Visible;
+            return;
+        }
+        _syncingBridgeAgentLimit = true;
+        try
+        {
+            BridgeAgentLimitSlider.Value = limit;
+            BridgeAgentLimitError.Visibility = Visibility.Collapsed;
+        }
+        finally { _syncingBridgeAgentLimit = false; }
+        AppSettings.Current.BridgeAgentLimit = limit;
         AppSettings.Current.Save();
     }
 
@@ -547,7 +610,7 @@ public partial class SettingsWindow : Window
     /// matching ListBoxItem, instead of renumbering a column of index comparisons.</summary>
     private UIElement[] Panes => new UIElement[]
     {
-        PaneGeneral, PaneAppearance, PaneBridge, PaneJarvis, PaneExtensions, PaneUsage,
+        PaneGeneral, PaneAppearance, PaneBridge, PaneJarvis, PaneExtensions, PaneUsage, PaneDeveloper,
     };
 
     /// <summary>Every dropdown now sits in the same column on the right, which is exactly where the pointer rests
@@ -620,6 +683,13 @@ public partial class SettingsWindow : Window
         if (!_ready) return;
         AppSettings.Current.TelemetryLiveAnimation = TelemetryAnimationToggle.IsChecked == true;
         AppSettings.Current.Save();   // fires Changed -> an open HUD picks the ripple up without being reopened
+    }
+
+    private void OnTelemetryFitThemeChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.TelemetryFitTheme = TelemetryFitThemeToggle.IsChecked == true;
+        AppSettings.Current.Save();   // fires Changed -> open telemetry windows refit without being reopened
     }
 
     private void OnUsageShareMetricChanged(object sender, RoutedEventArgs e)
@@ -830,6 +900,7 @@ public partial class SettingsWindow : Window
             string.Equals(server.Id, existing.Id, StringComparison.OrdinalIgnoreCase));
         if (index < 0) return;
         AppSettings.Current.McpServers[index] = dialog.Result;
+        AppSettings.Current.RecordBundledSharingChoice(dialog.Result);   // a deliberate tick/untick opts a bundled server in/out of sharing
         AppSettings.Current.Save();
         RefreshMcpServers();
     }
@@ -860,13 +931,66 @@ public partial class SettingsWindow : Window
         AppSettings.Current.Save();
     }
 
-    // ---------- agent swarms ----------
+    // ---------- skills ----------
 
-    private void OnSwarmMaxChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void RefreshSkills()
     {
-        if (!_ready) return;
-        AppSettings.Current.SwarmMaxWorkers = SwarmPolicy.ClampMaxWorkers((int)Math.Round(e.NewValue));
+        _skills.Clear();
+        foreach (var skill in AppSettings.Current.Skills.OrderBy(skill => skill.Name, StringComparer.OrdinalIgnoreCase))
+            _skills.Add(skill);
+        _foundSkills.Clear();
+        foreach (var skill in SkillCatalog.FindUnmanaged()) _foundSkills.Add(skill);
+        SkillsEmpty.Visibility = _skills.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SkillsList.Visibility = _skills.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        FoundSkillsHeading.Visibility = FoundSkillsList.Visibility = _foundSkills.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        SkillsCountText.Text = _skills.Count switch
+        {
+            0 => "No skills",
+            1 => "1 skill",
+            _ => $"{_skills.Count} skills",
+        };
+    }
+
+    private void OnAddSkill(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SkillDialog { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Result is not { } result) return;
+        var skills = AppSettings.Current.Skills;
+        skills.RemoveAll(skill => string.Equals(skill.Name, result.Definition.Name, StringComparison.OrdinalIgnoreCase));
+        skills.Add(result.Definition);
         AppSettings.Current.Save();
+        RefreshSkills();
+        SkillsCard.IsExpanded = true;   // the list is a dropdown; show the skill that was just added
+        var message = $"Installed '{result.Definition.Name}'."
+                      + (result.Installed.Count > 0 ? "\n\n" + string.Join("\n", result.Installed.Select(line => "• " + line)) : "")
+                      + (result.Skipped.Count > 0 ? "\n\nNot installed:\n" + string.Join("\n", result.Skipped.Select(line => "• " + line)) : "")
+                      + "\n\nNew chats pick it up; a chat that is already open sees it after it restarts.";
+        MessageBox.Show(this, message, "Skill installed", MessageBoxButton.OK,
+            result.Skipped.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+    }
+
+    private void OnRemoveSkill(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not SkillDefinition existing) return;
+        if (MessageBox.Show(this,
+                $"Remove the skill '{existing.Name}'?\n\nVibeCode deletes the copies it installed for Claude and Codex. Skills installed some other way are not touched.",
+                "Remove skill", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        try { SkillCatalog.Remove(existing); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Some copies could not be removed: " + ex.Message, "Remove skill", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        AppSettings.Current.Skills.RemoveAll(skill => string.Equals(skill.Name, existing.Name, StringComparison.OrdinalIgnoreCase));
+        AppSettings.Current.Save();
+        RefreshSkills();
+    }
+
+    private void OnOpenSkillFolder(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not SkillDefinition skill || SkillCatalog.StoredFolder(skill) is not { } folder
+            || !Directory.Exists(folder)) return;
+        try { Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { folder }, UseShellExecute = false }); }
+        catch { }
     }
 
     // ---------- privacy ----------
@@ -876,6 +1000,13 @@ public partial class SettingsWindow : Window
         if (!_ready) return;
         AppSettings.Current.HideEmails = HideEmailsToggle.IsChecked == true;
         AppSettings.Current.Save();   // fires Changed -> the main window re-masks the account email
+    }
+
+    private void OnNoClaudeCreditChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.NoClaudeCredit = NoClaudeCreditToggle.IsChecked == true;
+        AppSettings.Current.Save();
     }
 
     // ---------- Spotify extension ----------
@@ -919,6 +1050,15 @@ public partial class SettingsWindow : Window
     {
         DevCopied.Visibility = Visibility.Collapsed;
         _copyTimer?.Stop();
+    }
+
+    // ---------- speech to text: GPT Whisper or Windows' default ----------
+
+    private void OnGptWhisperChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        AppSettings.Current.GptWhisperEnabled = GptWhisperToggle.IsChecked == true;
+        AppSettings.Current.Save();
     }
 
     // ---------- speech to text: Groq ----------
@@ -1021,6 +1161,10 @@ public partial class SettingsWindow : Window
         if (!_ready) return;
         // the switch's TwoWay binding already saved AppSettings; the service refreshes itself when switched on
         WeatherService.Instance.NotifyEnabledChanged();
+        if (WeatherService.Instance.Enabled && !WeatherService.Instance.HasLocation)
+        {
+            OnWeatherGetLocation(sender, e);
+        }
     }
 
     private void OnWeatherSearchKey(object sender, System.Windows.Input.KeyEventArgs e)

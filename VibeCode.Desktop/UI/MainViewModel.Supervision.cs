@@ -410,7 +410,7 @@ public sealed partial class MainViewModel
         replacement.BridgeLabel = old.BridgeLabel;
         replacement.RestoreChatMetadata(old.Metadata);
         replacement.SetMode(old.Mode);
-        replacement.Model = old.Model;
+        replacement.Model = old.ChosenModel;
         replacement.Effort = old.Effort;
         replacement.FastMode = old.FastMode;   // per chat, so a restart must carry it rather than re-read a default
         replacement.UltrafastMode = old.UltrafastMode;

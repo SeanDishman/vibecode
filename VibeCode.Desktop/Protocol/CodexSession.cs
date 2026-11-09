@@ -14,6 +14,8 @@ public sealed class CodexSessionOptions
     public string? AccountId { get; init; }
     /// <summary>Isolated conversational planning: remove shell, patch, web and code tools for this process only.</summary>
     public bool DialogueOnly { get; init; }
+    /// <summary>The chat is muted from memory: Codex neither reads nor writes its own memories in this session.</summary>
+    public bool NativeMemoryDisabled { get; init; }
     public JsonObject? DialogueOutputSchema { get; init; }
     public string? DialogueInstructions { get; init; }
     public required string Cwd { get; init; }
@@ -31,9 +33,7 @@ public sealed class CodexSessionOptions
     public string PermissionMode { get; init; } = "default";
     public string? AppendSystemPrompt { get; init; }
     /// <summary>Whether the stable Codex collaboration tool family is available to this root session.</summary>
-    public bool SwarmsEnabled { get; init; }
-    /// <summary>Provider-enforced ceiling for open child threads. The launch boundary clamps this again.</summary>
-    public int SwarmMaxWorkers { get; init; } = 6;
+    public bool SubagentsEnabled { get; init; }
     /// <summary>Immutable VibeCode MCP snapshot for this launch; VibeCode never edits Codex's native config.</summary>
     public IReadOnlyList<McpServerDefinition>? McpServers { get; init; }
 }
@@ -114,7 +114,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private readonly Dictionary<string, JsonObject> _startedItems = new();
     private readonly HashSet<string> _announcedTools = new();
     private readonly Dictionary<string, int> _streamIndexByItem = new();
-    private readonly Queue<JsonNode> _earlyMessages = new();
+    private readonly Queue<(JsonNode Content, string? AppContext)> _earlyMessages = new();
     private readonly List<string> _tempAttachments = new();
     private int _requestSeq;
     private volatile string? _turnId;
@@ -149,6 +149,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private FileSystemWatcher? _artifactWatcher;
     private DateTime _commandCaptureUntilUtc;
     private TokenUsage _turnUsage;
+    private bool _turnUsageClosed;
     // Token totals are cumulative PER THREAD. A single baseline shared by parent and children makes each switch look
     // like a counter rollback and double-counts the latest request, so retain one baseline per app-server thread.
     private readonly Dictionary<string, TokenUsage> _previousTotalUsageByThread = new(StringComparer.Ordinal);
@@ -277,12 +278,24 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         psi.ArgumentList.Add("features.default_mode_request_user_input=true");
     }
 
+    /// <summary>A chat muted from memory neither reads nor writes Codex's own memories. Both keys are typed booleans in
+    /// Codex's [memories] table: its config loader rejects any other value for them.</summary>
+    internal static void AddNativeMemoryOffFlags(ProcessStartInfo psi)
+    {
+        foreach (var setting in new[] { "memories.use_memories=false", "memories.generate_memories=false" })
+        {
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(setting);
+        }
+    }
+
     public void Start()
     {
         AgentStatusReporting.Changed += OnReportingChanged;
         var psi = CodexEnvironment.CreateAppServerStartInfo(_options.Cwd, _options.HomeDirectory,
-            _options.SwarmsEnabled, _options.SwarmMaxWorkers, _options.McpServers, _options.AccountId);
+            _options.SubagentsEnabled, _options.McpServers, _options.AccountId);
         AddSessionFeatureFlags(psi, _options.DialogueOnly);
+        if (_options.NativeMemoryDisabled) AddNativeMemoryOffFlags(psi);
         ConfigureDialogueOnlyProcess(psi);
         StartArtifactWatcher();
 
@@ -297,7 +310,10 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     {
         try
         {
+            await SpeechWorkPriority.WaitUntilIdleAsync();
+            if (_disposed) return;
             var integrity = await CodexEnvironment.VerifyRuntimeIntegrityAsync(psi.FileName);
+            await SpeechWorkPriority.WaitUntilIdleAsync();
             if (_disposed) return;
             _runtimeIntegrityVerified = integrity.Trusted;
             _runtimeIntegrityReason = integrity.Reason;
@@ -332,9 +348,10 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
 
     private async Task InitializeAsync()
     {
+        lock (_earlyMessages) _initializing = true;
         try
         {
-            await RequestAsync("initialize", new JsonObject
+            await StartupRequestAsync("initialize", new JsonObject
             {
                 ["clientInfo"] = new JsonObject
                 {
@@ -350,9 +367,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
 
             // Fail early with a useful sign-in state. Otherwise model/list or thread/start can surface a vague
             // upstream Unauthorized error and the host has no reliable way to show its Codex sign-in action.
-            // Managed ChatGPT auth refreshes during normal app-server use. Force a refresh at session startup too,
-            // so a VibeCode chat reopened after days asleep begins with a current token rather than failing its first turn.
-            var accountResponse = await RequestAsync("account/read", new JsonObject { ["refreshToken"] = true });
+            // Managed ChatGPT tokens refresh automatically. A forced refresh here made every new/resumed agent
+            // wait on another OAuth network call (19–22 seconds in a restored team) before its prompt could leave.
+            var accountResponse = await StartupRequestAsync("account/read", new JsonObject { ["refreshToken"] = false });
             var accountResult = accountResponse?["result"];
             if (accountResult?["requiresOpenaiAuth"]?.GetValue<bool>() == true && accountResult["account"] is null)
                 throw new InvalidOperationException("VibeCode is not signed in to OpenAI. Open the account menu, choose Add account, then OpenAI for VibeCode.");
@@ -382,7 +399,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             if (!_options.DialogueOnly) p["config"] = new JsonObject { ["web_search"] = "live" };
             ApplySecurity(p, legacyThreadShape: true);
             ConfigureDialogueOnlyThread(p);
-            var threadResponse = await RequestAsync(method, p);
+            var threadResponse = await StartupRequestAsync(method, p);
             CaptureResolvedModel(threadResponse?["result"]);
             SessionId = threadResponse?["result"]?["thread"]?["id"]?.GetValue<string>()
                         ?? threadResponse?["result"]?["thread"]?["sessionId"]?.GetValue<string>();
@@ -395,12 +412,14 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             {
                 try
                 {
-                    await RequestAsync("thread/name/set", new JsonObject
+                    await StartupRequestAsync("thread/name/set", new JsonObject
                     {
                         ["threadId"] = SessionId,
                         ["name"] = _options.Title,
                     });
                 }
+                catch (OperationCanceledException) when (_disposed) { throw; }
+                catch (TimeoutException) { throw; } // the runtime stopped answering; do not send into it
                 catch { /* naming is useful metadata, never a reason to fail an otherwise valid thread */ }
             }
 
@@ -411,7 +430,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             {
                 try
                 {
-                    await RequestAsync("thread/inject_items", new JsonObject
+                    await StartupRequestAsync("thread/inject_items", new JsonObject
                     {
                         ["threadId"] = SessionId,
                         ["items"] = new JsonArray(new JsonObject
@@ -427,6 +446,8 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                     });
                     _appendPromptPending = false;
                 }
+                catch (OperationCanceledException) when (_disposed) { throw; }
+                catch (TimeoutException) { throw; } // a late injection must not race the fallback first turn
                 catch (Exception ex)
                 {
                     // Older app-server builds can reject injected developer items. Keep the original first-turn
@@ -466,18 +487,27 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                     if (_subagents.Count > 0) EmitSubagentUpdate();
                 }
             }
+            if (_disposed) throw new OperationCanceledException();
             Initialized?.Invoke();
 
-            List<JsonNode> queued;
+            List<(JsonNode Content, string? AppContext)> queued;
             lock (_earlyMessages)
             {
-                queued = _earlyMessages.Select(x => x.DeepClone()).ToList();
+                _initializing = false;
+                queued = _earlyMessages.ToList();
                 _earlyMessages.Clear();
             }
-            foreach (var content in queued) _ = StartTurnAsync(content);
+            foreach (var entry in queued) _ = StartTurnWithAppContextAsync(entry.Content, entry.AppContext);
         }
         catch (Exception ex)
         {
+            lock (_earlyMessages)
+            {
+                _initializing = false;
+                _startupFailure = ex.Message;
+                _earlyMessages.Clear(); // the host retains the visible prompt; this failed process cannot dispatch it
+            }
+            if (_disposed) return;
             _lastError = ex.Message;
             EmitFailure("Codex failed to initialize", ex.Message);
             Initialized?.Invoke();
@@ -488,9 +518,10 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private async Task HydrateHistoryAsync()
     {
         if (SessionId is null) return;
+        Emit(new JsonObject { ["type"] = "system", ["subtype"] = "history_loading" });
         try
         {
-            var response = await RequestAsync("thread/read", new JsonObject
+            var response = await StartupRequestAsync("thread/read", new JsonObject
             {
                 ["threadId"] = SessionId,
                 ["includeTurns"] = true,
@@ -509,6 +540,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             _startedItems.Clear();
             Emit(new JsonObject { ["type"] = "system", ["subtype"] = "resume_boundary" });
         }
+        catch (OperationCanceledException) when (_disposed) { throw; }
         catch (Exception ex)
         {
             // A history-render failure must not make a valid resumed thread unusable. The server already resumed the
@@ -520,6 +552,10 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                 ["tool_name"] = "Codex history",
                 ["message"] = "The thread resumed, but its previous messages could not be displayed: " + ex.Message,
             });
+        }
+        finally
+        {
+            Emit(new JsonObject { ["type"] = "system", ["subtype"] = "history_loaded" });
         }
     }
 
@@ -660,7 +696,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     internal static bool KnownFastModel(string? id)
     {
         var wire = CodexModelCatalog.WireModel(id);
-        return wire is "gpt-6-astra" or "gpt-6.1-sol" or "gpt-6-sol" or "gpt-6-luna"
+        return wire is "gpt-6-astra" or "gpt-6.1-sol" or "gpt-6.1-terra" or "gpt-6-sol" or "gpt-6-luna"
             or "gpt-5.6-sol" or "gpt-5.6-terra" or "gpt-5.6-luna" or "gpt-5.4";
     }
 
@@ -723,16 +759,27 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             new() { ["name"] = name, ["description"] = description };
     }
 
-    public void SendUser(JsonNode content)
+    public void SendUser(JsonNode content) => SendUserWithAppContext(content, null);
+
+    // The context is supplied separately by the host so duplicate detection never examines a user's words
+    // or attachment contents. Keep it with an early message until initialization can actually dispatch it.
+    internal void SendUserWithAppContext(JsonNode content, string? appContext)
     {
         if (_disposed) return;
         _reserveRetryAttempted = false;
-        if (SessionId is null)
+        lock (_earlyMessages)
         {
-            lock (_earlyMessages) _earlyMessages.Enqueue(content.DeepClone());
-            return;
+            if (_startupFailure is { } failure)
+                throw new InvalidOperationException("Codex could not start. Reconnect this chat to retry. " + failure);
+            // thread/start can return its id before session instructions/history finish. Check and enqueue under
+            // the same lock as startup's drain so an early send cannot miss that drain or race history replay.
+            if (_initializing || SessionId is null)
+            {
+                _earlyMessages.Enqueue((content.DeepClone(), appContext));
+                return;
+            }
         }
-        _ = StartTurnAsync(content.DeepClone());
+        _ = StartTurnWithAppContextAsync(content.DeepClone(), appContext);
     }
 
     /// <summary>Only the active root turn accepts same-turn guidance. Child turns can outlive it.</summary>
@@ -758,14 +805,16 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
             throw new InvalidOperationException("Codex did not confirm the steering message.");
     }
 
-    private async Task StartTurnAsync(JsonNode content)
+    private Task StartTurnAsync(JsonNode content) => StartTurnWithAppContextAsync(content, null);
+
+    private async Task StartTurnWithAppContextAsync(JsonNode content, string? appContext)
     {
         if (SessionId is null) return;
         JsonObject? p = null;
         try
         {
             await RefreshReportingAsync();
-            var input = BuildInput(content);
+            var input = BuildInputWithAppContext(content, appContext);
             p = new JsonObject
             {
                 ["threadId"] = SessionId,
@@ -792,7 +841,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         }
     }
 
-    private JsonArray BuildInput(JsonNode content)
+    private JsonArray BuildInput(JsonNode content) => BuildInputWithAppContext(content, null);
+
+    private JsonArray BuildInputWithAppContext(JsonNode content, string? appContext)
     {
         var input = new JsonArray();
         if (content is JsonValue scalar)
@@ -836,7 +887,11 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         {
             if (_appendPromptPending)
             {
-                text = _effectiveAppendPrompt + "\n\n" + text;
+                var missing = PromptContext.MissingSessionInstructions(_effectiveAppendPrompt, appContext, "codex");
+                var saved = (_effectiveAppendPrompt?.Length ?? 0) - missing.Length;
+                if (saved > 0)
+                    _ = Task.Run(() => CrashLog.Note("PromptContext", $"provider=codex duplicate_app_characters_removed={saved}"));
+                if (missing.Length > 0) text = missing + "\n\n" + text;
                 _appendPromptPending = false;
             }
             if (!string.IsNullOrWhiteSpace(text)) input.Add(new JsonObject { ["type"] = "text", ["text"] = text });
@@ -1007,8 +1062,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
                         p?["error"]?["message"]?.GetValue<string>() ?? p?["message"]?.GetValue<string>() ?? "Error");
                 break;
             case "warning" or "configWarning":
-                if ((p?["message"]?.GetValue<string>() ?? p?["summary"]?.GetValue<string>()) is { Length: > 0 } warning)
-                    Emit(new JsonObject { ["type"] = "system", ["subtype"] = "permission_denied", ["tool_name"] = "Codex", ["message"] = warning });
+                if ((p?["message"]?.GetValue<string>() ?? p?["summary"]?.GetValue<string>()) is { Length: > 0 } warning
+                    && !CodexWarningPolicy.IsUnstableFeatureNotice(warning))
+                    Emit(new JsonObject { ["type"] = "system", ["subtype"] = "provider_warning", ["tool_name"] = "Codex", ["message"] = warning });
                 break;
             case "serverRequest/resolved":
                 if (p?["requestId"] is { } resolved)
@@ -1057,6 +1113,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         if (_interruptRequested && _turnId is not null)
             _ = SafeRequest("turn/interrupt", new JsonObject { ["threadId"] = SessionId, ["turnId"] = _turnId });
         _rootThreadReportedActive = true;
+        _turnUsageClosed = false;
         _turnUsage = default;
         _turnEstimatedCost = 0;
         _lastUsage = null;
@@ -1449,6 +1506,10 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         foreach (var key in new[] { "newThreadId", "receiverThreadId" })
             if (SafeString(item[key]) is { Length: > 0 } singularId) ids.Add(singularId);
 
+        // Collaboration snapshots can include the parent (for example, a child messaging /root). The parent's
+        // lifecycle is tracked by turn/status notifications; adding it to this roster creates a phantom worker
+        // that can hold TryCompletePendingRootTurn open after the real work has finished.
+        ids.RemoveWhere(IsRootThread);
         foreach (var id in ids)
         {
             var agent = EnsureSubagent(id, tool == "spawnAgent" ? prompt : null);
@@ -1487,8 +1548,11 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private void ObserveSubagentActivity(JsonObject item)
     {
         var threadId = SafeString(item["agentThreadId"]);
-        if (string.IsNullOrWhiteSpace(threadId)) return;
+        if (string.IsNullOrWhiteSpace(threadId) || IsRootThread(threadId)) return;
         var path = SafeString(item["agentPath"]);
+        // subAgentActivity also announces the tree's root. The explicit root path is useful when that event uses
+        // an identity different from this connection's SessionId. A real child named /root/root is still a child.
+        if (string.Equals(path?.Trim('/', '\\'), "root", StringComparison.Ordinal)) return;
         var label = string.IsNullOrWhiteSpace(path) ? null : path!.TrimEnd('/', '\\').Split('/', '\\').LastOrDefault();
         var kind = SafeString(item["kind"]);
         var agent = EnsureSubagent(threadId!, label: label);
@@ -1578,6 +1642,9 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
     private void SetSubagentActivity(string threadId, string activity)
     {
         var agent = EnsureSubagent(threadId);
+        // Plan and usage updates describe work; they do not start a new turn. A delayed update after completion
+        // otherwise revives the child and its parent without a pending root result to settle the chat again.
+        if (!agent.IsActive) return;
         ApplySubagentState(agent, "running", activity, notify: false);
         NotifySubagentStateChanged();
     }
@@ -2176,6 +2243,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         }
         _turnUsage = default;
         _turnEstimatedCost = 0;
+        _turnUsageClosed = true;
         _announcedTools.Clear();
         _streamIndexByItem.Clear();
         _streamStarted = false;
@@ -2192,20 +2260,64 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         // snapshot). Derive increments from total after the first event so tool-heavy turns with several
         // model requests are fully counted, while a resumed thread does not import all of its old usage.
         var latest = TokenUsage.From(u["last"] ?? u);
+        var resumingRoot = _options.Resume is not null && IsRootThread(threadId);
+        // A completed root can still report new usage while waiting for its children or after its
+        // result was committed. Only the initial, idle resume snapshot is historical.
+        var historicalSnapshot = resumingRoot && _turnId is null && !_rootThreadReportedActive
+            && _pendingRootCompletion is null && !_turnUsageClosed;
         TokenUsage increment;
         if (u["total"] is { } totalNode)
         {
             var total = TokenUsage.From(totalNode);
-            increment = _previousTotalUsageByThread.TryGetValue(usageThread, out var previous) ? total - previous : latest;
+            var hasPrevious = _previousTotalUsageByThread.TryGetValue(usageThread, out var previous);
+            increment = hasPrevious ? total - previous : latest;
             if (increment.HasNegativeValue) increment = latest; // counter reset/rollback compatibility
+            if (historicalSnapshot) increment = default;
             _previousTotalUsageByThread[usageThread] = total;
+            if (resumingRoot && !_options.ForkSession && (!hasPrevious || historicalSnapshot))
+            {
+                // Resume notifications describe the saved thread, not a model request made by this
+                // process. Restore the old total separately from the new turn's delta and billing.
+                var baseline = total - increment;
+                Emit(new JsonObject
+                {
+                    ["type"] = "system", ["subtype"] = "codex_session_usage",
+                    ["usage"] = new JsonObject
+                    {
+                        ["input_tokens"] = Math.Max(0, baseline.Input - baseline.CachedInput),
+                        ["cache_read_input_tokens"] = baseline.CachedInput,
+                        ["output_tokens"] = baseline.Output,
+                    },
+                });
+            }
         }
         else
         {
             increment = latest;
         }
+        if (historicalSnapshot) return;
+        var pricing = RequestCost(p, u, usageThread, increment, latest);
+        if (_turnUsageClosed)
+        {
+            // Child listeners and the parent's activity/wait notifications can arrive in either order.
+            // Once the parent result has been emitted, a new live snapshot has no result left to commit
+            // it and BeginRootTurn would erase it. Commit only this thread's unseen delta instead. The
+            // retained per-thread baseline makes repeated final reports harmless, including descendants.
+            if (increment.HasTokens) Emit(new JsonObject
+            {
+                ["type"] = "system", ["subtype"] = "codex_late_usage", ["model"] = pricing.Model,
+                ["usage"] = new JsonObject
+                {
+                    ["input_tokens"] = Math.Max(0, increment.Input - increment.CachedInput),
+                    ["cache_read_input_tokens"] = increment.CachedInput,
+                    ["output_tokens"] = increment.Output,
+                    ["estimated_cost_usd"] = pricing.Cost,
+                },
+            });
+            return;
+        }
         if (increment.HasTokens) _turnUsage += increment;
-        AddRequestCost(p, u, usageThread, increment, latest);
+        _turnEstimatedCost += pricing.Cost;
 
         // OpenAI inputTokens already INCLUDES cachedInputTokens. Convert it to the disjoint buckets the
         // shared Claude-shaped UI expects, otherwise cached tokens inflate both totals and estimated cost.
@@ -2300,12 +2412,12 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
 
     private Task<JsonNode?> RequestAsync(string method, JsonObject? p = null)
     {
-        if (RequestFixture is { } fixture) return fixture(method, p);
+        if (RequestFixture is { } fixture) return TimeStartupOrDispatch(method, fixture(method, p));
         var id = Interlocked.Increment(ref _requestSeq).ToString();
         var pending = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[id] = pending;
         WriteJson(new JsonObject { ["id"] = int.Parse(id), ["method"] = method, ["params"] = p ?? new JsonObject() });
-        return pending.Task;
+        return TimeStartupOrDispatch(method, pending.Task);
     }
 
     private void Notify(string method, JsonObject? p) =>
@@ -2611,6 +2723,7 @@ public sealed partial class CodexSession : ICodingSession, ISteerableSession
         AgentStatusReporting.Changed -= OnReportingChanged;
         _disposed = true;
         _launchPending = false;
+        lock (_earlyMessages) _earlyMessages.Clear();
         CancelReserveRecovery();
         _writeQueue.Writer.TryComplete();
         try { _artifactWatcher?.Dispose(); } catch { /* watcher already gone */ }

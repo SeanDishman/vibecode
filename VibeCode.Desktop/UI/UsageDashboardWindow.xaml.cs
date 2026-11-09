@@ -78,7 +78,8 @@ public partial class UsageDashboardWindow : Window
     {
         if (_open is { IsLoaded: true } existing)
         {
-            if (existing.WindowState == WindowState.Minimized) existing.WindowState = WindowState.Maximized;
+            if (existing.WindowState == WindowState.Minimized)
+                existing.WindowState = existing._fullScreen.IsActive ? WindowState.Normal : WindowState.Maximized;
             existing.Activate();
             return;
         }
@@ -100,6 +101,10 @@ public partial class UsageDashboardWindow : Window
         // The wall is full-screen either way; the setting only decides WHICH screen it takes over.
         if (AppSettings.Current.TelemetryOnCompanionDisplay) wall.MoveToCompanionMonitor(owner);
         else wall.WindowState = WindowState.Maximized;
+        // Maximized stops at the taskbar; full screen is the whole display. Off the app's own display the wall also
+        // stays over the taskbar while the app has focus.
+        try { wall._fullScreen.Enter(FullScreenPlacement.OnOtherDisplay(wall, owner)); }
+        catch (System.ComponentModel.Win32Exception) { wall.WindowState = WindowState.Maximized; }
     }
 
     /// <summary>Automated-verification hook: with VIBECODE_HIDDEN=1 set,
@@ -152,7 +157,14 @@ public partial class UsageDashboardWindow : Window
     /// the life of the app: nothing else on screen reads those figures.</summary>
     private IDisposable? _speedWatch;
 
-    public UsageDashboardWindow() => InitializeComponent();
+    private readonly FullScreenPlacement _fullScreen;
+
+    public UsageDashboardWindow()
+    {
+        InitializeComponent();
+        TelemetryTheme.Attach(this);
+        _fullScreen = new FullScreenPlacement(this);
+    }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
@@ -160,8 +172,7 @@ public partial class UsageDashboardWindow : Window
         // rather than appearing a second later.
         _liveWatch = LiveTurnTelemetry.Instance.Watch();
 
-        // The speed board is bound once and mutates in place: its rows are a fixed roster, so rebuilding the
-        // ItemsSource every poll would rebuild seven containers to change two strings.
+        // Bind once: the board keeps retained rows and their readings while usage changes the selection.
         WallModelSpeeds.ItemsSource = ModelSpeedBoard.Instance.Rows;
         ModelSpeedBoard.Instance.Updated += OnModelSpeedsUpdated;
         _speedWatch = ModelSpeedBoard.Instance.Watch();
@@ -244,11 +255,19 @@ public partial class UsageDashboardWindow : Window
     /// </summary>
     private void RefreshSpeedBoardCaption()
     {
-        if (ModelSpeedBoard.Instance.LastUpdated is not { } at)
+        if (ModelSpeedBoard.Instance.Rows.Count == 0)
         {
-            WallSpeedAge.Text = "FETCHING…";
+            WallSpeedAge.Text = "";
             return;
         }
+        if (!ModelSpeedBoard.Instance.Rows.Any(r => r.HasData))
+        {
+            WallSpeedAge.Text = ModelSpeedBoard.Instance.LastUpdated is null
+                                && ModelSpeedBoard.Instance.Rows.Any(r => r.OpenRouterId is not null)
+                ? "FETCHING…" : "NO OPENROUTER DATA";
+            return;
+        }
+        if (ModelSpeedBoard.Instance.LastUpdated is not { } at) return;
         var age = DateTime.UtcNow - at;
         WallSpeedAge.Text = age < TimeSpan.FromMinutes(1)
             ? "UPDATED JUST NOW · 30-MIN MEDIANS"

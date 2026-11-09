@@ -27,6 +27,7 @@ public partial class PhoneBridgeWindow : Window
     public PhoneBridgeWindow()
     {
         InitializeComponent();
+        InitializeLanShare();
         PortBox.Text = _bridge.Port.ToString();
         _bridge.PropertyChanged += OnBridgeChanged;
         _bridge.Devices.CollectionChanged += OnDevicesChanged;
@@ -59,6 +60,7 @@ public partial class PhoneBridgeWindow : Window
         _tick.Stop();
         _bridge.PropertyChanged -= OnBridgeChanged;
         _bridge.Devices.CollectionChanged -= OnDevicesChanged;
+        DisposeLanShare();
         // Leaving pairing open behind a closed window would mean a code nobody can read is still accepted.
         _bridge.ClosePairing();
         _open = null;
@@ -95,6 +97,7 @@ public partial class PhoneBridgeWindow : Window
         if (recheck)
         {
             _bridge.RefreshAddresses();
+            LanShareService.Instance.RefreshAddresses();
             RefreshDiagnostics();
         }
     }
@@ -249,6 +252,9 @@ public partial class PhoneBridgeWindow : Window
     public sealed record ApkRow(string Id, string Path, string State, System.Windows.Media.Brush StateBrush,
         bool CanCancel, bool HasFile)
     {
+        public string DownloadUrl { get; init; } = "";
+        public System.Windows.Media.Imaging.BitmapSource? DownloadQr { get; init; }
+        public Visibility DownloadVisibility => DownloadQr is null ? Visibility.Collapsed : Visibility.Visible;
         public Visibility CancelVisibility => CanCancel ? Visibility.Visible : Visibility.Collapsed;
         public Visibility ShowVisibility => HasFile ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -259,6 +265,7 @@ public partial class PhoneBridgeWindow : Window
 
     private void RefreshApk()
     {
+        RefreshLanShare();
         BuildApkButton.IsEnabled = PhoneApkBuilder.TemplateAvailable;
         if (!PhoneApkBuilder.TemplateAvailable)
         {
@@ -272,17 +279,20 @@ public partial class PhoneBridgeWindow : Window
         var enrolments = _bridge.Enrolments.Where(e => e.ApkPath.Length > 0).ToList();
         var shown = enrolments.Where(e => e.Pending)
             .Concat(enrolments.Where(e => !e.Pending).Take(ShownFinishedApps))
-            .Select(e => new ApkRow(e.Id, e.ApkPath, ApkState(e),
+            .Select(e => WithLanShare(new ApkRow(e.Id, e.ApkPath, ApkState(e),
                 (System.Windows.Media.Brush)FindResource(e.Pending ? "Amber" : "Faint"),
-                e.Pending, File.Exists(e.ApkPath)))
+                e.Pending, File.Exists(e.ApkPath))))
             .ToList();
         ApkList.ItemsSource = shown;
         BuildApkButton.Content = shown.Count > 0 || _bridge.Devices.Count > 0 ? "Generate an app for another phone" : "Generate the app";
-        ApkHintText.Text = shown.Count > 0 || _bridge.Devices.Count > 0
+        ApkHintText.Text = _lanShare.Running
+            ? "Scan an app's QR code with your phone camera, download the APK, then open it to install. Keep both devices on the same Wi-Fi. Each app sets up one phone; keep its link private until it connects. LAN downloads use HTTP."
+            : shown.Count > 0 || _bridge.Devices.Count > 0
             ? "Copy a file to the phone it is for and open it there. Each file sets up exactly one phone, so make one per "
               + "phone — every phone you pair keeps working alongside the others."
             : "Copy the file to your phone and open it. Android will ask you to allow installing from this source — that "
               + "is expected for an app that did not come from the Play Store.";
+        ApkHintText.Foreground = (System.Windows.Media.Brush)FindResource(_lanShare.Running ? "Muted" : "Faint");
     }
 
     /// <summary>The distinction that matters: an app nobody has installed yet is a live credential sitting in a file,
@@ -302,7 +312,8 @@ public partial class PhoneBridgeWindow : Window
             Mouse.OverrideCursor = Cursors.Wait;
             var path = PhoneApkBuilder.Build();
             Refresh();
-            Reveal(path);
+            if (_lanShare.Running) ShowApkQr(path);
+            else Reveal(path);
         }
         catch (Exception ex)
         {

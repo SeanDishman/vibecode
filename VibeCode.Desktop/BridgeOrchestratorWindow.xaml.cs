@@ -11,12 +11,15 @@ public partial class BridgeOrchestratorWindow : Window
     public string Objective => SetupPanel.Objective;
     public string Provider => SetupPanel.Provider;
     public bool SingleTerminal => SetupPanel.SingleTerminal;
+    public bool FactCheck => SetupPanel.FactCheck;
+    public bool PlanSteps => SetupPanel.PlanSteps;
     public BridgeAgentConfiguration OrchestratorConfiguration => SetupPanel.OrchestratorConfiguration;
     public BridgeAgentConfiguration WorkerConfiguration => SetupPanel.WorkerConfiguration;
     public BridgeAgentConfiguration CentralConfiguration => SetupPanel.CentralConfiguration;
 
     public BridgeOrchestratorWindow(ChatViewModel host, int? maximumWorkers = null, BridgeSetupPanel? retainedSetup = null,
-        Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false)
+        Func<string, int>? workerCapacity = null, bool hasOtherOrchestrators = false,
+        Func<int, int, int>? projectedAgentCount = null)
     {
         InitializeComponent();
         if (retainedSetup is not null)
@@ -31,7 +34,7 @@ public partial class BridgeOrchestratorWindow : Window
         SetupPanel.MaxHeight = MaxHeight - 40;
         SetupPanel.Configure(host, maximumWorkers ?? Services.BridgeAgentPolicy.ClampLimit(Services.AppSettings.Current.BridgeAgentLimit) - 1,
             advancedOnly: true, singleTerminal: host.BridgeSingleTerminal, workerCapacity: workerCapacity,
-            hasOtherOrchestrators: hasOtherOrchestrators);
+            hasOtherOrchestrators: hasOtherOrchestrators, projectedAgentCount: projectedAgentCount);
         Loaded += (_, _) => SetupPanel.FocusFirstControl();
         Closed += (_, _) =>
         {

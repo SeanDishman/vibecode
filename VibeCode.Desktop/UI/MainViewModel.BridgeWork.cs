@@ -7,6 +7,23 @@ namespace VibeCode.UI;
 
 public sealed partial class MainViewModel
 {
+    private void RequestBridgeWorkerRecovery(ChatViewModel worker, LiveBridge bridge)
+    {
+        if (worker.IsBridgeManager || worker.BridgeWorkerPaused || CoordinatorFor(worker, bridge.Panes) is not { } manager)
+            return;
+        var task = WorkFor(bridge.Panes).Tasks.FirstOrDefault(t => t.OwnerId == worker.BridgeAgentId && (t.Active || t.State is "failed" or "interrupted"));
+        var action = task is not null
+            ? $"Check its existing work, then try bridge_retry_task with task_id={task.Id} to revive the same assignment. "
+            : "Read bridge_list_tasks and try bridge_retry_task for its failed or interrupted assignment if one exists. ";
+        var fallback = worker.WaitingForBridgeRetry
+            ? "If your recovery attempt fails or you cannot reach it, the app will send that worker a generic continuation on its own, after a minute or once the provider is back. "
+            : "If the provider requires sign-in or another user action, report that blocker to the user. ";
+        SendManagerUpdate(manager, $"{worker.BridgeTerminalIdentity} hit a provider error and is waiting to recover. " +
+            action + "Keep this worker's lane assigned; do not start a second worker on it while recovery is pending. " +
+            fallback +
+            "Do not ask it to investigate the error's cause. Respect the existing review budget.");
+    }
+
     private static BridgeWorkState WorkFor(IReadOnlyList<ChatViewModel> panes)
     {
         var work = panes.Select(p => p.BridgeWork).FirstOrDefault(w => w is not null) ?? new BridgeWorkState();
@@ -31,6 +48,7 @@ public sealed partial class MainViewModel
         ["dependencies"] = new JsonArray(task.Dependencies.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
         ["dependencies_complete"] = work.Ready(task),
         ["files"] = new JsonArray(task.Files.Select(f => (JsonNode?)JsonValue.Create(f)).ToArray()),
+        ["outputs"] = new JsonArray(task.Outputs.Select(f => (JsonNode?)JsonValue.Create(f)).ToArray()),
         ["updated_at"] = task.UpdatedAt.ToString("O"),
     };
 
@@ -39,8 +57,9 @@ public sealed partial class MainViewModel
         var work = WorkFor(bridge.Panes);
         return new()
         {
-            ["run_id"] = work.RunId,
-            ["plan_version"] = work.PlanVersion,
+            ["run_id"] = work.RunId, ["plan_version"] = work.PlanVersion,
+            // The user's Plan steps option. Off: no bridge_set_plan; every task here was assigned directly.
+            ["plan_steps"] = work.PlanSteps,
             ["coordination_mode"] = work.CentralPlan is null ? "peer_agreement" : "central_assignment",
             ["central_orchestrator"] = CentralPlanJson(work),
             ["coordination_ready"] = CoordinationReady(bridge.Panes),
@@ -50,15 +69,34 @@ public sealed partial class MainViewModel
             ["total_steps"] = work.Tasks.Count,
             ["file_activity_policy"] = "Advisory only. Every agent may edit shared files; these are not exclusive claims or locks.",
             ["tasks"] = new JsonArray(work.Tasks.Select(t => (JsonNode?)TaskJson(t, work)).ToArray()),
+            ["plan_findings"] = new JsonArray(BridgePlanChecks.Inspect(work.Tasks, work.RequiredOutputs).Select(f => (JsonNode?)new JsonObject
+            {
+                ["code"] = f.Code, ["blocks_dispatch"] = f.BlocksDispatch, ["message"] = f.Message,
+                ["task_ids"] = new JsonArray(f.TaskIds.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
+            }).ToArray()),
+            ["required_outputs"] = System.Text.Json.JsonSerializer.SerializeToNode(work.RequiredOutputs),
+            ["output_coverage_checked"] = bridge.Panes.Any(p => p.IsBridgeManager)
+                && bridge.Panes.Where(p => p.IsBridgeManager).All(p => work.RequiredOutputs.ContainsKey(p.BridgeAgentId)),
         };
     }
 
     private static void SaveWork(LiveBridge bridge)
     {
-        if (!SnapshotBridge(bridge.Panes, bridge.Board))
-            throw new StatusValidationException("Wait for the bridge sessions to connect before saving assignments.");
-        if (AppSettings.Current.TrySave() is { } error)
-            throw new StatusValidationException("Could not save the bridge journal; no further work will start until storage is available. " + error.Message);
+        // A roster with no session to resume yet has nothing a restart could bring back, so there is no journal to
+        // write before its work goes out. Claude reports a session id only when its first turn starts, and a new
+        // worker's first turn IS its first assignment: waiting here for "the bridge sessions to connect" refused every
+        // plan, dispatch, retry and resume of an all-new Claude team, forever. Track() journals the whole roster,
+        // assignments included, the moment the first worker's session id arrives.
+        if (SnapshotBridge(bridge.Panes, bridge.Board))
+        {
+            // Only this Bridge's own journal must be on disk before its work goes out: one small file, written here on
+            // the dispatcher. The rest of the settings follow from the background writer instead of a full rewrite of
+            // settings.json inside the tool call.
+            var host = bridge.Panes[0];
+            if (AppSettings.Current.TrySaveBridgeJournal(host.SessionId, host.Provider) is { } error)
+                throw new StatusValidationException("Could not save the bridge journal; no further work will start until storage is available. " + error.Message);
+            if (AppSettings.Current.SaveInBackground() is { } settingsError) CrashLog.Write(settingsError, "SessionSave");
+        }
         foreach (var pane in bridge.Panes) pane.RaiseBridgeProgress();
     }
 
@@ -66,6 +104,8 @@ public sealed partial class MainViewModel
     {
         if (!caller.IsBridgeManager) throw new StatusValidationException("Only orchestrators publish plan steps.");
         var work = WorkFor(bridge.Panes);
+        if (!work.PlanSteps)
+            throw new StatusValidationException("Plan steps are off for this Advanced Bridge. Do not publish a plan: assign work directly to your own workers with bridge_dispatch_task.");
         if (work.DispatchStarted) throw new StatusValidationException("The agreed plan is frozen after dispatch. Dispatch corrections within your existing scope as new tasks.");
         if (work.CentralPlan is { } pending && (pending.State != "completed" || pending.Assignments.All(a => a.AgentId != caller.BridgeAgentId)))
             throw new StatusValidationException("Wait for your central assignment before publishing a worker plan. Read bridge_list_tasks for the handoff state.");
@@ -73,12 +113,10 @@ public sealed partial class MainViewModel
             throw new StatusValidationException($"Stale plan version. Read bridge_list_tasks; current plan_version is {work.PlanVersion}.");
         var steps = args["steps"]!.AsArray().Select(row => new BridgeWorkTask
         {
-            Id = row!["id"]!.GetValue<string>(),
-            Title = row["title"]!.GetValue<string>(),
-            CoordinatorId = caller.BridgeAgentId,
-            OwnerId = row["owner_id"]!.GetValue<string>(),
-            Dependencies = TaskStrings(row["dependencies"]),
-            Files = TaskStrings(row["files"]),
+            Id = row!["id"]!.GetValue<string>(), Title = row["title"]!.GetValue<string>(),
+            CoordinatorId = caller.BridgeAgentId, OwnerId = row["owner_id"]!.GetValue<string>(),
+            Dependencies = TaskStrings(row["dependencies"]), Files = TaskStrings(row["files"]),
+            Outputs = TaskStrings(row["outputs"]),
         }).ToList();
         if (work.CentralPlan is not null && steps.Count == 0)
             throw new StatusValidationException("Publish at least one concrete worker step for your central assignment before dispatch can open.");
@@ -88,7 +126,13 @@ public sealed partial class MainViewModel
         var candidate = work.Tasks.Where(t => t.CoordinatorId != caller.BridgeAgentId).Concat(steps).ToList();
         try { BridgeWorkState.ValidateGraph(candidate); }
         catch (InvalidOperationException ex) { throw new StatusValidationException(ex.Message); }
+        var required = new Dictionary<string, List<string>>(work.RequiredOutputs);
+        if (args.ContainsKey("required_outputs")) required[caller.BridgeAgentId] = TaskStrings(args["required_outputs"]);
+        var blockers = BridgePlanChecks.Inspect(candidate, required).Where(f => f.BlocksDispatch).ToArray();
+        if (blockers.Length > 0)
+            throw new StatusValidationException("Revise the plan before dispatch: " + string.Join(" ", blockers.Select(f => f.Message)));
         work.Tasks = candidate;
+        work.RequiredOutputs = required;
         work.PlanVersion++;
         work.ConfirmedVersions.Clear();
         work.CentralPlan?.PublishedPlans.Add(caller.BridgeAgentId);
@@ -114,6 +158,9 @@ public sealed partial class MainViewModel
         if (task is not null && (task.CoordinatorId != manager.BridgeAgentId || task.OwnerId != worker.BridgeAgentId))
             throw new StatusValidationException("This task ID belongs to another owner or group.");
         var dependencies = args.ContainsKey("dependencies") ? TaskStrings(args["dependencies"]) : task?.Dependencies ?? new();
+        var outputs = args.ContainsKey("outputs") ? TaskStrings(args["outputs"]) : task?.Outputs ?? new();
+        if (task is not null && !task.Outputs.SequenceEqual(outputs))
+            throw new StatusValidationException("Dispatch must preserve the published deliverables. Revise the plan before agreement and dispatch.");
         if (task is { State: "planned" } && !task.Dependencies.SequenceEqual(dependencies))
             throw new StatusValidationException("Dispatch must preserve the published dependencies. Revise the plan with bridge_set_plan before agreement and dispatch.");
         if (task is { State: not "planned" })
@@ -127,10 +174,24 @@ public sealed partial class MainViewModel
         var isNew = task is null;
         task ??= new BridgeWorkTask { Id = id, CoordinatorId = manager.BridgeAgentId, OwnerId = worker.BridgeAgentId };
         var oldDependencies = task.Dependencies;
-        task.Dependencies = dependencies;
-        try { BridgeWorkState.ValidateGraph(isNew ? work.Tasks.Append(task).ToList() : work.Tasks); }
-        catch (InvalidOperationException ex) { task.Dependencies = oldDependencies; throw new StatusValidationException(ex.Message); }
+        var oldTitle = task.Title;
+        var oldOutputs = task.Outputs;
         if (isNew) task.Title = args["task_name"]!.GetValue<string>().Trim();
+        task.Outputs = outputs;
+        task.Dependencies = dependencies;
+        try
+        {
+            var candidate = isNew ? work.Tasks.Append(task).ToList() : work.Tasks;
+            BridgeWorkState.ValidateGraph(candidate);
+            // Deliverable checks hold a published plan to its own declarations; with Plan steps off there is none.
+            var blockers = work.PlanSteps ? BridgePlanChecks.Inspect(candidate, work.RequiredOutputs).Where(f => f.BlocksDispatch).ToArray() : [];
+            if (blockers.Length > 0) throw new InvalidOperationException(string.Join(" ", blockers.Select(f => f.Message)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            task.Dependencies = oldDependencies; task.Title = oldTitle; task.Outputs = oldOutputs;
+            throw new StatusValidationException(ex.Message);
+        }
         task.Instruction = body;
         if (args.ContainsKey("files")) task.Files = TaskStrings(args["files"]);
         task.State = "queued";
@@ -157,6 +218,8 @@ public sealed partial class MainViewModel
             var worker = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == task.OwnerId);
             var manager = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == task.CoordinatorId && p.IsBridgeManager);
             if (worker is null || manager is null || worker.Status != "idle" || worker.HasQueued || worker.BridgeWorkerPaused) continue;
+            // An account past the pacing threshold takes no new assignment: it starts after the reset or once usage drops.
+            if (AccountPacing.Instance.Holds(worker.Provider, worker.AccountId)) continue;
             task.State = "dispatching";
             task.Attempt++;
             task.UpdatedAt = DateTimeOffset.UtcNow;
@@ -207,15 +270,18 @@ public sealed partial class MainViewModel
         var wasPaused = false;
         if (retry)
         {
-            if (task.State is not ("failed" or "interrupted" or "blocked") || task.Instruction.Length == 0)
-                throw new StatusValidationException("Only blocked, failed or interrupted assignments can be retried.");
             var previousOwner = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == task.OwnerId);
+            var providerRetry = previousOwner is { WaitingForBridgeRetry: true, Status: "error" };
+            if ((task.State is not ("failed" or "interrupted" or "blocked") && !(task.Active && providerRetry)) || task.Instruction.Length == 0)
+                throw new StatusValidationException("Only blocked, failed or interrupted assignments can be retried.");
             if (previousOwner?.IsWorking == true) throw new StatusValidationException("Wait for the original owner's current turn to end before retrying.");
             var ownerId = args["recipient"]?.GetValue<string>() ?? task.OwnerId;
+            if (providerRetry && ownerId != task.OwnerId)
+                throw new StatusValidationException("This worker is still waiting to recover its assignment. Stop it before moving the task to another worker.");
             var worker = bridge.Panes.FirstOrDefault(p => p.BridgeAgentId == ownerId);
             if (worker is null) throw new StatusValidationException("The task owner has left this bridge.");
             RequireOwnedWorker(caller, worker, bridge);
-            if (worker.ManagedWorkerResumeError is { } error) throw new StatusValidationException(error);
+            if (worker.ManagedWorkerRetryError is { } error) throw new StatusValidationException(error);
             resumedWorker = worker;
             wasPaused = work.PausedWorkers.Remove(worker.BridgeAgentId);
             if (args["message"] is not null) task.Instruction = args["message"]!.GetValue<string>();
@@ -295,7 +361,8 @@ public sealed partial class MainViewModel
         try
         {
             chat.PeerMailbox?.Store.DeleteAgent(chat.BridgeAgentId);
-            foreach (var saved in AppSettings.Current.SavedBridges.Where(b => b.Work is not null &&
+            // HasWork rather than Work: checking must not rebuild every saved Bridge's journal from its bytes.
+            foreach (var saved in AppSettings.Current.SavedBridges.Where(b => b.HasWork &&
                 (b.HostSessionId == chat.SessionId || b.Peers.Any(p => p.SessionId == chat.SessionId))))
             {
                 var id = saved.HostSessionId == chat.SessionId ? saved.HostAgentId : saved.Peers.First(p => p.SessionId == chat.SessionId).AgentId;
