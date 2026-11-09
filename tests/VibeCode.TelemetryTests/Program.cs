@@ -57,15 +57,21 @@ internal static partial class Program
     }
     static void Capture(Window window, int width, int height, string filename, double dpi = 96)
     {
+        // Exercise captures larger than the native host, as on a small CI desktop.
+        window.MaxWidth = 1024; window.MaxHeight = 768;
         window.Width=width; window.Height=height;
+        // Windows can constrain the HWND to its monitor. Give the rendered content
+        // explicit dimensions so later layout passes retain the requested viewport.
+        var root=(FrameworkElement)window.Content;
+        root.Width=width; root.Height=height;
         window.UpdateLayout();
         Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
-        var root=(FrameworkElement)window.Content;
         root.Measure(new Size(width,height)); root.Arrange(new Rect(0,0,width,height)); root.UpdateLayout();
+        Check($"Capture {filename} retains its requested viewport", Math.Abs(root.ActualWidth-width) < 1 && Math.Abs(root.ActualHeight-height) < 1);
         var image=new RenderTargetBitmap((int)(width*dpi/96),(int)(height*dpi/96),dpi,dpi,PixelFormats.Pbgra32);
         image.Render(root);
         var encoder=new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
         using var stream=File.Create(Path.Combine(Output,filename)); encoder.Save(stream);
-        Console.WriteLine("Rendered " + filename);
+        Console.WriteLine($"Rendered {filename}: host {window.ActualWidth}x{window.ActualHeight}, content {root.ActualWidth}x{root.ActualHeight}");
     }
 }
