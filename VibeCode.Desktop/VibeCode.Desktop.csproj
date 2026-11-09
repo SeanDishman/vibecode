@@ -117,4 +117,12 @@
     </ItemGroup>
   </Target>
 
+  <!-- Referenced projects can leave symbols in a reused build folder even when this publish disables debugging.
+       They are not runtime dependencies and must never accompany the public single-file download. -->
+  <Target Name="PruneDebugSymbolsFromPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
+
 </Project>
