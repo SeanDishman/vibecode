@@ -60,9 +60,15 @@ internal static partial class Program
         // Exercise captures larger than the native host, as on a small CI desktop.
         window.MaxWidth = 1024; window.MaxHeight = 768;
         window.Width=width; window.Height=height;
-        // Windows can constrain the HWND to its monitor. Give the rendered content
-        // explicit dimensions so later layout passes retain the requested viewport.
-        var root=(FrameworkElement)window.Content;
+        // Windows can constrain the HWND to its monitor. A Canvas gives the content
+        // its requested layout slot without clipping it to the smaller native host.
+        if (window.Content is not Canvas host)
+        {
+            var content=(FrameworkElement)window.Content;
+            window.Content=null;
+            host=new Canvas(); host.Children.Add(content); window.Content=host;
+        }
+        var root=(FrameworkElement)host.Children[0];
         root.Width=width; root.Height=height;
         window.UpdateLayout();
         Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
